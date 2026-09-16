@@ -1,0 +1,2360 @@
+#!/usr/bin/env python3
+"""oTree Lab Launcher.
+
+A small desktop front end for starting an oTree experiment on the lab
+machines.  It replaces `set_up_otree_original.bat`, the batch file that lab
+staff used to hand-edit before every session.
+
+Nothing is ever written into a batch file in order to launch.  The launcher
+builds an environment dictionary (a copy of os.environ plus the values from the
+chosen config) and runs `otree resetdb` and `otree prodserver` as child
+processes with the working directory set to the chosen oTree project folder.
+
+Standard library only: Python 3 + tkinter/ttk.  No pip installs, no build step.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import getpass
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import webbrowser
+
+APP_NAME = "oTree Lab Launcher"
+APP_DIR_NAME = "oTreeLabLauncher"
+PRESETS_FILENAME = "presets.json"
+# A gitignored, one-word per-machine marker ("large"/"small") that identifies
+# which lab this computer is. It sits next to the launcher checkout, not in a
+# researcher's project, because it is a property of the machine.
+LAB_MARKER_FILENAME = "lab.local"
+STORAGE_VERSION = 1
+
+# ---------------------------------------------------------------------------
+# Lab-specific data lives in lab_info.json (gitignored), NOT in this source.
+# See lab_info.example.json for the schema and the two example rooms. When the
+# file is absent the loader returns None and the app runs its first-run setup
+# wizard to create it; the safe placeholder defaults below keep the module
+# importable in the meantime. Nothing lab-specific is ever hardcoded here.
+# ---------------------------------------------------------------------------
+
+LAB_INFO_FILENAME = "lab_info.json"
+LAB_INFO_EXAMPLE_FILENAME = "lab_info.example.json"
+
+
+def lab_info_path():
+    """Where lab_info.json lives. OTREE_LAB_INFO overrides it (used by tests)."""
+    override = os.environ.get("OTREE_LAB_INFO")
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), LAB_INFO_FILENAME)
+
+
+def load_lab_info(path=None):
+    """Read lab_info.json into a dict, or None when it is absent or unreadable.
+
+    A present-but-unparseable file also returns None, so a hand-edit typo is
+    treated the same as "not set up yet" (first run) rather than crashing.
+    """
+    path = path or lab_info_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def lab_info_present(path=None):
+    """True when a readable lab_info.json exists. The first-run check: when this
+    is False the launcher runs its setup wizard to create the file."""
+    return load_lab_info(path) is not None
+
+
+def save_lab_info(data, path=None):
+    """Write a lab_info dict to lab_info.json (pretty-printed). Returns the path."""
+    path = path or lab_info_path()
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+        handle.write("\n")
+    return path
+
+
+def load_example_lab_info():
+    """The committed lab_info.example.json as a dict, or None."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        LAB_INFO_EXAMPLE_FILENAME)
+    return load_lab_info(path)
+
+
+def available_maps():
+    """Sorted names of the map files in the maps/ folder (bare stems), so a
+    setup wizard can offer them for a lab to reference."""
+    try:
+        names = [f[:-5] for f in os.listdir(maps_dir()) if f.endswith(".json")]
+    except OSError:
+        names = []
+    return sorted(names)
+
+
+def build_lab_info(labs, database, admin, default_lab=None):
+    """Assemble a lab_info dict from wizard inputs.
+
+    ``labs`` is a list of {"id"?, "name", "host", "seats": [...], "map": <name or "">}.
+    A blank id is slugified from the name. ``database`` and ``admin`` are dicts.
+    """
+    out_labs = {}
+    first_id = None
+    for raw in labs:
+        lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(raw.get("name", ""))
+        if not lab_id:
+            continue
+        entry = {
+            "name": str(raw.get("name") or lab_id),
+            "host": str(raw.get("host") or ""),
+            "seats": [str(s) for s in (raw.get("seats") or [])],
+        }
+        if str(raw.get("map") or "").strip():
+            entry["map"] = str(raw["map"]).strip()
+        out_labs[lab_id] = entry
+        if first_id is None:
+            first_id = lab_id
+    data = {
+        "default_lab": default_lab or first_id or "",
+        "labs": out_labs,
+        "database": {
+            "db_name": str(database.get("db_name", "otree")),
+            "db_user": str(database.get("db_user", "otree")),
+            "db_password": str(database.get("db_password", "")),
+            "db_host": str(database.get("db_host", "localhost")),
+            "db_port": str(database.get("db_port", "5432")),
+        },
+        "admin": {
+            "username": str(admin.get("username", "admin")),
+            "password": str(admin.get("password", "")),
+        },
+    }
+    return data
+
+
+# Loaded once at import. The launcher re-reads via load_lab_info() after the
+# wizard writes the file, so a first run does not need a restart.
+LAB_INFO = load_lab_info()
+
+# Safe placeholders, used ONLY until lab_info.json exists. Real values always
+# come from the file.
+_DUMMY_DB = {
+    "db_name": "otree", "db_user": "otree", "db_password": "",
+    "db_host": "localhost", "db_port": "5432",
+}
+
+
+def lab_db_from_info(info):
+    """The database credentials dict for a lab_info dict (placeholders if None)."""
+    out = dict(_DUMMY_DB)
+    db = (info or {}).get("database") or {}
+    for key in _DUMMY_DB:
+        if db.get(key) is not None:
+            out[key] = str(db[key])
+    return out
+
+
+LAB_DB = lab_db_from_info(LAB_INFO)
+
+_admin_info = (LAB_INFO or {}).get("admin") or {}
+DEFAULT_ADMIN_USERNAME = str(_admin_info.get("username") or "admin")
+DEFAULT_ADMIN_PASSWORD = str(_admin_info.get("password") or "")
+
+DB_MODE_LAB = "lab"
+DB_MODE_CUSTOM = "custom"
+DB_MODE_NONE = "none"
+
+DB_MODE_LABELS = {
+    DB_MODE_LAB: "Lab shared database (Postgres)",
+    DB_MODE_CUSTOM: "My own Postgres database",
+    DB_MODE_NONE: "No lab database (oTree SQLite)",
+}
+DB_MODE_BY_LABEL = {v: k for k, v in DB_MODE_LABELS.items()}
+
+LAB_CUSTOM = "custom"
+
+
+def _default_lab_id_from_info(info):
+    chosen = str((info or {}).get("default_lab") or "").strip()
+    if chosen:
+        return chosen
+    labs = (info or {}).get("labs") or {}
+    return next(iter(labs), "lab")
+
+
+DEFAULT_LAB_ID = _default_lab_id_from_info(LAB_INFO)
+
+AUTH_LEVELS = ["STUDY", "DEMO", "none"]
+
+# The room name is static: it must match the room the shortcuts point at.
+DEFAULT_ROOM_NAME = "study"
+
+SEAT_DEFAULT = "lab_default"
+SEAT_EDIT = "edit"
+SEAT_FILE = "file"
+SEAT_NONE = "none"
+
+SEAT_MODE_LABELS = {
+    SEAT_DEFAULT: "Lab default",
+    SEAT_EDIT: "Edit for this run",
+    SEAT_FILE: "Use a file from my project",
+    SEAT_NONE: "None (open room, no seat board)",
+}
+SEAT_MODE_BY_LABEL = {v: k for k, v in SEAT_MODE_LABELS.items()}
+
+# oTree validates every label with this exact pattern (otree/common.py).
+SEAT_LABEL_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
+SEAT_ENV_KEYS = ("OTREE_LAB_LABEL_FILE", "OTREE_LAB_ROOM_NAME")
+
+MASK_CHAR = "•"
+MASKED_PASSWORD = MASK_CHAR * 8
+
+DEFAULT_CONFIG = {
+    "project_path": "",
+    "db_mode": DB_MODE_LAB,
+    "db_name": LAB_DB["db_name"],
+    "db_user": LAB_DB["db_user"],
+    "db_password": LAB_DB["db_password"],
+    "db_host": LAB_DB["db_host"],
+    "db_port": LAB_DB["db_port"],
+    "admin_username": DEFAULT_ADMIN_USERNAME,
+    "admin_password": DEFAULT_ADMIN_PASSWORD,
+    "production": True,
+    "auth_level": "STUDY",
+    "lab": DEFAULT_LAB_ID,
+    "custom_host": "",
+    "port": "8000",
+    "page": "/rooms",
+    "resetdb": True,
+    "open_browser": True,
+    "wait_seconds": 5,
+    "room_name": DEFAULT_ROOM_NAME,
+    "seat_mode": SEAT_DEFAULT,
+    "seat_excluded": [],
+    "seat_file": "",
+}
+
+# The user-editable settings of a config.  Anything outside this list
+# (name, created, last_run, plus keys written by a future version) is
+# metadata and is never compared or overwritten.
+FIELD_KEYS = tuple(DEFAULT_CONFIG.keys())
+
+# Environment variables this launcher owns.  Listed so the log can name them.
+DB_ENV_KEYS = ("DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DATABASE_URL")
+OTREE_ENV_KEYS = (
+    "OTREE_ADMIN_USERNAME",
+    "OTREE_ADMIN_PASSWORD",
+    "OTREE_PRODUCTION",
+    "OTREE_AUTH_LEVEL",
+)
+SECRET_ENV_KEYS = ("DB_PASSWORD", "OTREE_ADMIN_PASSWORD", "DATABASE_URL")
+
+CREATE_NEW_CONSOLE = 0x00000010
+
+
+# ---------------------------------------------------------------------------
+# Config helpers (no tkinter here, so the test script can exercise them)
+# ---------------------------------------------------------------------------
+
+
+def now_iso():
+    return _dt.datetime.now().replace(microsecond=0).isoformat()
+
+
+def normalize_config(cfg):
+    """Return the field values of `cfg` with defaults filled in.
+
+    Only the keys in FIELD_KEYS are returned; unknown keys stay where they are.
+    In lab-default database mode the database fields are forced to the known
+    lab default values so that a config can never claim to be the Lab default while
+    holding different credentials.
+    """
+    out = {}
+    for key, default in DEFAULT_CONFIG.items():
+        value = cfg.get(key, default)
+        if isinstance(default, bool):
+            value = bool(value)
+        elif isinstance(default, list):
+            value = [str(item) for item in value] if isinstance(value, (list, tuple)) else []
+        elif isinstance(default, int) and not isinstance(default, bool):
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = default
+        else:
+            value = "" if value is None else str(value)
+        out[key] = value
+
+    if out["db_mode"] not in (DB_MODE_LAB, DB_MODE_CUSTOM, DB_MODE_NONE):
+        out["db_mode"] = DEFAULT_CONFIG["db_mode"]
+    if out["db_mode"] == DB_MODE_LAB:
+        out.update(LAB_DB)
+    # `lab` is a lab-preset id (or the two built-in ids, or "custom"). It used
+    # to be one of a fixed three; now that new labs are added as presets the id
+    # can be any non-empty string, so only a blank value falls back to default.
+    # An id that no longer resolves to a preset is handled at resolve time, not
+    # silently rewritten here.
+    if not str(out["lab"]).strip():
+        out["lab"] = DEFAULT_CONFIG["lab"]
+    if out["auth_level"] not in AUTH_LEVELS:
+        out["auth_level"] = "none"
+    if out["wait_seconds"] < 0:
+        out["wait_seconds"] = 0
+    if out["seat_mode"] not in (SEAT_DEFAULT, SEAT_EDIT, SEAT_FILE, SEAT_NONE):
+        out["seat_mode"] = DEFAULT_CONFIG["seat_mode"]
+    out["seat_excluded"] = sorted(set(out["seat_excluded"]))
+    if not out["room_name"].strip():
+        out["room_name"] = DEFAULT_ROOM_NAME
+    return out
+
+
+def configs_differ(a, b, ignore=()):
+    """True when the editable fields of two configs are not the same.
+
+    ``ignore`` names fields to exclude from the comparison. The built-in default
+    uses ``ignore=("project_path",)`` so that browsing to a project folder (an
+    input to a run, not an edit of the config) does not mark it modified.
+    """
+    na = normalize_config(a)
+    nb = normalize_config(b)
+    for key in ignore:
+        na.pop(key, None)
+        nb.pop(key, None)
+    return na != nb
+
+
+def build_database_url(cfg):
+    """The DATABASE_URL for this config, or None when no database is set.
+
+    The user name and password are percent-encoded, so a password that contains
+    a URL-special character (``@ : / ? # %`` and friends) cannot break the URL
+    or be misparsed by oTree's dj-database-url. A password with none of those
+    characters (the Lab default included) is left byte-for-byte unchanged, so
+    this is a safety net, not a reformat.
+    """
+    c = normalize_config(cfg)
+    if c["db_mode"] == DB_MODE_NONE:
+        return None
+    return "postgres://{user}:{password}@{host}:{port}/{name}".format(
+        user=_urlquote(c["db_user"]),
+        password=_urlquote(c["db_password"]),
+        host=c["db_host"],
+        port=c["db_port"],
+        name=c["db_name"],
+    )
+
+
+def _urlquote(text):
+    """Percent-encode one URL userinfo component (nothing is left 'safe')."""
+    from urllib.parse import quote
+    return quote(str(text), safe="")
+
+
+_URL_PASSWORD_RE = re.compile(r"^(?P<head>[a-zA-Z][a-zA-Z0-9+.-]*://[^:/@]*:)(?P<pw>[^@]*)(?P<tail>@.*)$")
+
+
+def mask_database_url(url):
+    """Replace the password in a database URL with a fixed run of dots.
+
+    The number of dots is fixed so the length of the real password does not
+    leak into the preview or the log.
+    """
+    if not url:
+        return ""
+    match = _URL_PASSWORD_RE.match(url)
+    if not match:
+        return url
+    return match.group("head") + MASKED_PASSWORD + match.group("tail")
+
+
+def credentialed_url(url, username, password):
+    """Return ``url`` with HTTP basic-auth userinfo embedded in the host part.
+
+    Best-effort convenience so the admin dashboard can open pre-authenticated
+    (no login box): a browser given ``http://user:pass@host/...`` sends the
+    credentials itself. The username and password are percent-encoded with
+    nothing left "safe", so a password containing ``@ : / # %`` or a space
+    cannot break the URL. Any userinfo already in the URL is replaced. Returned
+    unchanged when the URL has no network location or both credentials are blank.
+
+    Caveat: the password ends up visible in the URL and the browser history.
+    This is a convenience, not a security measure; the copy-the-credentials
+    handoff screen is the reliable path.
+    """
+    from urllib.parse import urlsplit, urlunsplit, quote
+    username = "" if username is None else str(username)
+    password = "" if password is None else str(password)
+    if not username and not password:
+        return url
+    parts = urlsplit(url)
+    if not parts.netloc:
+        return url
+    host = parts.netloc.rsplit("@", 1)[-1]   # drop any existing userinfo
+    userinfo = quote(username, safe="")
+    if password:
+        userinfo += ":" + quote(password, safe="")
+    return urlunsplit((parts.scheme, userinfo + "@" + host,
+                       parts.path, parts.query, parts.fragment))
+
+
+def mask_credentialed_url(url):
+    """A log-safe rendering of a URL that may carry basic-auth userinfo: the
+    password (and only the password) is replaced with a fixed run of dots."""
+    from urllib.parse import urlsplit, urlunsplit
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    userinfo, host = parts.netloc.rsplit("@", 1)
+    if ":" in userinfo:
+        userinfo = userinfo.split(":", 1)[0] + ":" + MASKED_PASSWORD
+    return urlunsplit((parts.scheme, userinfo + "@" + host,
+                       parts.path, parts.query, parts.fragment))
+
+
+def _presets_or_default(lab_presets):
+    """The passed lab presets, or the labs from lab_info.json when None/empty.
+
+    Host/seat helpers accept ``lab_presets=None`` for convenience; instead of the
+    old hardcoded small/large fallback they now resolve against whatever labs
+    lab_info.json defines, so no lab data is hardcoded in this module.
+    """
+    return lab_presets if lab_presets else default_lab_presets()
+
+
+def resolve_host(cfg, lab_presets=None):
+    """The host IP for this config's chosen lab.
+
+    ``lab_presets`` is the list of lab presets (see the lab-preset section
+    below). When it is None the two built-in labs are used, so every existing
+    caller keeps its old behaviour; when a store's presets are passed the host
+    comes from whichever preset the config's ``lab`` id names. ``custom`` still
+    means "use the typed custom_host", exactly as before.
+    """
+    c = normalize_config(cfg)
+    lab = c["lab"]
+    if lab == LAB_CUSTOM:
+        return c["custom_host"].strip()
+    preset = find_lab_preset(lab, _presets_or_default(lab_presets))
+    if preset is not None:
+        return str(preset.get("ip", "")).strip()
+    return c["custom_host"].strip()
+
+
+def build_url(cfg, lab_presets=None):
+    """The page the launcher opens after the server has started."""
+    c = normalize_config(cfg)
+    host = resolve_host(c, lab_presets)
+    port = c["port"].strip()
+    page = c["page"].strip()
+    if not host:
+        host = "<host>"
+    base = "http://" + host
+    if port:
+        base += ":" + port
+    if page and not page.startswith("/"):
+        page = "/" + page
+    return base + page
+
+
+def build_env(cfg, base_env=None, label_file=None):
+    """A copy of the process environment with this config's values applied.
+
+    Variables that the config does not want are removed rather than set to an
+    empty or falsy value, so that a stale DATABASE_URL or OTREE_PRODUCTION
+    inherited from the machine cannot leak into the run.
+    """
+    c = normalize_config(cfg)
+    env = dict(os.environ if base_env is None else base_env)
+
+    if c["db_mode"] == DB_MODE_NONE:
+        for key in DB_ENV_KEYS:
+            env.pop(key, None)
+    else:
+        env["DB_NAME"] = c["db_name"]
+        env["DB_USER"] = c["db_user"]
+        env["DB_PASSWORD"] = c["db_password"]
+        env["DB_HOST"] = c["db_host"]
+        env["DB_PORT"] = c["db_port"]
+        env["DATABASE_URL"] = build_database_url(c)
+
+    env["OTREE_ADMIN_USERNAME"] = c["admin_username"]
+    env["OTREE_ADMIN_PASSWORD"] = c["admin_password"]
+
+    if c["production"]:
+        env["OTREE_PRODUCTION"] = "1"
+    else:
+        env.pop("OTREE_PRODUCTION", None)
+
+    if c["auth_level"] in ("STUDY", "DEMO"):
+        env["OTREE_AUTH_LEVEL"] = c["auth_level"]
+    else:
+        env.pop("OTREE_AUTH_LEVEL", None)
+
+    # With no participant list the seat variables are left unset, so the block
+    # in settings.py stays inert and the project behaves as it always did.
+    if c["seat_mode"] == SEAT_NONE or not label_file:
+        for key in SEAT_ENV_KEYS:
+            env.pop(key, None)
+    else:
+        env["OTREE_LAB_LABEL_FILE"] = label_file
+        env["OTREE_LAB_ROOM_NAME"] = c["room_name"]
+
+    return env
+
+
+def launcher_env_keys(cfg, label_file=None):
+    """The names of the variables this config actually sets, in order."""
+    c = normalize_config(cfg)
+    keys = []
+    if c["db_mode"] != DB_MODE_NONE:
+        keys.extend(DB_ENV_KEYS)
+    keys.append("OTREE_ADMIN_USERNAME")
+    keys.append("OTREE_ADMIN_PASSWORD")
+    if c["production"]:
+        keys.append("OTREE_PRODUCTION")
+    if c["auth_level"] in ("STUDY", "DEMO"):
+        keys.append("OTREE_AUTH_LEVEL")
+    if c["seat_mode"] != SEAT_NONE and label_file:
+        keys.extend(SEAT_ENV_KEYS)
+    return keys
+
+
+def describe_env_value(key, value):
+    """A log-safe rendering of one environment variable."""
+    if key == "DATABASE_URL":
+        return mask_database_url(value)
+    if key in SECRET_ENV_KEYS:
+        return MASKED_PASSWORD
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Seats
+# ---------------------------------------------------------------------------
+
+
+def lab_default_seats(cfg, lab_presets=None):
+    """The seat labels for the lab this config points at.
+
+    A custom host has no known seat list, so it returns an empty list and the
+    launcher refuses to build one rather than inventing seats. When
+    ``lab_presets`` is passed the seats come from the named preset; when it is
+    None the labs defined in lab_info.json are used, so existing callers are
+    unaffected.
+    """
+    lab = normalize_config(cfg)["lab"]
+    if lab == LAB_CUSTOM:
+        return []
+    preset = find_lab_preset(lab, _presets_or_default(lab_presets))
+    if preset is not None:
+        return [str(s) for s in preset.get("seats", [])]
+    return []
+
+
+def resolve_seats(cfg, lab_presets=None):
+    """The seat labels this config will hand to oTree, in order.
+
+    Empty for None mode, and for file mode, where the user's own file is used
+    as it stands and never re-written.
+    """
+    c = normalize_config(cfg)
+    if c["seat_mode"] in (SEAT_NONE, SEAT_FILE):
+        return []
+    seats = lab_default_seats(c, lab_presets)
+    if c["seat_mode"] == SEAT_EDIT:
+        excluded = set(c["seat_excluded"])
+        return [seat for seat in seats if seat not in excluded]
+    return seats
+
+
+def invalid_seats(labels):
+    """Labels oTree would reject (otree/common.py: validate_alphanumeric)."""
+    return [label for label in labels if not SEAT_LABEL_RE.match(label)]
+
+
+def seat_file_text(labels):
+    """One label per line, with a trailing newline."""
+    return "\n".join(labels) + "\n"
+
+
+def seats_dir():
+    return os.path.join(config_dir(), "seats")
+
+
+def seat_file_path(config_name, room_name):
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", "%s_%s" % (room_name, config_name)).strip("_")
+    return os.path.join(seats_dir(), (stem or "seats") + ".txt")
+
+
+def write_seat_file(labels, path):
+    """Write the seat list atomically, so a crash cannot leave half a list."""
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=folder, prefix=".seats-", suffix=".tmp", delete=False,
+        newline="\n")
+    tmp_name = handle.name
+    try:
+        handle.write(seat_file_text(labels))
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        os.replace(tmp_name, path)
+    except Exception:
+        handle.close()
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def read_seat_file(path):
+    """The labels in a seat file, parsed the way oTree parses it (str.split)."""
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read().split()
+
+
+def seat_summary(cfg, resolved=None, lab_presets=None):
+    """A short line describing the seat list, for the GUI and the log."""
+    c = normalize_config(cfg)
+    if c["seat_mode"] == SEAT_NONE:
+        return "No seat list. The room stays open and shows no per-seat board."
+    if c["seat_mode"] == SEAT_FILE:
+        path = c["seat_file"].strip()
+        if not path:
+            return "No file chosen yet."
+        if not os.path.isfile(path):
+            return "File not found: %s" % path
+        try:
+            labels = read_seat_file(path)
+        except OSError as error:
+            return "Could not read %s: %s" % (path, error)
+        return "%d seats from %s" % (len(labels), os.path.basename(path))
+    labels = resolve_seats(c, lab_presets) if resolved is None else resolved
+    if not labels:
+        return ("No seats. A custom host has no default seat list, so choose "
+                "a file or None.")
+    return "%d seats" % len(labels)
+
+
+def prepare_label_file(cfg, config_name="session", lab_presets=None):
+    """Settle the participant label file for one run.
+
+    Returns (path or None, explanation). A list the launcher owns is written to
+    its own config directory; a file the user picked in their project is used
+    exactly as it stands and is never copied or rewritten.
+    """
+    c = normalize_config(cfg)
+    if c["seat_mode"] == SEAT_NONE:
+        return None, "No participant list, so OTREE_LAB_LABEL_FILE is not set."
+    if c["seat_mode"] == SEAT_FILE:
+        path = os.path.abspath(c["seat_file"].strip())
+        return path, "Using the project's own seat file, unchanged: %s" % path
+    labels = resolve_seats(c, lab_presets)
+    path = seat_file_path(config_name, c["room_name"])
+    write_seat_file(labels, path)
+    return path, "Wrote %d seats to %s" % (len(labels), path)
+
+
+def seat_preview(labels, limit=10):
+    if not labels:
+        return ""
+    head = ", ".join(labels[:limit])
+    if len(labels) > limit:
+        head += ", ... , " + labels[-1]
+    return head
+
+
+# ---------------------------------------------------------------------------
+# The settings.py block
+# ---------------------------------------------------------------------------
+
+BLOCK_MARKER = "=== oTree lab support (paste at the END of settings.py) ==="
+BLOCK_END_MARKER = "=== end oTree lab support ==="
+
+# The one source of truth for the block. otree_lab_block.py holds the same
+# text; test_block_file_matches_the_constant proves they have not drifted.
+LAB_BLOCK = '''# === oTree lab support (paste at the END of settings.py) ===
+# ---------------------------------------------------------------------------
+# OTREE LAB SUPPORT — appended by the oTree lab launcher.
+# TO REMOVE: delete everything from this banner line to the END of the file.
+# Safe to leave in permanently: it does NOTHING unless the launcher sets
+# its environment variables at launch. With no lab environment set, every
+# override below is skipped and your settings.py behaves exactly as before.
+#
+# Because Python binds names last, these assignments live at the END of the
+# file, so they win over anything the project hardcoded higher up — but only
+# while the launcher's variables are present. Each override is guarded by the
+# variable it needs, and its comment says in plain language what it redirects
+# and why. Everything here only redirects WHERE your program runs (the lab
+# machines, the lab database, the lab room and login); it never changes your
+# experiment's logic. Unrelated settings such as SECRET_KEY are left untouched.
+# ---------------------------------------------------------------------------
+import os as _os
+
+# (a) ROOMS + participant_label_file: when the launcher has written a seat list
+#     for this run, expose it as an oTree room so the admin gets the per-seat
+#     presence board. Adds nothing if the launcher wrote no seat list.
+if _os.environ.get("OTREE_LAB_LABEL_FILE"):
+    # The launcher picked a room and wrote a seat list for this run.
+    _lab_room = _os.environ.get("OTREE_LAB_ROOM_NAME", "study")
+
+    # ROOMS may not exist yet in this project.
+    try:
+        ROOMS
+    except NameError:
+        ROOMS = []
+
+    # Add the room only if the project does not already define it, so a project
+    # that has its own room keeps its own settings.
+    if not any(r.get("name") == _lab_room for r in ROOMS):
+        ROOMS = list(ROOMS) + [dict(name=_lab_room, display_name="oTree lab session")]
+
+    # Point that room at the seat list the launcher wrote. Mutating in place
+    # means any other keys the project set on the room survive.
+    for _room in ROOMS:
+        if _room.get("name") == _lab_room:
+            _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
+
+# (b) DATABASES: redirect the project at the lab's PostgreSQL database, rebuilt
+#     from the DB_* variables the launcher set. Because it is assigned here at
+#     the end of the file it wins even over a DATABASES block the project
+#     hardcoded higher up, so a session cannot run against the wrong database.
+#     (oTree 6+ actually chooses its database from the DATABASE_URL environment
+#     variable, which the launcher also sets, so on that version the lab
+#     database is already in force through the environment; this settings-level
+#     DATABASES is the same redirect for Django-based oTree versions that read
+#     it, and is simply ignored where it is not.)
+if _os.environ.get("DB_NAME"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _os.environ["DB_NAME"],
+            "USER": _os.environ.get("DB_USER", ""),
+            "PASSWORD": _os.environ.get("DB_PASSWORD", ""),
+            "HOST": _os.environ.get("DB_HOST", "localhost"),
+            "PORT": _os.environ.get("DB_PORT", "5432"),
+        }
+    }
+
+# (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
+#     hardcodes the admin username, so without this line the launcher's admin
+#     username box would do nothing. With no variable set this keeps whatever
+#     the project already had, or "admin" if it had none — so off the lab it
+#     changes nothing.
+try:
+    _lab_admin_default = ADMIN_USERNAME
+except NameError:
+    _lab_admin_default = "admin"
+ADMIN_USERNAME = _os.environ.get("OTREE_ADMIN_USERNAME", _lab_admin_default)
+
+# (d) ADMIN_PASSWORD: take the admin password from the launcher, so a password
+#     hardcoded in the project cannot lock the experimenter out of the lab
+#     dashboard. Only fires when the launcher set OTREE_ADMIN_PASSWORD.
+if "OTREE_ADMIN_PASSWORD" in _os.environ:
+    ADMIN_PASSWORD = _os.environ["OTREE_ADMIN_PASSWORD"]
+
+# (e) AUTH_LEVEL: the launcher's access level (STUDY puts the whole site behind
+#     the admin login for a real session). Overrides any level the project
+#     hardcoded. Only fires when the launcher set OTREE_AUTH_LEVEL.
+if "OTREE_AUTH_LEVEL" in _os.environ:
+    AUTH_LEVEL = _os.environ["OTREE_AUTH_LEVEL"]
+
+# (f) DEBUG / production: re-derive oTree's own production rule from
+#     OTREE_PRODUCTION, so a project that hardcoded DEBUG = True cannot ship
+#     debug pages and tracebacks in the lab. Only fires when the launcher set
+#     OTREE_PRODUCTION (production mode); off the lab, DEBUG is left as it was.
+if "OTREE_PRODUCTION" in _os.environ:
+    DEBUG = _os.environ.get("OTREE_PRODUCTION") in (None, "", "0")
+# === end oTree lab support ===
+'''
+
+
+def settings_path_for(project_path):
+    return os.path.join((project_path or "").strip(), "settings.py")
+
+
+def inspect_settings(project_path):
+    """Look for the lab support block in a project's settings.py.
+
+    Returns a dict:
+      readable       could settings.py be read at all
+      has_block      the start marker is present
+      complete       both markers are present
+      rooms_after    a top level `ROOMS =` line appears after the block
+      rooms_line     the line number of that assignment, or 0
+      message        one line of plain language for the GUI
+    """
+    result = {"readable": False, "has_block": False, "complete": False,
+              "rooms_after": False, "rooms_line": 0, "path": settings_path_for(project_path),
+              "own_room": False, "uses_lab_room": False, "message": ""}
+    try:
+        with open(result["path"], "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        result["message"] = "No settings.py to check yet."
+        return result
+
+    result["readable"] = True
+    lines = text.splitlines()
+    start = end = -1
+    for index, line in enumerate(lines):
+        if BLOCK_MARKER in line and start < 0:
+            start = index
+        if BLOCK_END_MARKER in line:
+            end = index
+    result["has_block"] = start >= 0
+    result["complete"] = start >= 0 and end > start
+
+    if start >= 0:
+        # A top level rebinding of ROOMS after the block silently throws the
+        # room away. Indented ROOMS lines inside the block itself are fine.
+        after = end if end > start else start
+        for index in range(after + 1, len(lines)):
+            if re.match(r"^ROOMS\s*=", lines[index]):
+                result["rooms_after"] = True
+                result["rooms_line"] = index + 1
+                break
+
+    # Does the project already wire up the lab's experimental room? Either the
+    # lab support block does it, or the project defines a room named like ours itself.
+    own_room = bool(re.search(
+        r"""name\s*=\s*['"]%s['"]""" % re.escape(DEFAULT_ROOM_NAME), text))
+    result["own_room"] = own_room
+    result["uses_lab_room"] = (result["complete"] and not result["rooms_after"]) or own_room
+
+    if not result["has_block"]:
+        result["message"] = ("settings.py does not have the oTree lab support block, so the "
+                             "lab room and the seat board will not work.")
+    elif result["rooms_after"]:
+        result["message"] = ("settings.py assigns ROOMS on line %d, after the oTree lab support "
+                             "block. That replaces the lab room. Move the block to the end of "
+                             "the file." % result["rooms_line"])
+    elif not result["complete"]:
+        result["message"] = ("The oTree lab support block in settings.py looks cut off: its end "
+                             "marker is missing.")
+    else:
+        result["message"] = "settings.py has the oTree lab support block."
+    return result
+
+
+def append_block(project_path):
+    """Back up settings.py, then append the block. Returns (backup, settings)."""
+    path = settings_path_for(project_path)
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = path + "." + stamp + ".bak"
+    shutil.copy2(path, backup)
+    separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(separator + LAB_BLOCK)
+    return backup, path
+
+
+# ---------------------------------------------------------------------------
+# Project folder validation
+# ---------------------------------------------------------------------------
+
+
+def validate_project(path):
+    """Check that a folder looks like an oTree project.
+
+    Returns (level, message) where level is "ok", "warn" or "error".
+    A missing folder is an error and blocks launching; anything else only warns.
+    """
+    path = (path or "").strip()
+    if not path:
+        return "warn", "No project folder chosen yet. Click Browse to pick one."
+    if not os.path.isdir(path):
+        return "error", "Folder not found: " + path
+    if not os.path.isfile(os.path.join(path, "settings.py")):
+        return (
+            "warn",
+            "No settings.py in this folder, so it may not be an oTree project. "
+            "You can still launch.",
+        )
+    apps = find_app_packages(path)
+    if not apps:
+        return (
+            "warn",
+            "settings.py found, but no app package (a folder with __init__.py) "
+            "next to it. You can still launch.",
+        )
+    listed = ", ".join(apps[:4]) + ("..." if len(apps) > 4 else "")
+    return "ok", "Looks like an oTree project: settings.py and %d app package%s (%s)." % (
+        len(apps),
+        "" if len(apps) == 1 else "s",
+        listed,
+    )
+
+
+def find_app_packages(path):
+    apps = []
+    try:
+        entries = sorted(os.listdir(path))
+    except OSError:
+        return apps
+    for name in entries:
+        if name.startswith(".") or name in ("__pycache__", "_static", "_templates"):
+            continue
+        folder = os.path.join(path, name)
+        if os.path.isdir(folder) and os.path.isfile(os.path.join(folder, "__init__.py")):
+            apps.append(name)
+    return apps
+
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+
+def config_dir():
+    """The per-user directory where presets.json lives."""
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, APP_DIR_NAME)
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", APP_DIR_NAME)
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, APP_DIR_NAME)
+
+
+def presets_path():
+    override = os.environ.get("OTREE_LAB_LAUNCHER_PRESETS")
+    if override:
+        return override
+    return os.path.join(config_dir(), PRESETS_FILENAME)
+
+
+# --- Per-machine lab identity (lab.local) ----------------------------------
+# Each lab PC carries a gitignored one-word marker file, `lab.local`, next to
+# the launcher, saying which lab it is ("large" or "small"). The launcher reads
+# it at startup to configure the built-in Lab default's lab, and writes it
+# ONCE from a first-launch operator choice. It is never auto-rewritten after
+# that, so the choice can only be changed by hand-editing the file.
+
+
+def lab_marker_path():
+    """Where lab.local lives. OTREE_LAB_MARKER overrides it (used by tests)."""
+    override = os.environ.get("OTREE_LAB_MARKER")
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), LAB_MARKER_FILENAME)
+
+
+def read_lab_marker(path=None):
+    """This machine's lab id, or None when unset.
+
+    Historically the marker held only "large"/"small"; it now holds ANY lab
+    preset id (a lowercase slug), so a machine can be identified as a lab the
+    operator added on the Lab Settings page. The stored word is returned as-is
+    (stripped, lower-cased), so "large"/"small" still resolve to the two
+    built-in labs. An empty or missing file means "unset" — first launch, where
+    the operator is asked to choose.
+    """
+    path = path or lab_marker_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            word = handle.read().strip().lower()
+    except OSError:
+        return None
+    return word or None
+
+
+def set_lab_marker(lab_id, path=None):
+    """Record this machine's lab id, OVERWRITING any existing marker.
+
+    This is the UI-settable path (the first-run chooser and the Lab Settings
+    "which lab is this computer" control), so the operator never has to
+    hand-edit lab.local to change which lab the machine is. Accepts any non-empty
+    lab id. Returns the id written.
+    """
+    lab_id = str(lab_id or "").strip().lower()
+    if not lab_id:
+        raise ValueError("lab_id must be a non-empty lab id")
+    path = path or lab_marker_path()
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(lab_id + "\n")
+    return lab_id
+
+
+def write_lab_marker(lab, path=None):
+    """First-run write: record the lab id only if no valid marker exists yet.
+
+    Returns True if written, False if refused because a marker already exists,
+    so a first-run choice can never silently revert a machine that is already
+    identified. Accepts any non-empty lab id (not only large/small). To CHANGE
+    an existing identity from the UI use set_lab_marker, which overwrites.
+    """
+    lab = str(lab or "").strip().lower()
+    if not lab:
+        raise ValueError("lab must be a non-empty lab id")
+    path = path or lab_marker_path()
+    if read_lab_marker(path) is not None:
+        return False
+    set_lab_marker(lab, path)
+    return True
+
+
+_MARKER_UNSET = object()
+
+
+def apply_lab_marker(presets, marker=_MARKER_UNSET):
+    """Point the built-in Lab default's lab at this machine's lab, in place.
+
+    The built-in default is app-owned, so its lab tracks lab.local. User configs
+    are never touched. A no-op when the marker is unset (first launch), which
+    leaves the built-in on its code default. Any non-empty lab id is honoured,
+    so a machine identified as an added lab points the default there too.
+    """
+    if marker is _MARKER_UNSET:
+        marker = read_lab_marker()
+    if not marker:
+        return presets
+    for preset in presets:
+        if is_builtin(preset):
+            preset["lab"] = marker
+    return presets
+
+
+def apply_lab_identity(lab_presets, lab_id):
+    """Make ``lab_id`` this machine's single lab: display only it, hide the rest.
+
+    The machine's lab is a UI choice recorded in lab.local; this reflects that
+    choice in the existing per-preset display toggles so the main lab selector
+    collapses to the one lab (and cannot pick a wrong one). Returns
+    (ok, message, new_list); refuses when no preset carries that id.
+    """
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    if find_lab_preset(lab_id, presets) is None:
+        return False, "No lab preset with that id.", presets
+    for preset in presets:
+        preset["display"] = (preset["id"] == str(lab_id))
+    return True, "", presets
+
+
+def default_preset():
+    preset = dict(DEFAULT_CONFIG)
+    preset["name"] = "Lab default"
+    preset["created"] = now_iso()
+    preset["last_run"] = None
+    # author/builtin are metadata (like name/created/last_run), NOT config fields
+    # in FIELD_KEYS, so they never enter the config-equality comparison that
+    # guards immutability. The shipped default is built-in and built in.
+    preset["author"] = "builtin"
+    preset["builtin"] = True
+    # This machine's lab identity (from lab.local) configures the built-in
+    # default's lab, so on a lab PC the default already points at the right lab.
+    # Any non-empty id is honoured; unset (first launch) leaves the code default.
+    marker = read_lab_marker()
+    if marker:
+        preset["lab"] = marker
+    return preset
+
+
+def load_store(path=None):
+    """Read the presets file.
+
+    Returns (presets, extra) where `presets` is the list of stored records
+    exactly as they were written (unknown keys included) and `extra` holds any
+    top-level keys of the file this version does not know about.  A file that
+    cannot be parsed is moved aside rather than overwritten.
+    """
+    path = path or presets_path()
+    if not os.path.exists(path):
+        return [default_preset()], {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        backup = path + ".broken-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            shutil.copy2(path, backup)
+        except OSError:
+            pass
+        return [default_preset()], {}
+
+    extra = {}
+    if isinstance(data, list):
+        raw = data
+    elif isinstance(data, dict):
+        raw = data.get("presets", [])
+        extra = {k: v for k, v in data.items() if k not in ("presets", "version")}
+    else:
+        raw = []
+
+    presets = [item for item in raw if isinstance(item, dict)]
+    # A record without a usable name still belongs to somebody, so keep it
+    # rather than dropping it silently.
+    for index, item in enumerate(presets):
+        if not str(item.get("name", "")).strip():
+            item["name"] = "Unnamed config %d" % (index + 1)
+    if not presets:
+        presets = [default_preset()]
+    return presets, extra
+
+
+def save_store(presets, extra=None, path=None):
+    """Write the presets file atomically.
+
+    The new content goes to a temporary file in the same directory, is flushed
+    to disk, and only then replaces the old file, so an interrupted write can
+    never leave a half-written presets.json behind.
+    """
+    path = path or presets_path()
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    payload = dict(extra or {})
+    payload["version"] = STORAGE_VERSION
+    payload["presets"] = presets
+    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
+
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=folder, prefix=".presets-", suffix=".tmp", delete=False
+    )
+    tmp_name = handle.name
+    try:
+        handle.write(text)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        os.replace(tmp_name, path)
+    except Exception:
+        handle.close()
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def is_builtin(item):
+    """True for the app-owned Lab default (builtin flag, or author == "builtin").
+
+    These configs are pinned to the top and cannot be deleted.
+    """
+    return bool(item.get("builtin")) or str(item.get("author", "")).strip().casefold() == "builtin"
+
+
+def lab_suffix(lab):
+    """The derived, never-stored name suffix for a config's lab.
+
+    Uses the lab preset's display name from lab_info.json, so the suffix works
+    for any lab, not just the two that used to be hardcoded.
+    """
+    lab = str(lab or "").strip()
+    if not lab or lab == LAB_CUSTOM:
+        return ""
+    preset = find_lab_preset(lab, default_lab_presets())
+    if preset is not None and preset.get("name"):
+        return " (%s)" % preset["name"]
+    return ""
+
+
+def display_name(preset):
+    """The config name as shown to the user.
+
+    The derived lab suffix is appended ONLY to the built-in Lab default;
+    researcher-saved configs still store their own lab but show no suffix.
+    (Canonical rule shared with the Tk launcher; the web UI mirrors it in JS.)
+    """
+    name = str(preset.get("name", ""))
+    if is_builtin(preset):
+        return name + lab_suffix(normalize_config(preset)["lab"])
+    return name
+
+
+def sort_presets(presets):
+    """Built-in (Lab default) first, then most recently run, then by name.
+
+    The built-in default is always pinned to the very top regardless of when it
+    last ran; everything else falls under the recent-run ordering below it.
+    """
+
+    def key(item):
+        stamp = item.get("last_run")
+        stamp = stamp if isinstance(stamp, str) and stamp else ""
+        return (0 if is_builtin(item) else 1,
+                0 if stamp else 1, _invert(stamp), str(item.get("name", "")).casefold())
+
+    return sorted(presets, key=key)
+
+
+def _invert(stamp):
+    """Sort ISO timestamps descending inside an otherwise ascending sort."""
+    return tuple(-ord(ch) for ch in stamp)
+
+
+def unique_name(name, presets):
+    """True when `name` is not already taken (comparison ignores case)."""
+    taken = {str(p.get("name", "")).strip().casefold() for p in presets}
+    return name.strip().casefold() not in taken
+
+
+def preset_from_fields(name, fields, created=None, author=None):
+    preset = normalize_config(fields)
+    preset["name"] = name.strip()
+    preset["created"] = created or now_iso()
+    preset["last_run"] = None
+    author = (author or "").strip()
+    if not author:
+        try:
+            author = getpass.getuser()
+        except Exception:
+            author = ""
+    preset["author"] = author
+    # A user-made config is NEVER built in: only default_preset() sets that, so
+    # Save As can never mint an undeletable, top-pinned config.
+    preset["builtin"] = False
+    return preset
+
+
+def format_last_run(stamp):
+    if not stamp:
+        return "Never run"
+    try:
+        when = _dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return str(stamp)
+    today = _dt.date.today()
+    if when.date() == today:
+        return "Last run today at " + when.strftime("%H:%M")
+    if (today - when.date()).days == 1:
+        return "Last run yesterday at " + when.strftime("%H:%M")
+    return "Last run " + when.strftime("%d %b %Y at %H:%M")
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def resetdb_command():
+    """`otree resetdb`, exactly as the batch file ran it."""
+    return ["otree", "resetdb"]
+
+
+def _applescript_string(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def macos_shell_script(cfg, project_path, env_pairs):
+    """The shell line that a new macOS Terminal window will run."""
+    parts = ["cd " + shlex.quote(project_path)]
+    for key, value in env_pairs:
+        parts.append("export %s=%s" % (key, shlex.quote(value)))
+    parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
+    parts.append("otree prodserver")
+    return "; ".join(parts)
+
+
+def build_server_launch(cfg, project_path, env, platform_name=None):
+    """How to start `otree prodserver` in a window the researcher can see.
+
+    Returns a dict with the command to run, the platform branch that produced
+    it, and the extra Popen arguments that branch needs.  Kept separate from
+    the running of it so both branches can be tested off their own platform.
+    """
+    platform_name = platform_name or sys.platform
+    env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
+
+    if platform_name.startswith("win"):
+        # cmd /k keeps the console open after the server stops, so the
+        # researcher can still read the traceback that killed it.
+        inner = 'title oTree Server ({app}) && otree prodserver'.format(app=APP_NAME)
+        return {
+            "kind": "windows",
+            "cmd": ["cmd", "/k", inner],
+            "cwd": project_path,
+            "creationflags": CREATE_NEW_CONSOLE,
+            "shell": False,
+            "description": "new console window: cmd /k otree prodserver",
+        }
+
+    if platform_name == "darwin":
+        script = 'tell application "Terminal"\nactivate\ndo script %s\nend tell' % _applescript_string(
+            macos_shell_script(cfg, project_path, env_pairs)
+        )
+        return {
+            "kind": "macos",
+            "cmd": ["osascript", "-e", script],
+            "cwd": project_path,
+            "creationflags": 0,
+            "shell": False,
+            "description": "new Terminal window via osascript",
+        }
+
+    for terminal in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+        if shutil.which(terminal):
+            return {
+                "kind": "linux-terminal",
+                "cmd": [terminal, "-e", "otree", "prodserver"],
+                "cwd": project_path,
+                "creationflags": 0,
+                "shell": False,
+                "description": "new %s window" % terminal,
+            }
+    return {
+        "kind": "linux-background",
+        "cmd": ["otree", "prodserver"],
+        "cwd": project_path,
+        "creationflags": 0,
+        "shell": False,
+        "description": "background process (no terminal emulator found; output goes to this log)",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch file export
+# ---------------------------------------------------------------------------
+
+
+def export_bat_text(cfg, name="config"):
+    """A standalone .bat with the same effect as launching from the app.
+
+    This is a convenience for people who still want a batch file.  The app
+    itself never writes or reads one in order to launch.
+    """
+    c = normalize_config(cfg)
+    url = build_url(c)
+    lines = [
+        "@echo off",
+        "REM Generated by %s on %s" % (APP_NAME, _dt.datetime.now().strftime("%Y-%m-%d %H:%M")),
+        'REM Config: "%s"' % name,
+        "REM Editing this file does not change the saved config in the app.",
+        "",
+    ]
+
+    if c["db_mode"] == DB_MODE_NONE:
+        lines += [
+            "REM === Database ===",
+            "REM This config sets no database, so oTree falls back to its own default.",
+            "set DATABASE_URL=",
+            "",
+        ]
+    else:
+        lines += [
+            "REM === Database ===",
+            "set DB_NAME=%s" % c["db_name"],
+            "set DB_USER=%s" % c["db_user"],
+            "set DB_PASSWORD=%s" % c["db_password"],
+            "set DB_HOST=%s" % c["db_host"],
+            "set DB_PORT=%s" % c["db_port"],
+            "set DATABASE_URL=postgres://%DB_USER%:%DB_PASSWORD%@%DB_HOST%:%DB_PORT%/%DB_NAME%",
+            "",
+        ]
+
+    lines += [
+        "REM === oTree variables ===",
+        "set OTREE_ADMIN_USERNAME=%s" % c["admin_username"],
+        "set OTREE_ADMIN_PASSWORD=%s" % c["admin_password"],
+    ]
+    if c["production"]:
+        lines.append("set OTREE_PRODUCTION=1")
+    else:
+        lines.append("set OTREE_PRODUCTION=")
+    if c["auth_level"] in ("STUDY", "DEMO"):
+        lines.append("set OTREE_AUTH_LEVEL=%s" % c["auth_level"])
+    else:
+        lines.append("set OTREE_AUTH_LEVEL=")
+    lines.append("")
+
+    lines += [
+        "REM === oTree project folder ===",
+        'cd /d "%s"' % c["project_path"],
+        "",
+    ]
+
+    if c["resetdb"]:
+        lines += [
+            "REM === Reset the database (the y is answered for you) ===",
+            "(echo y) | otree resetdb",
+            "",
+        ]
+
+    lines += [
+        "REM === Start the server in a new terminal ===",
+        'start "oTree Server" cmd /k otree prodserver',
+        "",
+    ]
+
+    if c["open_browser"]:
+        lines += [
+            "REM === Wait for prodserver to boot up, then open the page ===",
+            "timeout /t %d >nul" % c["wait_seconds"],
+            "start %s" % url,
+            "",
+        ]
+
+    lines += [
+        "echo Server starting. This window will close now.",
+        "timeout /t 10 >nul",
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
+
+def find_candidate_label_files(project_path, limit=60):
+    """Text files in a project that could be a participant label file.
+
+    Scans the project folder and its immediate subfolders for ``*.txt`` files,
+    so the "Use a file from my project" picker can offer them directly (with a
+    Browse fallback for anything elsewhere). Returns absolute paths, project
+    root first, each folder's files in name order. Nothing is read or changed.
+    """
+    project_path = (project_path or "").strip()
+    if not project_path or not os.path.isdir(project_path):
+        return []
+    skip = {"__pycache__", "_static", "_templates", ".git", "node_modules", ".idea"}
+
+    def txts(folder):
+        found = []
+        try:
+            entries = sorted(os.listdir(folder))
+        except OSError:
+            return found
+        for name in entries:
+            if name.startswith("."):
+                continue
+            path = os.path.join(folder, name)
+            if os.path.isfile(path) and name.lower().endswith(".txt"):
+                found.append(os.path.abspath(path))
+        return found
+
+    out = list(txts(project_path))
+    try:
+        subs = sorted(os.listdir(project_path))
+    except OSError:
+        subs = []
+    for name in subs:
+        if name in skip or name.startswith("."):
+            continue
+        sub = os.path.join(project_path, name)
+        if os.path.isdir(sub):
+            out.extend(txts(sub))
+        if len(out) >= limit:
+            break
+    seen, uniq = set(), []
+    for path in out:
+        if path not in seen:
+            seen.add(path)
+            uniq.append(path)
+        if len(uniq) >= limit:
+            break
+    return uniq
+
+
+# ---------------------------------------------------------------------------
+# Lab presets (Feature 4)
+# ---------------------------------------------------------------------------
+# A lab preset is a named location the launcher can serve: an IP address, a
+# seat list, a "display" flag (whether it appears in the lab selector), an
+# optional spatial "map" (see below), and a geometry hint. Presets live in the
+# same presets.json store as configs, under the top-level "lab_presets" key
+# (round-tripped through the store's `extra` dict). The lab selector reads the
+# DISPLAYED presets. The BUILT-IN labs are seeded from lab_info.json (not from
+# hardcoded constants), so any number of labs with any names is supported.
+
+LAB_GEO_GRID = "grid"           # a plain grid, used for a lab with no map
+# Kept for backward compatibility with any presets.json that stored these hints.
+LAB_GEO_SMALL = "grid_small"
+LAB_GEO_LARGE = "grid_large"
+LAB_GEOMETRIES = (LAB_GEO_SMALL, LAB_GEO_LARGE, LAB_GEO_GRID)
+
+
+# --- Lab MAPS (spatial room layouts) ---------------------------------------
+# A map is a small JSON file of pure geometry: grid size and a list of cells,
+# each {r, c, kind} where kind is "seat", "exp" (experimenter desk) or "wall".
+# Seat cells carry NO label — labels come from the lab's own seat list, filled
+# in the order the seat cells appear (see build_seatmap_from_map). Maps live as
+# their own files in the committed maps/ folder (maps/<name>.json). A lab
+# references one with "map": "<name>"; a full inline map object is also accepted
+# as a fallback. Because a map is just geometry, several labs can share one file
+# (e.g. a real lab links to maps/example_large.json) and anyone can drop their
+# own maps/<name>.json and point a lab at it.
+
+MAPS_DIRNAME = "maps"
+_MAP_FILE_CACHE = {}
+
+
+def maps_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), MAPS_DIRNAME)
+
+
+def load_map_file(name):
+    """The map dict in maps/<name>.json, or None. Cached; name is a bare stem."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    if name in _MAP_FILE_CACHE:
+        return _MAP_FILE_CACHE[name]
+    # basename guards against a reference trying to escape the maps/ folder.
+    path = os.path.join(maps_dir(), os.path.basename(name) + ".json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = None
+    data = data if isinstance(data, dict) else None
+    _MAP_FILE_CACHE[name] = data
+    return data
+
+
+def resolve_lab_map(map_field, maps_table=None):
+    """A lab's spatial map object, or None.
+
+    ``map_field`` is either a full map dict (inline in the lab's entry — the
+    optional fallback) or a string naming a map. A named map resolves against an
+    optional inline ``maps`` table first (if the file supplies one) and then
+    against the maps/ folder as maps/<name>.json (the primary, documented path),
+    so a real lab can say ``"map": "example_large"`` and inherit that geometry.
+    """
+    if isinstance(map_field, dict):
+        return map_field
+    if isinstance(map_field, str) and map_field.strip():
+        name = map_field.strip()
+        if maps_table and isinstance(maps_table.get(name), dict):
+            return maps_table[name]
+        return load_map_file(name)
+    return None
+
+
+def default_lab_presets():
+    """The built-in labs, seeded from lab_info.json.
+
+    Empty when lab_info.json is absent (first run) — the launcher runs its setup
+    wizard in that case. Each lab's map is resolved here (a maps/<name>.json
+    reference, or an inline object) so callers just read preset["map"].
+    """
+    info = LAB_INFO or {}
+    labs = info.get("labs") or {}
+    maps_table = info.get("maps") or {}   # optional inline table, still honoured
+    presets = []
+    for lab_id, raw in labs.items():
+        raw = raw or {}
+        presets.append(normalize_lab_preset({
+            "id": lab_id,
+            "name": raw.get("name") or str(lab_id).title(),
+            "ip": raw.get("host", ""),
+            "seats": list(raw.get("seats", [])),
+            "display": raw.get("display", True),
+            "geometry": raw.get("geometry", LAB_GEO_GRID),
+            "map": resolve_lab_map(raw.get("map"), maps_table),
+            "builtin": True,
+        }))
+    return presets
+
+
+def reload_lab_info(path=None):
+    """Re-read lab_info.json and refresh the module-level defaults.
+
+    Called after the first-run wizard writes the file, so the app picks up the
+    new labs/credentials without a restart.
+    """
+    global LAB_INFO, LAB_DB, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, DEFAULT_LAB_ID
+    LAB_INFO = load_lab_info(path)
+    LAB_DB = lab_db_from_info(LAB_INFO)
+    admin = (LAB_INFO or {}).get("admin") or {}
+    DEFAULT_ADMIN_USERNAME = str(admin.get("username") or "admin")
+    DEFAULT_ADMIN_PASSWORD = str(admin.get("password") or "")
+    DEFAULT_LAB_ID = _default_lab_id_from_info(LAB_INFO)
+    DEFAULT_CONFIG.update({
+        "db_name": LAB_DB["db_name"], "db_user": LAB_DB["db_user"],
+        "db_password": LAB_DB["db_password"], "db_host": LAB_DB["db_host"],
+        "db_port": LAB_DB["db_port"], "admin_username": DEFAULT_ADMIN_USERNAME,
+        "admin_password": DEFAULT_ADMIN_PASSWORD, "lab": DEFAULT_LAB_ID,
+    })
+    return LAB_INFO
+
+
+def build_seatmap_from_map(map_obj, seats):
+    """(rows, cols, cells) for a lab's map object, or None when there is no map.
+
+    Seat labels are filled from ``seats`` in the order the seat cells appear, so
+    a lab that references an example map inherits the shape while showing ITS OWN
+    seat names. Non-seat cells (kind "exp"/"wall") consume no seat. This is the
+    single geometry->drawing converter; both front-ends render from map data.
+    """
+    if not isinstance(map_obj, dict):
+        return None
+    seat_iter = iter([str(s) for s in (seats or [])])
+    cells = []
+    max_r = max_c = 0
+    for cell in (map_obj.get("cells") or []):
+        try:
+            r = int(cell.get("r"))
+            c = int(cell.get("c"))
+        except (TypeError, ValueError):
+            continue
+        kind = cell.get("kind", "seat")
+        out = {"r": r, "c": c, "kind": kind}
+        if cell.get("colspan"):
+            out["colspan"] = cell["colspan"]
+        if cell.get("rowspan"):
+            out["rowspan"] = cell["rowspan"]
+        if kind == "seat":
+            out["label"] = next(seat_iter, "")
+        cells.append(out)
+        max_r = max(max_r, r)
+        max_c = max(max_c, c)
+    rows = int(map_obj.get("rows") or max_r)
+    cols = int(map_obj.get("cols") or max_c)
+    return rows, cols, cells
+
+
+def normalize_lab_preset(preset):
+    """A lab preset with every field coerced to a known shape."""
+    out = dict(preset or {})
+    out["id"] = str(out.get("id", "")).strip()
+    out["name"] = str(out.get("name", "")).strip()
+    out["ip"] = str(out.get("ip", "")).strip()
+    seats = out.get("seats", [])
+    if isinstance(seats, (list, tuple)):
+        out["seats"] = [str(s).strip() for s in seats if str(s).strip()]
+    else:
+        out["seats"] = []
+    out["display"] = bool(out.get("display", True))
+    out["builtin"] = bool(out.get("builtin", False))
+    geo = str(out.get("geometry", "") or "")
+    if geo not in LAB_GEOMETRIES:
+        geo = LAB_GEO_GRID
+    out["geometry"] = geo
+    # A resolved spatial map object (or None). Preserved as-is; a lab with no
+    # map is drawn as a plain grid from its seat list.
+    out["map"] = out.get("map") if isinstance(out.get("map"), dict) else None
+    # Optional column count for the plain-grid seat map of an added lab, so its
+    # drawing can match the room's shape. 0 means "auto" (the seat board picks).
+    try:
+        out["cols"] = max(0, int(out.get("cols", 0)))
+    except (TypeError, ValueError):
+        out["cols"] = 0
+    return out
+
+
+def lab_presets_from_store(extra):
+    """The lab presets for this store, backward-compatible and never empty.
+
+    Reads ``extra["lab_presets"]`` when present; an old store with no such key
+    (or an empty/garbled one) gets the two seeded built-ins, so every config
+    that named ``small``/``large`` still resolves. If every preset has been
+    deleted the built-ins are re-seeded, so the launcher can never end up with
+    no lab at all.
+    """
+    raw = (extra or {}).get("lab_presets")
+    if not isinstance(raw, list):
+        return default_lab_presets()
+    presets = [normalize_lab_preset(p) for p in raw if isinstance(p, dict)]
+    presets = [p for p in presets if p["id"]]
+    if not presets:
+        return default_lab_presets()
+    return presets
+
+
+def displayed_lab_presets(lab_presets):
+    """Only the presets the lab selector should show, in stored order."""
+    return [p for p in (lab_presets or []) if p.get("display", True)]
+
+
+def selectable_lab_presets(lab_presets):
+    """The labs the main selector offers: the displayed ones.
+
+    The display toggle exists to narrow the main UI down to the actual lab a
+    machine is, so an admin can hide every lab but one and a researcher on that
+    machine cannot pick the wrong lab. As a defence against a hand-edited store
+    that hid every lab, this falls back to showing all of them rather than an
+    empty selector (``set_lab_display`` also refuses to hide the last one).
+    """
+    shown = displayed_lab_presets(lab_presets)
+    return shown if shown else [normalize_lab_preset(p) for p in (lab_presets or [])]
+
+
+def default_selected_lab(lab_presets, current=None):
+    """Which lab the main selector should have chosen.
+
+    When exactly one lab is displayed it is forced as the selection, so a
+    researcher on a single-lab machine cannot pick the wrong lab. Otherwise the
+    caller's current choice is kept when it is still selectable, else the first
+    selectable lab.
+    """
+    shown = selectable_lab_presets(lab_presets)
+    if not shown:
+        return current
+    if len(shown) == 1:
+        return shown[0]["id"]
+    ids = [p["id"] for p in shown]
+    if current in ids:
+        return current
+    return shown[0]["id"]
+
+
+def find_lab_preset(lab_id, lab_presets):
+    """The preset whose id is ``lab_id``, or None.
+
+    With ``lab_presets`` None (the default for the host/seat helpers) this
+    returns None, so those helpers fall back to the two hardcoded built-in labs
+    and every existing caller keeps its old behaviour.
+    """
+    if not lab_presets:
+        return None
+    for preset in lab_presets:
+        if str(preset.get("id", "")) == str(lab_id):
+            return preset
+    return None
+
+
+def _slugify_lab_id(name):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name).strip().lower()).strip("-")
+    return slug or "lab"
+
+
+def new_lab_id(name, existing):
+    """A fresh preset id derived from the name, unique within ``existing``."""
+    base = _slugify_lab_id(name)
+    taken = {str(p.get("id", "")) for p in (existing or [])} | {LAB_CUSTOM}
+    if base not in taken:
+        return base
+    n = 2
+    while "%s-%d" % (base, n) in taken:
+        n += 1
+    return "%s-%d" % (base, n)
+
+
+def parse_seat_list(text):
+    """Split a seat list typed as lines, spaces or commas into labels."""
+    if isinstance(text, (list, tuple)):
+        items = [str(s).strip() for s in text]
+    else:
+        items = re.split(r"[\s,]+", str(text or "").strip())
+    return [s for s in items if s]
+
+
+def natural_sort_key(label):
+    """A key that sorts seat labels the human way: 2 before 10, A1 before A2
+    before B1. Digit runs compare as numbers, letter runs as lowercased text,
+    and the (rank, value) pairs never compare a str against an int.
+    """
+    key = []
+    for chunk in re.findall(r"\d+|\D+", str(label)):
+        if chunk.isdigit():
+            key.append((1, int(chunk)))
+        else:
+            key.append((0, chunk.lower()))
+    return key
+
+
+def sorted_seats(seats):
+    """Seat labels in natural order (see natural_sort_key)."""
+    return sorted([str(s) for s in (seats or []) if str(s).strip()], key=natural_sort_key)
+
+
+def validate_lab_preset_fields(name, ip, seats):
+    """Check the fields of a new/edited lab preset.
+
+    Returns (ok, message, parsed_seats). Seats may come in as a list or as a
+    free-text block; each label must pass oTree's own label rule, so a lab
+    preset can never contain a seat the seat board would reject.
+    """
+    name = (name or "").strip()
+    ip = (ip or "").strip()
+    if not name:
+        return False, "Give the lab a name.", []
+    if not ip:
+        return False, "Enter the lab's IP address or host name.", []
+    labels = parse_seat_list(seats)
+    if not labels:
+        return False, "Enter at least one seat label.", []
+    bad = invalid_seats(labels)
+    if bad:
+        return False, ("These seat labels are not valid participant labels "
+                       "(letters, digits and underscore only): %s"
+                       % ", ".join(bad[:8])), []
+    dupes = sorted({s for s in labels if labels.count(s) > 1})
+    if dupes:
+        return False, "These seat labels are repeated: %s" % ", ".join(dupes[:8]), []
+    return True, "", labels
+
+
+def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_GRID, cols=0):
+    """Validate and append a new lab preset. Returns (ok, message, new_list, preset).
+
+    ``cols`` is an optional column count for the plain-grid seat map, so an added
+    lab can be drawn to roughly match the room's shape (0 = auto).
+    """
+    ok, message, labels = validate_lab_preset_fields(name, ip, seats)
+    if not ok:
+        return False, message, list(lab_presets or []), None
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    preset = normalize_lab_preset({
+        "id": new_lab_id(name, presets),
+        "name": name,
+        "ip": ip,
+        "seats": labels,
+        "display": bool(display),
+        "geometry": geometry,
+        "cols": cols,
+        "builtin": False,
+    })
+    presets.append(preset)
+    return True, "Added the lab %r." % preset["name"], presets, preset
+
+
+def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, display=None,
+                      cols=None):
+    """Edit an existing lab preset in place (by id). Returns (ok, message, new_list, preset)."""
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    target = None
+    for preset in presets:
+        if preset["id"] == str(lab_id):
+            target = preset
+            break
+    if target is None:
+        return False, "No lab preset with that id.", presets, None
+    next_name = target["name"] if name is None else name
+    next_ip = target["ip"] if ip is None else ip
+    next_seats = target["seats"] if seats is None else seats
+    ok, message, labels = validate_lab_preset_fields(next_name, next_ip, next_seats)
+    if not ok:
+        return False, message, presets, None
+    target["name"] = next_name.strip()
+    target["ip"] = next_ip.strip()
+    target["seats"] = labels
+    if display is not None:
+        target["display"] = bool(display)
+    if cols is not None:
+        try:
+            target["cols"] = max(0, int(cols))
+        except (TypeError, ValueError):
+            target["cols"] = 0
+    return True, "Updated the lab %r." % target["name"], presets, target
+
+
+def set_lab_display(lab_presets, lab_id, display):
+    """Show or hide one preset in the lab selector. Guarded so the selector is
+    never left with nothing to show."""
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    target = find_lab_preset(lab_id, presets)
+    if target is None:
+        return False, "No lab preset with that id.", presets
+    if not display:
+        others = [p for p in presets if p["id"] != str(lab_id) and p["display"]]
+        if not others:
+            return False, ("At least one lab must stay visible in the selector, so this one "
+                           "cannot be hidden."), presets
+    target["display"] = bool(display)
+    return True, "", presets
+
+
+def delete_lab_preset(lab_presets, lab_id, selected_lab=None):
+    """Remove a lab preset. Returns (ok, message, new_list, next_selected).
+
+    Refuses to delete the last remaining displayed lab, so the launcher always
+    keeps a lab. If the deleted preset was the selected one, the returned
+    ``next_selected`` names another displayed lab for the caller to switch to.
+    """
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    target = find_lab_preset(lab_id, presets)
+    if target is None:
+        return False, "No lab preset with that id.", presets, selected_lab
+    remaining = [p for p in presets if p["id"] != str(lab_id)]
+    if not displayed_lab_presets(remaining):
+        return False, ("This is the last lab the selector can show, so it cannot be deleted. "
+                       "Add another lab first."), presets, selected_lab
+    next_selected = selected_lab
+    if str(selected_lab) == str(lab_id):
+        shown = displayed_lab_presets(remaining)
+        next_selected = shown[0]["id"] if shown else remaining[0]["id"]
+    return True, "Deleted the lab %r." % target["name"], remaining, next_selected
+
+
+# ---------------------------------------------------------------------------
+# Postgres admin config (Feature 2/4) — used ONLY to create databases, never as
+# launch environment variables. Stored, like lab presets, in the store's extra.
+# ---------------------------------------------------------------------------
+
+PG_ADMIN_KEYS = ("admin_username", "admin_password", "admin_host", "admin_port")
+
+
+def pg_admin_from_store(extra):
+    """The Postgres admin config for this store, with sane host/port defaults."""
+    raw = (extra or {}).get("pg_admin") or {}
+    return {
+        "admin_username": str(raw.get("admin_username", "")),
+        "admin_password": str(raw.get("admin_password", "")),
+        "admin_host": str(raw.get("admin_host", "") or "localhost"),
+        "admin_port": str(raw.get("admin_port", "") or "5432"),
+    }
+
+
+def pg_admin_ready(admin):
+    """Which required admin fields are still blank (empty list means ready)."""
+    admin = admin or {}
+    missing = []
+    labels = {"admin_username": "username", "admin_password": "password",
+              "admin_host": "host", "admin_port": "port"}
+    for key in PG_ADMIN_KEYS:
+        if not str(admin.get(key, "")).strip():
+            missing.append(labels[key])
+    return missing
+
+
+# ---------------------------------------------------------------------------
+# Launch briefing (Feature 1 caution flag lives here) — the whole host/room
+# decision stays in Python; both launchers only render this dict.
+# ---------------------------------------------------------------------------
+
+CAUTION_TEXT = ("Caution: shared lab database. It may be reset between sessions. "
+                "Download your data as soon as the experiment finishes.")
+
+
+# Rooms whose per-seat participant links the lab PCs' desktop shortcuts open
+# (http://HOST:PORT/room/ROOM?participant_label=SEAT). For now this is just the
+# one lab-shortcut default room; see _ai/ROOM_PARTICIPANT_LINKS_NOTE.md for how
+# to generalise it to a per-lab list later.
+PARTICIPANT_LINK_ROOMS = (DEFAULT_ROOM_NAME,)
+
+
+def room_has_participant_links(name):
+    """True when the lab PC desktop shortcuts already open this room's per-seat
+    links (so participants can join straight from the lab computers)."""
+    return str(name).strip() in PARTICIPANT_LINK_ROOMS
+
+
+def study_shortcut_name(lab_label):
+    """The lab-PC desktop-shortcut name for the study room.
+
+    The one source of truth for the convention "Study Room <Lab name>" with a
+    title-cased lab name: "Study Room Large Lab", "Study Room Small Lab",
+    "Study Room Rotterdam Annex". A lab shortcut encodes BOTH the room and which
+    server (large vs small), because a small-lab machine can reach the large-lab
+    server, so which server matters.
+    """
+    label = str(lab_label or "").strip()
+    return ("Study Room " + label.title()) if label else "Study Room"
+
+
+def launch_briefing(cfg, lab_presets=None):
+    """What to tell the experimenter BEFORE the server starts.
+
+    A pure description; it starts nothing. It names the chosen lab and host and
+    the exact per-seat link the lab computers open, warns when the chosen room
+    is not the ``study`` room the desktop shortcuts point at, and raises the
+    ``caution`` flag when the run is on the shared lab database
+    (Feature 1). The UI shows the caution bar only when the flag is set.
+    """
+    c = normalize_config(cfg)
+    host = resolve_host(c, lab_presets)
+    lab = c["lab"]
+    preset = find_lab_preset(lab, _presets_or_default(lab_presets))
+    if lab == LAB_CUSTOM:
+        lab_label = "Custom host"
+    elif preset is not None:
+        lab_label = preset.get("name") or lab
+    else:
+        lab_label = lab or "Custom host"
+
+    port = (c["port"] or "8000").strip()
+    room = c["room_name"].strip() or DEFAULT_ROOM_NAME
+    is_study = (room == DEFAULT_ROOM_NAME)
+    seat_mode = c["seat_mode"]
+    seats = resolve_seats(c, lab_presets)
+    open_room = (seat_mode == SEAT_NONE)
+
+    if open_room:
+        example_seat = ""
+    elif seat_mode == SEAT_FILE:
+        example_seat = "SEAT"      # labels come from the researcher's own file
+    else:
+        example_seat = seats[0] if seats else "SEAT"
+
+    def link(seat):
+        base = "http://%s:%s/room/%s" % (host, port, room)
+        return base if not seat else base + "?participant_label=%s" % seat
+
+    caution = (c["db_mode"] == DB_MODE_LAB)
+    # A room with participant PC links has a lab desktop shortcut (which encodes
+    # both the room and which server); the briefing names that shortcut instead
+    # of a raw link. A room without one has no shortcut, so the briefing gives
+    # the manual per-seat link to open on each computer.
+    has_participant_links = room_has_participant_links(room)
+    return {
+        "lab_label": lab_label,
+        "host": host,
+        "port": port,
+        "room": room,
+        "is_study": is_study,
+        "default_room": DEFAULT_ROOM_NAME,
+        "open_room": open_room,
+        "seat_mode": seat_mode,
+        "seat_count": len(seats),
+        "example_seat": example_seat,
+        "example_link": link(example_seat),
+        "link_template": link("SEAT"),
+        "has_participant_links": has_participant_links,
+        "shortcut_name": study_shortcut_name(lab_label),
+        "caution": caution,
+        "caution_text": CAUTION_TEXT if caution else "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Room enumeration (Feature 3) — read the project's own ROOMS by importing its
+# settings in a throwaway subprocess with NO lab environment set. A static
+# regex parse breaks on ROOMS built at runtime; importing and reading the
+# resolved list is reliable, and the subprocess isolation means a slow,
+# printing, side-effecting or crashing project only kills its own subprocess.
+# ---------------------------------------------------------------------------
+
+ROOMS_PROBE_MARKER = "___OTREE_ROOMS_JSON___"
+_ROOMS_PROBE = r'''
+import json, os, sys
+try:
+    import importlib.util as _u
+    _p = os.path.join(os.getcwd(), "settings.py")
+    _spec = _u.spec_from_file_location("_lab_probe_settings", _p)
+    _mod = _u.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _rooms = getattr(_mod, "ROOMS", [])
+    _names = [r.get("name") for r in _rooms
+              if isinstance(r, dict) and r.get("name")]
+    sys.stdout.write("%s" + json.dumps([str(n) for n in _names]))
+    sys.stdout.flush()
+except Exception as _e:
+    sys.stderr.write(repr(_e))
+    sys.exit(3)
+''' % ROOMS_PROBE_MARKER
+
+
+def enumerate_project_rooms(project_path, timeout=8.0, python_exe=None):
+    """The room names defined in a project's settings.py, or a fallback signal.
+
+    Returns a dict:
+      ok       True when settings imported and a ROOMS list was read
+      rooms    the room names (possibly empty; an empty list is a real answer)
+      empty    True when ok and no rooms are defined
+      reason   a short machine tag when ok is False
+      error    a copyable, human-readable reason (real subprocess error)
+    """
+    project_path = (project_path or "").strip()
+    result = {"ok": False, "rooms": [], "empty": False, "reason": "", "error": ""}
+    if not project_path or not os.path.isdir(project_path):
+        result["reason"] = "no_project"
+        result["error"] = "No project folder to read rooms from."
+        return result
+    if not os.path.isfile(settings_path_for(project_path)):
+        result["reason"] = "no_settings"
+        result["error"] = "No settings.py in %s" % project_path
+        return result
+
+    # A clean environment: strip the launcher's own seat variables so the
+    # project is imported exactly as it would run OFF the lab.
+    env = {k: v for k, v in os.environ.items() if k not in SEAT_ENV_KEYS}
+    python_exe = python_exe or sys.executable
+
+    try:
+        proc = subprocess.run(
+            [python_exe, "-c", _ROOMS_PROBE],
+            cwd=project_path, env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout, text=True,
+        )
+    except subprocess.TimeoutExpired:
+        result["reason"] = "timeout"
+        result["error"] = ("Reading the project's rooms timed out after %gs. "
+                           "The project may hang on import." % timeout)
+        return result
+    except OSError as error:
+        result["reason"] = "spawn_failed"
+        result["error"] = "Could not start a Python subprocess: %s" % error
+        return result
+
+    if proc.returncode != 0:
+        result["reason"] = "import_failed"
+        tail = (proc.stderr or "").strip().splitlines()
+        result["error"] = (tail[-1] if tail
+                           else "settings.py failed to import (exit code %s)." % proc.returncode)
+        return result
+
+    out = proc.stdout or ""
+    index = out.rfind(ROOMS_PROBE_MARKER)
+    if index < 0:
+        result["reason"] = "no_output"
+        result["error"] = "The project imported but reported no ROOMS list."
+        return result
+    payload = out[index + len(ROOMS_PROBE_MARKER):].strip()
+    try:
+        names = json.loads(payload)
+    except ValueError as error:
+        result["reason"] = "bad_output"
+        result["error"] = "Could not parse the rooms list: %s" % error
+        return result
+
+    names = [str(n) for n in names if str(n).strip()]
+    result["ok"] = True
+    result["rooms"] = names
+    result["empty"] = (len(names) == 0)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Create a new Postgres database (Feature 2) — uses psycopg2 in AUTOCOMMIT
+# (CREATE DATABASE cannot run inside a transaction). psycopg2 is imported
+# lazily so importing this module stays standard-library-only for the Tk app.
+# ---------------------------------------------------------------------------
+
+# A conservative set of SQL reserved words rejected up front, so a database or
+# role name that would need quoting (or confuse a later hand-written query) is
+# refused with a clear message rather than quietly created.
+PG_RESERVED_WORDS = frozenset("""
+all analyse analyze and any array as asc asymmetric authorization binary both
+case cast check collate column constraint create cross current_catalog
+current_date current_role current_schema current_time current_timestamp
+current_user default deferrable desc distinct do else end except false fetch
+for foreign freeze from full grant group having ilike in initially inner
+intersect into is isnull join lateral leading left like limit localtime
+localtimestamp natural not notnull null offset on only or order outer overlaps
+placing primary references returning right select session_user similar some
+symmetric table tablesample then to trailing true union unique user using
+variadic verbose when where window with postgres template0 template1
+""".split())
+
+
+def validate_pg_identifier(name, kind="database"):
+    """Check a database/role name against Postgres identifier rules.
+
+    Validated BEFORE any SQL is sent. Even so the actual statements use
+    psycopg2's ``sql.Identifier`` quoting, so this is a friendly-error gate, not
+    the only line of defence against injection.
+    """
+    name = (name or "").strip()
+    if not name:
+        return False, "enter a %s name." % kind
+    if len(name) > 63:
+        return False, "the %s name must be 63 characters or fewer." % kind
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", name):
+        return False, ("the %s name may use only letters, digits, underscore and $, and may "
+                       "not start with a digit (no spaces or other characters)." % kind)
+    if name.lower() in PG_RESERVED_WORDS:
+        return False, "%r is a reserved SQL word; choose a different %s name." % (name, kind)
+    return True, ""
+
+
+def _pg_error(error):
+    """A short, copyable one-line rendering of a psycopg2 error."""
+    text = str(error).strip()
+    first = text.splitlines()[0] if text else error.__class__.__name__
+    return first
+
+
+def _try_drop_role(conn, sql, role):
+    """Best-effort cleanup of a role we created before CREATE DATABASE failed."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+        return True, ""
+    except Exception as error:
+        return False, _pg_error(error)
+
+
+def create_database(admin, new_db, new_user="", new_password=""):
+    """Create a Postgres database (and optionally a role) using the admin config.
+
+    Returns a result dict. On a confirmed success ``ok`` is True and ``fields``
+    holds the Custom database config to auto-fill; on anything else ``ok`` is
+    False, ``fields`` is None (nothing is auto-filled) and ``message`` carries a
+    real, copyable reason. Fails closed at every step.
+
+    Rules (settled by Julian): an existing name is never clobbered; an existing
+    role keeps its own password (we never reset it) and if that password does
+    not connect we refuse to auto-fill; a blank new user means the admin role
+    owns the database; the admin config must be complete or the create is
+    blocked; a role created just before a failed CREATE DATABASE is dropped
+    again (or named if it cannot be), never left a silent orphan.
+    """
+    result = {"ok": False, "reason": "", "message": "", "created_db": False,
+              "created_role": False, "connect_ok": False, "fields": None}
+
+    admin = admin or {}
+    missing = pg_admin_ready(admin)
+    if missing:
+        result["reason"] = "admin_missing"
+        result["message"] = ("Fill in the Postgres admin details on the Lab Settings page first "
+                             "(%s). No database was created." % ", ".join(missing))
+        return result
+    a_user = str(admin.get("admin_username", "")).strip()
+    a_pw = str(admin.get("admin_password", ""))
+    a_host = str(admin.get("admin_host", "")).strip()
+    a_port = str(admin.get("admin_port", "")).strip()
+
+    try:
+        import psycopg2
+        from psycopg2 import sql
+        import psycopg2.errors as pgerrors
+    except ImportError:
+        result["reason"] = "no_psycopg2"
+        result["message"] = ("The psycopg2 library is not installed, so the launcher cannot "
+                             "create a database. Install it with:  pip install psycopg2-binary")
+        return result
+
+    ok, why = validate_pg_identifier(new_db, "database")
+    if not ok:
+        result["reason"] = "bad_db_name"
+        result["message"] = "Failed: " + why
+        return result
+
+    new_user = (new_user or "").strip()
+    new_password = new_password or ""
+    if new_user:
+        ok, why = validate_pg_identifier(new_user, "user")
+        if not ok:
+            result["reason"] = "bad_user_name"
+            result["message"] = "Failed: " + why
+            return result
+
+    # Connect as the admin, to the always-present "postgres" database, and turn
+    # on AUTOCOMMIT because CREATE DATABASE cannot run inside a transaction.
+    try:
+        conn = psycopg2.connect(dbname="postgres", user=a_user, password=a_pw,
+                                host=a_host, port=a_port, connect_timeout=8)
+    except psycopg2.OperationalError as error:
+        result["reason"] = "admin_connect_failed"
+        result["message"] = ("Failed: could not connect as the admin user %r at %s:%s: %s"
+                             % (a_user, a_host, a_port, _pg_error(error)))
+        return result
+    conn.autocommit = True
+
+    role_existed = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (new_db,))
+            if cur.fetchone():
+                result["reason"] = "db_exists"
+                result["message"] = "Failed: a database with that name already exists."
+                return result
+
+            owner = a_user
+            if new_user:
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (new_user,))
+                role_existed = bool(cur.fetchone())
+                owner = new_user
+                if not role_existed:
+                    try:
+                        cur.execute(sql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD {}").format(
+                            sql.Identifier(new_user), sql.Literal(new_password)))
+                        result["created_role"] = True
+                    except pgerrors.InsufficientPrivilege:
+                        result["reason"] = "no_createrole"
+                        result["message"] = ("Failed: the admin role %r lacks the CREATEROLE "
+                                             "privilege needed to create the new user %r."
+                                             % (a_user, new_user))
+                        return result
+                    except psycopg2.Error as error:
+                        result["reason"] = "create_role_failed"
+                        result["message"] = ("Failed: could not create the role %r: %s"
+                                             % (new_user, _pg_error(error)))
+                        return result
+
+            try:
+                cur.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                    sql.Identifier(new_db), sql.Identifier(owner)))
+                result["created_db"] = True
+            except psycopg2.Error as error:
+                # Partial failure: a role we just created has no database. Drop
+                # it again so it is not left an orphan; if the drop fails, name
+                # it so the operator can clean it up by hand.
+                orphan = ""
+                if result["created_role"]:
+                    dropped, drop_err = _try_drop_role(conn, sql, new_user)
+                    if not dropped:
+                        orphan = (" The role %r was created but could NOT be removed (%s); "
+                                  "it is left behind." % (new_user, drop_err))
+                if isinstance(error, pgerrors.InsufficientPrivilege):
+                    base = ("Failed: the admin role %r lacks the CREATEDB privilege needed to "
+                            "create a database." % a_user)
+                else:
+                    base = "Failed: could not create the database: %s" % _pg_error(error)
+                result["reason"] = "create_db_failed"
+                result["message"] = base + orphan
+                return result
+
+            # Re-check pg_database to confirm the database really exists now.
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (new_db,))
+            confirmed = bool(cur.fetchone())
+    finally:
+        conn.close()
+
+    if not confirmed:
+        result["reason"] = "not_confirmed"
+        result["message"] = ("Failed: the database was reported created but was not found on a "
+                             "re-check. Nothing was auto-filled.")
+        return result
+
+    # Verify a real CONNECT with the resulting Custom credentials: the new role
+    # if one was named, otherwise the admin role that owns the database.
+    if new_user:
+        c_user, c_pw = new_user, new_password
+    else:
+        c_user, c_pw = a_user, a_pw
+    try:
+        vconn = psycopg2.connect(dbname=new_db, user=c_user, password=c_pw,
+                                 host=a_host, port=a_port, connect_timeout=8)
+        vconn.close()
+        result["connect_ok"] = True
+    except psycopg2.Error as error:
+        if new_user and role_existed:
+            result["reason"] = "role_pw_mismatch"
+            result["message"] = ("Database %r was created and owned by %r, but could not connect "
+                                 "with the password given - that role's own password is in force. "
+                                 "Enter the correct password or use a different role name. "
+                                 "Nothing was auto-filled." % (new_db, new_user))
+        else:
+            result["reason"] = "connect_failed"
+            result["message"] = ("Database %r was created, but a test connection as %r failed: %s. "
+                                 "Nothing was auto-filled." % (new_db, c_user, _pg_error(error)))
+        return result
+
+    result["ok"] = True
+    result["fields"] = {
+        "db_mode": DB_MODE_CUSTOM,
+        "db_name": new_db,
+        "db_user": c_user,
+        "db_password": c_pw,
+        "db_host": a_host,
+        "db_port": a_port,
+    }
+    if new_user and role_existed:
+        who = "owned by the existing role %r" % new_user
+    elif new_user:
+        who = "owned by the new role %r" % new_user
+    else:
+        who = "owned by the admin role %r" % a_user
+    result["message"] = "Created database %r, %s. Connection verified." % (new_db, who)
+    return result
+
+
+# NOTE: pure logic, no tkinter. Shared by otree_lab_launcher.py (Tk UI) and
+# otree_launcher_web.py (pywebview UI).

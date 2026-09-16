@@ -1,0 +1,84 @@
+{
+  "_comment": "Copy this file to lab_info.json (gitignored) and edit it for your lab: set each lab's real 'host', and set the database and admin passwords. Each lab's 'map' names a file in the maps/ folder (maps/<name>.json); seat cells in the map fill from the lab's 'seats' list in order. Add your own room by dropping maps/<name>.json and pointing a lab at it.",
+  "default_lab": "large",
+  "labs": {
+    "small": {
+      "name": "Small lab",
+      "host": "your.lab.host",
+      "seats": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22"
+      ],
+      "map": "example_small"
+    },
+    "large": {
+      "name": "Large lab",
+      "host": "your.lab.host",
+      "seats": [
+        "A1",
+        "A2",
+        "A3",
+        "A5",
+        "A6",
+        "A7",
+        "A8",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6",
+        "C7",
+        "C8",
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "E1",
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "map": "example_large"
+    }
+  },
+  "database": {
+    "db_name": "otree",
+    "db_user": "otree",
+    "db_password": "changeme",
+    "db_host": "localhost",
+    "db_port": "5432"
+  },
+  "admin": {
+    "username": "admin",
+    "password": "changeme"
+  }
+}

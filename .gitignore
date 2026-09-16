@@ -1,0 +1,57 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Editor / agent local state
+.claude/
+
+# Virtualenvs (the runners build one in ~/.otree-lab-launcher-venv, but ignore any local one too)
+.venv/
+venv/
+env/
+
+# Lab-specific data (real hosts, seats, DB password, admin creds). Each site
+# creates its own from lab_info.example.json; it must never be committed.
+# The committed template lab_info.example.json and the maps/ folder are NOT ignored.
+lab_info.json
+
+# Runtime state written by the launcher — saved configs may contain plaintext passwords
+presets.json
+config/
+
+# Per-machine lab identity marker (one word: large/small). Local to each lab PC.
+lab.local
+
+# Generated per-run seat/label files and settings.py backups the launcher writes
+seats/
+*.bak
+
+# Runtime debug log written by the web launcher
+_ai/web_launcher.log
+
+# Throwaway render scaffolding
+_ai/render_work/
+
+# Mockup intermediate HTML (generator renders these to PNG)
+_ai/mockups/*.html
+
+# AI scaffolding (mockups, renders, notes, tests) - not deliverables
+_ai/
+
+# Web / pywebview front-end — held back until it is tested on the real lab PCs.
+# It STAYS in the local folder but must NOT ship publicly yet. When it is
+# trusted, remove these lines (and, for any already-tracked file, run
+# `git rm --cached <path>` once so the ignore takes effect).
+web/
+otree_launcher_web.py
+requirements-web.txt
+Start oTree Lab Launcher (web).bat
+Start oTree Lab Launcher (web).command
+
+# Public repo is WINDOWS-ONLY for now: don't ship the macOS .command launchers.
+# They STAY in the local folder. Only the Windows .bat launchers ship.
+Start oTree Lab Launcher.command

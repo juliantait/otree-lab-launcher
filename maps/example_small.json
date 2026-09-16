@@ -1,0 +1,134 @@
+{
+  "description": "Example small room: 5x5 grid, front of the room at the bottom (grid row 5). Experimenter desk front-left; a wall closes the right column of rows 4 and 3; no aisle. 22 seat cells, filled in order from the lab's 'seats' list.",
+  "front": "bottom",
+  "rows": 5,
+  "cols": 5,
+  "aisle_cols": [],
+  "cells": [
+    {
+      "r": 5,
+      "c": 1,
+      "kind": "exp"
+    },
+    {
+      "r": 5,
+      "c": 2,
+      "kind": "seat"
+    },
+    {
+      "r": 5,
+      "c": 3,
+      "kind": "seat"
+    },
+    {
+      "r": 5,
+      "c": 4,
+      "kind": "seat"
+    },
+    {
+      "r": 5,
+      "c": 5,
+      "kind": "seat"
+    },
+    {
+      "r": 4,
+      "c": 1,
+      "kind": "seat"
+    },
+    {
+      "r": 4,
+      "c": 2,
+      "kind": "seat"
+    },
+    {
+      "r": 4,
+      "c": 3,
+      "kind": "seat"
+    },
+    {
+      "r": 4,
+      "c": 4,
+      "kind": "seat"
+    },
+    {
+      "r": 4,
+      "c": 5,
+      "kind": "wall"
+    },
+    {
+      "r": 3,
+      "c": 1,
+      "kind": "seat"
+    },
+    {
+      "r": 3,
+      "c": 2,
+      "kind": "seat"
+    },
+    {
+      "r": 3,
+      "c": 3,
+      "kind": "seat"
+    },
+    {
+      "r": 3,
+      "c": 4,
+      "kind": "seat"
+    },
+    {
+      "r": 3,
+      "c": 5,
+      "kind": "wall"
+    },
+    {
+      "r": 2,
+      "c": 1,
+      "kind": "seat"
+    },
+    {
+      "r": 2,
+      "c": 2,
+      "kind": "seat"
+    },
+    {
+      "r": 2,
+      "c": 3,
+      "kind": "seat"
+    },
+    {
+      "r": 2,
+      "c": 4,
+      "kind": "seat"
+    },
+    {
+      "r": 2,
+      "c": 5,
+      "kind": "seat"
+    },
+    {
+      "r": 1,
+      "c": 1,
+      "kind": "seat"
+    },
+    {
+      "r": 1,
+      "c": 2,
+      "kind": "seat"
+    },
+    {
+      "r": 1,
+      "c": 3,
+      "kind": "seat"
+    },
+    {
+      "r": 1,
+      "c": 4,
+      "kind": "seat"
+    },
+    {
+      "r": 1,
+      "c": 5,
+      "kind": "seat"
+    }
+  ]
+}
