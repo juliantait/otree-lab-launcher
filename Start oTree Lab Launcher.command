@@ -1,12 +1,15 @@
 #!/bin/bash
 # oTree Lab Launcher - double-click this file to open the launcher on macOS.
 # If double-clicking does nothing, run: chmod +x "Start oTree Lab Launcher.command"
+#
+# This script sits at the repo root; the app code lives in app/ and your config
+# and maps live in data/ at the repo root.
 
 cd "$(dirname "$0")" || exit 1
 
 for PY in python3 python; do
   if command -v "$PY" >/dev/null 2>&1; then
-    exec "$PY" otree_lab_launcher.py
+    exec "$PY" app/otree_lab_launcher.py
   fi
 done
 

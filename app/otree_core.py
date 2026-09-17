@@ -76,26 +76,34 @@ LAB_INFO_EXAMPLE_FILENAME = "lab_info.example.json"
 
 
 # ---------------------------------------------------------------------------
-# One folder for everything the launcher reads and writes. `data/` sits beside
-# the app files (lab.local, lab_info.json, presets.json, seats/, app-written
-# logs, the corrupt-store rescue copy all live under it), so updating is "copy
-# the new version over the top, keep your data/ folder". Only the DEFAULT base
-# lives here; the env overrides (OTREE_LAB_INFO, OTREE_LAB_MARKER,
-# OTREE_LAB_LAUNCHER_PRESETS) still win when set. Shipped assets
-# (lab_info.example.json, maps/) stay in the app dir, NOT under data/.
+# One folder for everything the launcher reads and writes. The code lives in
+# app/ but `data/` sits at the REPO ROOT (one level up, beside app/), so it stays
+# at the top level and an existing install keeps its data across an update:
+# lab.local, lab_info.json, presets.json, seats/, app-written logs, the
+# corrupt-store rescue copy, and the shipped lab_info.example.json + maps/ all
+# live under it. Updating is "copy the new version over the top, keep your data/
+# folder". Only the DEFAULT base lives here; the env overrides (OTREE_LAB_INFO,
+# OTREE_LAB_MARKER, OTREE_LAB_LAUNCHER_PRESETS) still win when set.
 # ---------------------------------------------------------------------------
 
 DATA_DIRNAME = "data"
 
 
+def repo_root():
+    """The repo root: the parent of app/ (where data/ lives). data/ is anchored
+    here, NOT next to __file__, so it stays at the top level."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def app_dir():
-    """The folder holding the app files (data/ sits beside them)."""
+    """The folder holding the app code files (app/)."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def data_dir():
-    """The single folder holding everything the launcher reads and writes."""
-    return os.path.join(app_dir(), DATA_DIRNAME)
+    """The single folder holding everything the launcher reads and writes:
+    the repo root's data/ folder (parent of app/)."""
+    return os.path.join(repo_root(), DATA_DIRNAME)
 
 
 def lab_info_path():
@@ -138,11 +146,14 @@ def save_lab_info(data, path=None):
     return path
 
 
+def lab_info_example_path():
+    """Where the shipped lab_info.example.json lives: data/ at the repo root."""
+    return os.path.join(data_dir(), LAB_INFO_EXAMPLE_FILENAME)
+
+
 def load_example_lab_info():
     """The committed lab_info.example.json as a dict, or None."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        LAB_INFO_EXAMPLE_FILENAME)
-    return load_lab_info(path)
+    return load_lab_info(lab_info_example_path())
 
 
 def available_maps():
@@ -1125,15 +1136,15 @@ def migrate_legacy_data():
     is swallowed so it can never block startup.
     """
     try:
-        old_app = app_dir()
-        # <app dir>/lab.local  ->  data/lab.local
+        old_root = repo_root()
+        # <root>/lab.local  ->  data/lab.local
         if not os.environ.get("OTREE_LAB_MARKER"):
             _copy_file_if_missing(
-                os.path.join(old_app, LAB_MARKER_FILENAME), lab_marker_path())
-        # <app dir>/lab_info.json  ->  data/lab_info.json
+                os.path.join(old_root, LAB_MARKER_FILENAME), lab_marker_path())
+        # <root>/lab_info.json  ->  data/lab_info.json
         if not os.environ.get("OTREE_LAB_INFO"):
             _copy_file_if_missing(
-                os.path.join(old_app, LAB_INFO_FILENAME), lab_info_path())
+                os.path.join(old_root, LAB_INFO_FILENAME), lab_info_path())
         # OS per-user config dir presets.json  ->  data/presets.json
         legacy = _legacy_config_dir()
         if not os.environ.get("OTREE_LAB_LAUNCHER_PRESETS"):
@@ -1141,6 +1152,11 @@ def migrate_legacy_data():
                 os.path.join(legacy, PRESETS_FILENAME), presets_path())
         # OS per-user config dir seats/  ->  data/seats/
         _copy_dir_files_if_missing(os.path.join(legacy, "seats"), seats_dir())
+        # An old top-level <root>/maps/ (from before maps moved under data/)
+        # -> data/maps/, only when data/maps is not already there.
+        old_maps = os.path.join(old_root, MAPS_DIRNAME)
+        if os.path.isdir(old_maps) and not os.path.isdir(maps_dir()):
+            _copy_dir_files_if_missing(old_maps, maps_dir())
     except Exception:
         # Migration is a convenience, never a gate: swallow anything.
         pass
@@ -1786,7 +1802,7 @@ _MAP_FILE_CACHE = {}
 
 
 def maps_dir():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), MAPS_DIRNAME)
+    return os.path.join(data_dir(), MAPS_DIRNAME)
 
 
 def load_map_file(name):

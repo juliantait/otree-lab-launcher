@@ -29,9 +29,8 @@ link on each desktop once, and arrivals then show up on the monitor.
 Pick by your operating system and which version of the app you want.
 
 - **On Windows, double-click the `.vbs` file.** It starts the app windowless:
-  no black console box is left sitting behind the GUI. The `.bat` file still
-  works too, if you prefer it, but it leaves a brief flash of a console window
-  as the app starts.
+  no black console box is left sitting behind the GUI. (The old `.bat`
+  launchers have been removed; the `.vbs` replaces them.)
 - **On macOS, double-click the `.command` file.** A Terminal window opens and
   stays behind the app while it runs. That is normal and can be ignored.
 - **Two versions, same app.** Both versions do exactly the same thing, with the
@@ -42,28 +41,38 @@ Pick by your operating system and which version of the app you want.
   - **`Start oTree Lab Launcher (web)`** is a **prettier version of the same
     app**: identical features and behaviour, just a nicer-looking UI.
 
-So the start files are:
+So the four start files, all at the repo root, are:
 
-- `Start oTree Lab Launcher.vbs`: main app, Windows (windowless, recommended)
-- `Start oTree Lab Launcher.bat`: main app, Windows (brief console flash)
+- `Start oTree Lab Launcher.vbs`: main app, Windows (windowless)
 - `Start oTree Lab Launcher.command`: main app, macOS
-- `Start oTree Lab Launcher (web).vbs`: web version, Windows (windowless, recommended)
-- `Start oTree Lab Launcher (web).bat`: web version, Windows (brief console flash)
+- `Start oTree Lab Launcher (web).vbs`: web version, Windows (windowless)
 - `Start oTree Lab Launcher (web).command`: web version, macOS
 
-A lab can use whichever it prefers.
+They run the app code in `app/`; a lab can use whichever it prefers.
 
 If the Windows app fails to start before its window appears, a crash log is
 written to `data\otree-lab-launcher.log` (or, if the `data` folder cannot be
 written, `%USERPROFILE%\otree-lab-launcher.log`).
 
+## Folder layout
+
+```
+<repo root>/
+  Start oTree Lab Launcher.vbs / .command          (Tk, main app)
+  Start oTree Lab Launcher (web).vbs / .command     (web version)
+  app/    the app code (otree_lab_launcher.py, otree_launcher_web.py, web/, ...)
+  data/   your config and maps (lab_info.json, presets.json, maps/, ...)
+```
+
+The code lives in `app/`; everything you own lives in `data/` at the repo root.
+
 ## Quick start
 
-1. **Copy the template:** `lab_info.example.json` → `data/lab_info.json` (create
-   the `data` folder beside the app if it is not there yet).
+1. **Copy the template:** `data/lab_info.example.json` -> `data/lab_info.json`.
 2. **Edit `data/lab_info.json`:** set each lab's real `host`, and set the
-   database and admin passwords. (`data/` is git-ignored. It holds your real
-   hosts and passwords and must never be committed.)
+   database and admin passwords. (Your `data/lab_info.json` is git-ignored, along
+   with the other files you create in `data/`. It holds your real hosts and
+   passwords and must never be committed.)
 3. **Run the launcher (Windows):** double-click
    **`Start oTree Lab Launcher.vbs`** (windowless), or the matching `.bat`.
 
@@ -76,13 +85,13 @@ hit **Launch session**.
 
 ## Updating
 
-Everything the launcher reads and writes lives in one **`data/`** folder beside
-the app (it holds `lab.local`, `lab_info.json`, `presets.json` and `seats/`). To
-update, **copy the new version over the top and keep your `data/` folder.** Your
-labs, saved configs, database registry and this machine's lab identity all carry
-over untouched. (An existing install from before the `data/` folder is migrated
-automatically on first launch: the old files are copied into `data/` for you,
-and the originals are left in place.)
+Everything the launcher reads and writes lives in one **`data/`** folder at the
+repo root (it holds `lab_info.json`, `presets.json`, `lab.local` and `seats/`;
+next to the app code in `app/`). To update, **copy the new version over the top
+and keep your `data/` folder.** Your labs, saved configs, database registry and
+this machine's lab identity all carry over untouched. (An existing install from
+an older layout is migrated automatically on first launch: the old files are
+copied into `data/` for you, and the originals are left in place.)
 
 ## Two roles: set it up once, then just launch
 
@@ -101,12 +110,12 @@ no technical fiddling.
 ## Labs, seats, and room maps
 
 - Your labs, their hosts, seat lists, database, and admin login all live in
-  **`lab_info.json`** (hand-edited JSON; see `lab_info.example.json` for the
-  shape). Hosts and passwords are also editable from inside the app.
-- Room layouts (the top-down seat maps the launcher draws) live in **`maps/`**.
-  Each lab points at a map by name. To add your own room, drop a
-  `maps/<name>.json` and reference it. Full instructions and the schema are in
-  [`maps/README.md`](maps/README.md).
+  **`data/lab_info.json`** (hand-edited JSON; see `data/lab_info.example.json`
+  for the shape). Hosts and passwords are also editable from inside the app.
+- Room layouts (the top-down seat maps the launcher draws) live in
+  **`data/maps/`**. Each lab points at a map by name. To add your own room, drop
+  a `data/maps/<name>.json` and reference it. Full instructions and the schema
+  are in [`data/maps/README.md`](data/maps/README.md).
 
 **Rule of thumb:** seat lists and room maps are hand-edited JSON; hosts and
 credentials are entered in the app.

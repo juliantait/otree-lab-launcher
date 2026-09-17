@@ -768,18 +768,23 @@ def find_app_packages(path):
 # ---------------------------------------------------------------------------
 
 
+def repo_root():
+    """The repo root: the parent of app/ (where data/ lives). data/ is anchored
+    here, NOT next to __file__. (Mirror of otree_core.)"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def app_dir():
-    """The folder holding the app files (data/ sits beside them). (Mirror of
-    otree_core.)"""
+    """The folder holding the app code files (app/). (Mirror of otree_core.)"""
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def data_dir():
     """The single folder holding everything the launcher reads and writes:
-    lab.local, lab_info.json, presets.json and seats/. Sits beside the app files
-    so updating is "copy the new version over the top, keep your data/ folder".
-    (Mirror of otree_core.)"""
-    return os.path.join(app_dir(), "data")
+    lab.local, lab_info.json, presets.json and seats/. It sits at the repo root
+    (parent of app/) so updating is "copy the new version over the top, keep your
+    data/ folder". (Mirror of otree_core.)"""
+    return os.path.join(repo_root(), "data")
 
 
 def config_dir():

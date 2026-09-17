@@ -6,18 +6,20 @@ powers (full filesystem, real subprocesses).
 
 ## Run it
 
-**Easiest:** double-click `Start oTree Lab Launcher (web).command` (Mac) or
-`Start oTree Lab Launcher (web).bat` (Windows). On first run they build a
+**Easiest:** at the repo root, double-click `Start oTree Lab Launcher (web).command`
+(Mac) or `Start oTree Lab Launcher (web).vbs` (Windows). On first run they build a
 private virtualenv in your home folder (`~/.otree-lab-launcher-venv`) and
-install pywebview into it, then launch. Nothing touches the system Python.
+install pywebview into it, then launch. Nothing touches the system Python. (The
+old `.bat` launchers were removed; the `.vbs` is the windowless Windows entry.)
 
 **Manual:** don't `pip install` into a Homebrew/system Python: modern Pythons
-refuse it (PEP 668, "externally-managed-environment"). Use a venv:
+refuse it (PEP 668, "externally-managed-environment"). Use a venv (run from the
+repo root, so the paths point into `app/`):
 
 ```
 python3 -m venv ~/.otree-lab-launcher-venv
-~/.otree-lab-launcher-venv/bin/python -m pip install pywebview pyobjc-framework-Cocoa pyobjc-framework-WebKit   # macOS
-~/.otree-lab-launcher-venv/bin/python otree_launcher_web.py
+~/.otree-lab-launcher-venv/bin/python -m pip install -r app/requirements-web.txt   # pinned deps
+~/.otree-lab-launcher-venv/bin/python app/otree_launcher_web.py
 ```
 
 On Windows 10/11 it renders through the built-in **Edge WebView2** runtime (no
@@ -60,7 +62,7 @@ about `settings.py` is still read-only detection via `inspect_settings`
 The extended block re-asserts the lab database, admin login, auth level and
 production/DEBUG from the launcher's environment on top of the room + seat list,
 each guarded so it is inert off the lab. See the top-level `README.md` and
-`../PRINCIPLES.md`, and `_ai/verify_extended_block.py` for the empirical proof.
+`../../PRINCIPLES.md`, and `_ai/verify_extended_block.py` for the empirical proof.
 
 The launch log streams back from Python into the Activity log via `evaluate_js`.
 
