@@ -39,6 +39,20 @@ link on each desktop once; arrivals then show up on the monitor.
 Then point the launcher at your oTree project folder, pick the lab and room, and
 hit **Launch session**.
 
+## Two roles: set it up once, then just launch
+
+The setup only has to happen once. Whoever runs the lab machines (a lab manager,
+or anyone looking after the infrastructure) installs the launcher, fills in
+`lab_info.json` with the real hosts, seats, and room maps, and saves the configs
+for the studies that will run. That is a one-time job.
+
+After that, individual experimenters do not touch any of that setup. They just
+use what is already in place: open the launcher, point it at their own oTree
+project (or double-click a saved one-click shortcut), and launch. The database,
+seats, rooms, and per-seat links are all handled for them by the setup the lab
+manager put in place, so getting a study running in the lab is quick and needs
+no technical fiddling.
+
 ## Labs, seats, and room maps
 
 - Your labs, their hosts, seat lists, database, and admin login all live in

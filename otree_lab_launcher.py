@@ -70,6 +70,7 @@ DB_MODE_BY_LABEL = {v: k for k, v in DB_MODE_LABELS.items()}
 NEW_DB_LABEL = "New database for this project…"
 
 LAB_CUSTOM = core.LAB_CUSTOM
+LAB_LOCAL = core.LAB_LOCAL
 
 AUTH_LEVELS = ["STUDY", "DEMO", "none"]
 
@@ -283,7 +284,14 @@ def resolve_host(cfg):
 
 
 def build_url(cfg):
-    """The page the launcher opens after the server has started."""
+    """The page the launcher auto-opens after the server has started.
+
+    Kept in sync with ``otree_core.build_url``: a config still carrying the
+    default page opens the CHOSEN room's monitor (arrival board) rather than the
+    plain /rooms list; an explicit custom page is respected. Delegates the room
+    -> monitor-path decision to core so the empirically-verified path lives in
+    one place.
+    """
     c = normalize_config(cfg)
     host = resolve_host(c)
     port = c["port"].strip()
@@ -293,6 +301,8 @@ def build_url(cfg):
     base = "http://" + host
     if port:
         base += ":" + port
+    if core._is_default_open_page(page):
+        page = core.room_monitor_path(c["room_name"])
     if page and not page.startswith("/"):
         page = "/" + page
     return base + page
@@ -401,6 +411,18 @@ def resolve_seats(cfg):
     return seats
 
 
+def effective_seat_mode(cfg):
+    """The seat mode a launch will REALLY use, after resolving empties to None.
+
+    Seats are never a hard block (Julian): an absent seat file, a file that
+    cannot be read or is empty, or a lab-default/edit selection that resolves to
+    no seats all fall back to SEAT_NONE — a valid open-room launch. A chosen file
+    that DOES have labels stays SEAT_FILE (so its labels can still be validated).
+    Delegates to core so both launchers agree.
+    """
+    return core.effective_seat_mode(cfg)
+
+
 def invalid_seats(labels):
     """Labels oTree would reject (otree/common.py: validate_alphanumeric)."""
     return [label for label in labels if not SEAT_LABEL_RE.match(label)]
@@ -468,8 +490,8 @@ def seat_summary(cfg, resolved=None):
         return "%d seats from %s" % (len(labels), os.path.basename(path))
     labels = resolve_seats(c) if resolved is None else resolved
     if not labels:
-        return ("No seats. A custom host has no default seat list, so choose "
-                "a file or None.")
+        # No seats is not an error: it simply becomes the open (none) room.
+        return "No seats — the room opens with no seat board (none)."
     return "%d seats" % len(labels)
 
 
@@ -481,9 +503,12 @@ def prepare_label_file(cfg, config_name="session"):
     exactly as it stands and is never copied or rewritten.
     """
     c = normalize_config(cfg)
-    if c["seat_mode"] == SEAT_NONE:
+    # Resolve empties (no file, unreadable/empty file, no default seats) to the
+    # open (none) room rather than erroring: seats are never a hard block.
+    mode = effective_seat_mode(c)
+    if mode == SEAT_NONE:
         return None, "No participant list, so OTREE_LAB_LABEL_FILE is not set."
-    if c["seat_mode"] == SEAT_FILE:
+    if mode == SEAT_FILE:
         path = os.path.abspath(c["seat_file"].strip())
         return path, "Using the project's own seat file, unchanged: %s" % path
     labels = resolve_seats(c)
@@ -1796,16 +1821,15 @@ class LauncherApp(object):
         self.block_state = {}
         self.show_db_password = tk.BooleanVar(self.root, value=False)
         self.show_admin_password = tk.BooleanVar(self.root, value=False)
-        # Whether the database connection details are expanded on screen. Kept
-        # hidden by default and opened automatically only for a Custom setup.
-        self.db_details_shown = tk.BooleanVar(self.root, value=False)
         self.db_url_preview = tk.StringVar(self.root, value="")
         self.url_preview = tk.StringVar(self.root, value="")
 
     def _wire_traces(self):
         for key in FIELD_KEYS:
             self.var[key].trace_add("write", self._on_field_change)
-        self.db_mode_label.trace_add("write", self._on_db_mode_change)
+        # The database chooser is now a pen-icon menu (_open_db_menu →
+        # _choose_db_mode), not a traced combobox, so db_mode_label carries no
+        # trace: it stays as a plain mirror of the current mode for display.
         self.seat_mode_label.trace_add("write", self._on_seat_mode_change)
         self.var["lab"].trace_add("write", self._on_lab_change)
 
@@ -1908,44 +1932,52 @@ class LauncherApp(object):
                                  fg=COLORS["warn"], font=self.fonts.small, anchor="w")
                 badge.pack(side="left", padx=(6, 0))
 
-            folder_name = final_folder_name(preset.get("project_path", ""))
-            author_name = str(preset.get("author", "")).strip()
-
-            # Line 2: folder + author. An empty folder reads as a greyed italic
-            # "empty" (e.g. the Lab default). Measure both against the row's
-            # width; when tight, the author wraps to its own line below.
-            line2 = tk.Frame(text, bg=bg)
-            line2.pack(fill="x")
-            if folder_name:
-                folder_text = "%s %s" % (self.folder_glyph, folder_name)
-                folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["muted"],
-                                  font=self.fonts.small, anchor="w")
-            else:
-                folder_text = "empty"
-                folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["faint"],
-                                  font=self.fonts.small_italic, anchor="w")
-            folder.pack(side="left")
-
+            # The built-in Lab default has NEITHER a folder NOR an author — it
+            # only pre-fills settings — so it renders just the name (+ suffix)
+            # and the "Last run ..." line. No line2 frame at all, to avoid a
+            # visible gap. Researcher configs keep the folder + author line.
+            line2 = None
+            folder = None
             author = None
-            if author_name:
-                author_text = "%s  %s" % (self.person_glyph, author_name)
-                avail = self._sidebar_text_width()
-                fits = (self.fonts.small.measure(folder_text) + 12
-                        + self.fonts.small.measure(author_text)) <= avail
-                if fits:
-                    author = tk.Label(line2, text=author_text, bg=bg, fg=COLORS["muted"],
+            if not is_builtin(preset):
+                folder_name = final_folder_name(preset.get("project_path", ""))
+                author_name = str(preset.get("author", "")).strip()
+
+                # Line 2: folder + author. An empty folder reads as a greyed
+                # italic "empty". Measure both against the row's width; when
+                # tight, the author wraps to its own line below.
+                line2 = tk.Frame(text, bg=bg)
+                line2.pack(fill="x")
+                if folder_name:
+                    folder_text = "%s %s" % (self.folder_glyph, folder_name)
+                    folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["muted"],
                                       font=self.fonts.small, anchor="w")
-                    author.pack(side="left", padx=(10, 0))
                 else:
-                    author = tk.Label(text, text=author_text, bg=bg, fg=COLORS["muted"],
-                                      font=self.fonts.small, anchor="w")
-                    author.pack(fill="x")
+                    folder_text = "empty"
+                    folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["faint"],
+                                      font=self.fonts.small_italic, anchor="w")
+                folder.pack(side="left")
+
+                if author_name:
+                    author_text = "%s  %s" % (self.person_glyph, author_name)
+                    avail = self._sidebar_text_width()
+                    fits = (self.fonts.small.measure(folder_text) + 12
+                            + self.fonts.small.measure(author_text)) <= avail
+                    if fits:
+                        author = tk.Label(line2, text=author_text, bg=bg, fg=COLORS["muted"],
+                                          font=self.fonts.small, anchor="w")
+                        author.pack(side="left", padx=(10, 0))
+                    else:
+                        author = tk.Label(text, text=author_text, bg=bg, fg=COLORS["muted"],
+                                          font=self.fonts.small, anchor="w")
+                        author.pack(fill="x")
 
             when = tk.Label(text, text=format_last_run(preset.get("last_run")), bg=bg,
                             fg=COLORS["muted"], font=self.fonts.small, anchor="w")
             when.pack(fill="x")
 
-            widgets = ([row, accent, text, title, name, line2, folder, when]
+            widgets = ([row, accent, text, title, name, when]
+                       + ([line2] if line2 else []) + ([folder] if folder else [])
                        + ([badge] if badge else []) + ([author] if author else []))
             for widget in widgets:
                 widget.bind("<Button-1>", lambda _e, i=index: self.select_preset(i))
@@ -2264,63 +2296,46 @@ class LauncherApp(object):
         card.style_title(self.fonts.card_title)
         card.grid(row=1, column=0, sticky="ew", pady=(0, PAD - 3))
         body = card.body
+        body.columnconfigure(0, weight=1)
         self.db_summary = tk.StringVar(self.root, value="")
 
-        # Collapsed by default: one summary line + a Change toggle, the same
-        # pattern the Room row uses. Change reveals the Setup dropdown, the reset
-        # checkbox and (for Custom) the connection fields; Done hides them again.
+        # One summary line: the current database + a pen (edit) icon that opens a
+        # dropdown of databases (lab / oTree default / the current custom / "Add
+        # new database…"), with the "Reset before start" tickbox always visible on
+        # the same line. The full connection fields (below) appear only when the
+        # database is a custom one, and are editable there.
         summary_row = tk.Frame(body, bg=COLORS["card"])
         summary_row.grid(row=0, column=0, columnspan=2, sticky="ew")
-        tk.Label(summary_row, text="Database", bg=COLORS["card"], fg=COLORS["muted"],
+
+        left = tk.Frame(summary_row, bg=COLORS["card"])
+        left.pack(side="left")
+        tk.Label(left, text="Database", bg=COLORS["card"], fg=COLORS["muted"],
                  font=self.fonts.body).pack(side="left", padx=(0, 10))
-        tk.Label(summary_row, textvariable=self.db_summary, bg=COLORS["card"],
+        tk.Label(left, textvariable=self.db_summary, bg=COLORS["card"],
                  fg=COLORS["text"], font=self.fonts.small_bold, anchor="w").pack(side="left")
-        self.db_change_btn = ttk.Button(summary_row, text="Change...", style="Slim.TButton",
-                                        command=self._toggle_db_section)
-        self.db_change_btn.pack(side="right")
+        # Pen/edit icon: opens the database dropdown. A plain label reads as a
+        # button here (ttk buttons look heavy inline); the hand cursor + accent
+        # colour signal it is clickable.
+        self.db_edit_icon = tk.Label(
+            left, text="  ✎", bg=COLORS["card"], fg=COLORS["accent"],
+            font=self.fonts.small_bold, cursor="hand2")
+        self.db_edit_icon.pack(side="left")
+        self.db_edit_icon.bind("<Button-1>", self._open_db_menu)
 
-        # The editable section, hidden until Change (or auto-shown for Custom).
-        self.db_section = tk.Frame(body, bg=COLORS["card"])
-        self.db_section.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        self.db_section.columnconfigure(1, weight=1)
-        sec = self.db_section
-        self._db_section_shown = False
-
-        self.db_mode_box = ttk.Combobox(
-            sec, textvariable=self.db_mode_label, state="readonly",
-            values=[DB_MODE_LABELS[m] for m in (DB_MODE_LAB, DB_MODE_NONE, DB_MODE_CUSTOM)]
-                   + [NEW_DB_LABEL])
-        self._field(sec, 0, "Setup", self.db_mode_box, pady=(0, 2))
-
-        # Reset control lives with the database it resets (moved out of section 1).
-        tk.Checkbutton(sec, text="Reset the database before starting",
+        # Reset-before-start: always visible on this line (no expander), reading
+        # plainly. It resets whichever database is shown to the left.
+        tk.Checkbutton(summary_row, text="Reset before start",
                        variable=self.var["resetdb"], bg=COLORS["card"], fg=COLORS["text"],
                        activebackground=COLORS["card"], activeforeground=COLORS["text"],
-                       selectcolor=COLORS["accent"], font=self.fonts.body, anchor="w",
-                       bd=0, highlightthickness=0, padx=0, cursor="hand2").grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(2, 4))
+                       selectcolor=COLORS["accent"], font=self.fonts.body, anchor="e",
+                       bd=0, highlightthickness=0, padx=0, cursor="hand2").pack(side="right")
 
-        # Progressive disclosure of the connection fields (Custom only, mostly).
-        self.db_disclosure = tk.Label(
-            sec, text="", bg=COLORS["card"], fg=COLORS["muted"],
-            font=self.fonts.small, anchor="w", cursor="hand2")
-        self.db_disclosure.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 4))
-        self.db_disclosure.bind("<Button-1>", lambda _e: self._toggle_db_details())
-
-        # "Create a new database" (Feature 2): opens a generator that uses the
-        # Lab Settings admin config to CREATE DATABASE, then auto-fills these
-        # Custom fields. Shown only for a Custom setup (apply_db_mode).
-        self.db_create_row = tk.Frame(sec, bg=COLORS["card"])
-        self.db_create_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        self.db_create_button = ttk.Button(
-            self.db_create_row, text="Create a new database...",
-            style="Slim.TButton", command=self.create_database_dialog)
-        self.db_create_button.pack(side="left")
-
-        # Everything below lives in one container so it can be shown or hidden
-        # as a unit without disturbing the Setup row above it.
-        details = tk.Frame(sec, bg=COLORS["card"])
-        details.grid(row=4, column=0, columnspan=2, sticky="ew")
+        # The connection fields, shown (and editable) ONLY for a custom database;
+        # apply_db_mode grids this in for a custom setup and removes it otherwise.
+        self.db_section = tk.Frame(body, bg=COLORS["card"])
+        self.db_section.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.db_section.columnconfigure(1, weight=1)
+        details = self.db_section
         details.columnconfigure(1, weight=1)
         self.db_details = details
 
@@ -2356,8 +2371,9 @@ class LauncherApp(object):
         preview.bind("<Configure>",
                      lambda e: self.db_url_label.configure(wraplength=max(e.width - 14, 160)))
 
-        # Start collapsed to the summary line; load/apply_db_mode expands Custom.
-        self._apply_db_section_visibility()
+        # Start on the one-line summary; apply_db_mode reveals the fields for a
+        # custom database (and hides them otherwise).
+        self.db_section.grid_remove()
         self._refresh_db_summary()
 
     # (3) Lab (lab + link + participant list + room-layout map) ------------
@@ -2392,11 +2408,16 @@ class LauncherApp(object):
         #    old More-information toggle: the IPs now live on the tiles). It
         #    reveals the custom host fields and fades the tiles; a "Back to a
         #    lab" link returns to the selected lab preset. Both occupy one row.
+        self.host_links = tk.Frame(body, bg=COLORS["card"])
+        self.host_links.grid(row=1, column=0, columnspan=2, sticky="w", pady=(9, 0))
         self.other_host_link = tk.Label(
-            body, text="Other host...", bg=COLORS["card"], fg=COLORS["muted"],
+            self.host_links, text="Other host...", bg=COLORS["card"], fg=COLORS["muted"],
             font=self.fonts.small, anchor="w", cursor="hand2")
-        self.other_host_link.grid(row=1, column=0, columnspan=2, sticky="w", pady=(9, 0))
+        self.other_host_link.pack(side="left")
         self.other_host_link.bind("<Button-1>", lambda _e: self.var["lab"].set(LAB_CUSTOM))
+        # "Local (this computer)" is no longer a top-level option: localhost is a
+        # secondary/testing case, so it now lives INSIDE the Other-host flow as a
+        # quick link (built with the custom fields below).
         self.back_to_lab_link = tk.Label(
             body, text="← Back to a lab", bg=COLORS["card"], fg=COLORS["muted"],
             font=self.fonts.small, anchor="w", cursor="hand2")
@@ -2406,12 +2427,36 @@ class LauncherApp(object):
             lambda _e: self.var["lab"].set(core.default_selected_lab(self.lab_presets)))
         self.back_to_lab_link.grid_remove()
 
+        # A one-line note shown only for the Local (this computer) host, so the
+        # tester sees what it does: run on localhost with the oTree default
+        # (SQLite) database, no lab infrastructure needed.
+        self.local_note = tk.Label(
+            body, bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small,
+            anchor="w", justify="left",
+            text=("Runs oTree on this computer (localhost). Pair it with the "
+                  "“No lab database (oTree SQLite)” database for a "
+                  "self-contained off-lab test."))
+        self.local_note.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.local_note.grid_remove()
+
         # Host/Port/Page/Room + OPENS link, revealed only for a custom host.
         self.custom_fields = tk.Frame(body, bg=COLORS["card"])
         self.custom_fields.columnconfigure(1, weight=1)
         cf = self.custom_fields
-        self.custom_host_entry = ttk.Entry(cf, textvariable=self.var["custom_host"])
-        self._field(cf, 0, "Host", self.custom_host_entry)
+        # The Host row also carries the "this computer (localhost)" quick option
+        # (item: localhost folded into Other host). Clicking it switches to the
+        # Local host view (localhost + no seat board), so localhost is reachable
+        # only from inside this flow, not as a top-level link.
+        hostrow = tk.Frame(cf, bg=COLORS["card"])
+        hostrow.columnconfigure(0, weight=1)
+        self.custom_host_entry = ttk.Entry(hostrow, textvariable=self.var["custom_host"])
+        self.custom_host_entry.grid(row=0, column=0, sticky="ew")
+        self.local_quick_link = tk.Label(
+            hostrow, text="use this computer (localhost)", bg=COLORS["card"],
+            fg=COLORS["accent"], font=self.fonts.small, cursor="hand2")
+        self.local_quick_link.grid(row=0, column=1, padx=(8, 0))
+        self.local_quick_link.bind("<Button-1>", lambda _e: self.var["lab"].set(LAB_LOCAL))
+        self._field(cf, 0, "Host", hostrow)
         self.room_entry = ttk.Entry(cf, textvariable=self.var["room_name"])
         self._field(cf, 1, "Room name", self.room_entry)
         # Port and Page are almost never changed, so fold them behind a link.
@@ -2616,7 +2661,7 @@ class LauncherApp(object):
     def _style_tiles(self):
         """Paint each lab tile: accent when chosen, muted while a custom host is."""
         lab = self.var["lab"].get()
-        faded = (lab == LAB_CUSTOM)
+        faded = (lab in (LAB_CUSTOM, LAB_LOCAL))
         for value, parts in self.lab_tiles.items():
             if lab == value and not faded:
                 bg, fg, subfg, border = (COLORS["accent_soft"], COLORS["accent"],
@@ -2649,28 +2694,39 @@ class LauncherApp(object):
         """Show the parts of the Lab card that fit the chosen lab and seat mode."""
         lab = self.var["lab"].get()
         custom = (lab == LAB_CUSTOM)
+        local = (lab == LAB_LOCAL)
+        pseudo = custom or local
         mode = self.var["seat_mode"].get()
         self._style_tiles()
 
-        # "Other host..." when a lab is selected; "Back to a lab" while custom.
-        if custom:
-            self.other_host_link.grid_remove()
+        # The host links ("Other host..." / "Local (this computer)") when a lab
+        # is selected; "← Back to a lab" while a pseudo-host (custom/local) is.
+        if pseudo:
+            self.host_links.grid_remove()
             self.back_to_lab_link.grid()
         else:
             self.back_to_lab_link.grid_remove()
-            self.other_host_link.grid()
+            self.host_links.grid()
 
-        # Host/Port/Page/Room + OPENS appear only for a custom host.
+        # Host/Port/Page/Room + OPENS appear only for a custom host (its host is
+        # typed). The Local host is fixed to localhost, so it shows the Local
+        # note and the normal Room row instead of the custom host fields.
         if custom:
             self.custom_fields.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
             self.room_row.grid_remove()
+            self.local_note.grid_remove()
+        elif local:
+            self.custom_fields.grid_remove()
+            self.local_note.grid()
+            self.room_row.grid()
         else:
             self.custom_fields.grid_remove()
+            self.local_note.grid_remove()
             self.room_row.grid()
 
         # The room-layout map: collapsible in Lab-default mode (collapsed by
         # default), auto-opened in Edit mode where the seats are the selector.
-        if not custom and mode in (SEAT_DEFAULT, SEAT_EDIT):
+        if not pseudo and mode in (SEAT_DEFAULT, SEAT_EDIT):
             interactive = (mode == SEAT_EDIT)
             expanded = interactive or self._map_expanded
             total = len(self._lab_default_seats(self.form_values()))
@@ -2889,15 +2945,25 @@ class LauncherApp(object):
         self.inline_status.label.configure(bg=COLORS["window"], wraplength=520)
         self.inline_status.grid(row=0, column=0, sticky="ew", padx=(0, 12))
 
-        # Export .bat is a legacy convenience; it now lives in the gear menu, so
-        # Launch is the only action on the bottom bar.
+        # "Save one-click shortcut" writes a standalone .bat for the current
+        # config; double-clicking it later launches with no UI.  It sits next to
+        # Launch (the old gear-menu export is retired in favour of this button).
+        self.shortcut_button = tk.Button(
+            bar, text="Save one-click shortcut", command=self.save_shortcut,
+            font=self.fonts.body, bg=COLORS["window"], fg=COLORS["accent"],
+            activebackground=COLORS["window"], activeforeground=COLORS["accent_dark"],
+            relief="flat", bd=1, padx=16, pady=8, cursor="hand2",
+            highlightthickness=1, highlightbackground=COLORS["accent"],
+        )
+        self.shortcut_button.grid(row=0, column=1, sticky="e", padx=(0, 10))
+
         self.launch_button = tk.Button(
             bar, text="Launch", command=self.launch, font=self.fonts.launch,
             bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
             activeforeground="#ffffff", relief="flat", bd=0, padx=34, pady=8,
             cursor="hand2", highlightthickness=0,
         )
-        self.launch_button.grid(row=0, column=1, sticky="e")
+        self.launch_button.grid(row=0, column=2, sticky="e")
 
     def log(self, message, level="info", prefix=True):
         if threading.current_thread() is not threading.main_thread():
@@ -3051,19 +3117,47 @@ class LauncherApp(object):
         self.refresh_previews()
         self.refresh_dirty()
 
-    def _on_db_mode_change(self, *_args):
-        # The "New database..." entry is an action, not a mode: revert the
-        # dropdown to the current mode and open the create-database generator.
-        if self.db_mode_label.get() == NEW_DB_LABEL:
-            self.db_mode_label.set(DB_MODE_LABELS[self.var["db_mode"].get()])
-            self.create_database_dialog()
-            return
-        mode = DB_MODE_BY_LABEL.get(self.db_mode_label.get(), DB_MODE_LAB)
-        if self.var["db_mode"].get() != mode:
-            self.var["db_mode"].set(mode)
+    def _open_db_menu(self, event=None):
+        """The pen icon's dropdown: choose the database, or add a new one.
+
+        Lists the lab shared Postgres, the oTree default SQLite, the current
+        custom database (when one is configured) and "Add new database…" (which
+        opens the create-database generator). Replaces the old readonly combobox
+        + separate "Create a new database" button."""
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label=DB_MODE_LABELS[DB_MODE_LAB],
+                         command=lambda: self._choose_db_mode(DB_MODE_LAB))
+        menu.add_command(label=DB_MODE_LABELS[DB_MODE_NONE],
+                         command=lambda: self._choose_db_mode(DB_MODE_NONE))
+        # The current custom database, shown as its own pic: choosing it reveals
+        # the (editable) connection fields — this is what lets you edit the
+        # current custom database, the gap the old "Change…" left.
+        if self.var["db_mode"].get() == DB_MODE_CUSTOM or self.var["db_name"].get().strip():
+            name = self.var["db_name"].get().strip() or "custom database"
+            menu.add_command(label="%s (custom Postgres)" % name,
+                             command=lambda: self._choose_db_mode(DB_MODE_CUSTOM))
+        menu.add_separator()
+        menu.add_command(label="Add new database…", command=self.create_database_dialog)
+        try:
+            if event is not None:
+                menu.tk_popup(event.x_root, event.y_root)
+            else:
+                menu.tk_popup(self.db_edit_icon.winfo_rootx(),
+                              self.db_edit_icon.winfo_rooty() + 18)
+        finally:
+            menu.grab_release()
+
+    def _choose_db_mode(self, mode):
+        """Switch the database to ``mode`` from the pen menu and refresh the card.
+
+        For the lab shared database the known lab credentials are re-applied; the
+        connection fields are revealed (and made editable) only for a custom
+        database. ``db_mode_label`` is kept as a plain mirror for display."""
+        self.var["db_mode"].set(mode)
         if mode == DB_MODE_LAB and not self.loading:
             for key, value in core.LAB_DB.items():
                 self.var[key].set(value)
+        self.db_mode_label.set(DB_MODE_LABELS[mode])
         self.apply_db_mode()
         self.refresh_previews()
 
@@ -3083,12 +3177,19 @@ class LauncherApp(object):
         if self.loading:
             return
         lab = self.var["lab"].get()
-        if lab != LAB_CUSTOM:
+        # A pseudo-host (typed custom host, or Local/localhost) has no known seat
+        # list, so it drops to an open room; a real lab pins the shortcut room and
+        # comes with a seat list.
+        if lab not in (LAB_CUSTOM, LAB_LOCAL):
             if self.var["room_name"].get().strip() != DEFAULT_ROOM_NAME:
                 self.var["room_name"].set(DEFAULT_ROOM_NAME)
             if self.var["seat_mode"].get() == SEAT_NONE:
                 self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_DEFAULT])
-        else:
+        elif lab == LAB_CUSTOM:
+            self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_NONE])
+        else:  # LAB_LOCAL: keep the room the study default, but no seat board
+            if self.var["room_name"].get().strip() != DEFAULT_ROOM_NAME:
+                self.var["room_name"].set(DEFAULT_ROOM_NAME)
             self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_NONE])
         self._apply_lab_view()
 
@@ -3099,47 +3200,26 @@ class LauncherApp(object):
             entry.configure(state=state)
         if mode != DB_MODE_CUSTOM:
             self.set_password_visible("db", False)
-        # The "Create a new database" action only makes sense for a Custom setup.
-        if hasattr(self, "db_create_row"):
-            if mode == DB_MODE_CUSTOM:
-                self.db_create_row.grid()
-            else:
-                self.db_create_row.grid_remove()
-        # The connection details start expanded only for a Custom setup, where
-        # the user has to edit them; otherwise they stay tucked away.
-        self.db_details_shown.set(mode == DB_MODE_CUSTOM)
-        self._apply_db_details_visibility()
-        # A Custom setup is a non-default value, so auto-open the whole section
-        # (Fable: hidden must not mean a hidden surprise).
+        # The connection fields (host/user/password/name/port + DATABASE_URL
+        # preview) appear, editable, ONLY for a custom database; lab and oTree-
+        # default need nothing typed, so the card stays a single line for them.
         if mode == DB_MODE_CUSTOM:
-            self._db_section_shown = True
-        self._apply_db_section_visibility()
-        self._refresh_db_summary()
-
-    def _toggle_db_section(self):
-        self._db_section_shown = not getattr(self, "_db_section_shown", False)
-        self._apply_db_section_visibility()
-
-    def _apply_db_section_visibility(self):
-        if getattr(self, "_db_section_shown", False):
             self.db_section.grid()
-            self.db_change_btn.configure(text="Done")
         else:
             self.db_section.grid_remove()
-            self.db_change_btn.configure(text="Change...")
+        self._refresh_db_summary()
 
     def _db_summary_text(self):
+        # The reset state is shown by the always-visible "Reset before start"
+        # tickbox on the same line, so it is NOT repeated in this summary text.
         mode = self.var["db_mode"].get()
         if mode == DB_MODE_LAB:
-            base = "Lab shared database (Postgres)"
-        elif mode == DB_MODE_NONE:
-            base = "No lab database (oTree SQLite)"
-        else:
-            name = self.var["db_name"].get().strip() or "custom database"
-            host = self.var["db_host"].get().strip() or "localhost"
-            base = "%s on %s (Postgres)" % (name, host)
-        reset = "reset before start" if self.var["resetdb"].get() else "no reset"
-        return "%s · %s" % (base, reset)
+            return "Lab shared database (Postgres)"
+        if mode == DB_MODE_NONE:
+            return "oTree default (SQLite)"
+        name = self.var["db_name"].get().strip() or "custom database"
+        host = self.var["db_host"].get().strip() or "localhost"
+        return "%s on %s (Postgres)" % (name, host)
 
     def _refresh_db_summary(self):
         if hasattr(self, "db_summary"):
@@ -3159,31 +3239,6 @@ class LauncherApp(object):
         so it stays blank during normal editing rather than restating the config.
         """
         return
-
-    def _toggle_db_details(self):
-        self.db_details_shown.set(not self.db_details_shown.get())
-        self._apply_db_details_visibility()
-
-    def _apply_db_details_visibility(self):
-        """Show or hide the database connection details as one unit.
-
-        For a Custom setup the details are always shown (and there is nothing
-        to disclose, so the toggle is hidden); for every other setup the
-        details are optional and the toggle reveals or re-hides them.
-        """
-        mode = self.var["db_mode"].get()
-        shown = self.db_details_shown.get()
-        if shown:
-            self.db_details.grid()
-        else:
-            self.db_details.grid_remove()
-        if mode == DB_MODE_CUSTOM:
-            self.db_disclosure.grid_remove()
-        else:
-            self.db_disclosure.grid()
-            self.db_disclosure.configure(
-                text=("▾  Hide connection details" if shown
-                      else "▸  Show connection details"))
 
     def set_password_visible(self, which, visible):
         """Show or hide one of the two password fields.
@@ -3334,22 +3389,34 @@ class LauncherApp(object):
 
     # -- sidebar actions ---------------------------------------------------
 
-    def browse_project(self):
+    def browse_project(self, parent=None, offer_get_ready=True):
+        """The project folder picker behind the main "Browse..." button.
+
+        The Before-you-launch screen's inline [Choose folder…] fix reuses this
+        SAME picker (``parent`` = that modal, so the native dialog stacks above
+        it; ``offer_get_ready=False`` because the screen already lists the
+        missing-block warning with its own one-click fix, and a second modal on
+        top of it would only get in the way). Returns the chosen path, or ""
+        when the picker was cancelled."""
         start = self.var["project_path"].get() or os.path.expanduser("~")
         if not os.path.isdir(start):
             start = os.path.expanduser("~")
         chosen = filedialog.askdirectory(
-            parent=self.root, title="Choose the oTree project folder", initialdir=start)
-        if chosen:
-            path = os.path.normpath(chosen)
-            self.var["project_path"].set(path)
-            self._remember_project(path)
-            level, message = validate_project(chosen)
-            self.log("Project folder: %s" % chosen, "info")
-            self.log(message, {"ok": "ok", "warn": "warn", "error": "err"}[level])
-            # Right after a fresh selection, offer the one-click lab setup if the
-            # project is not ready. Shown at most once, here, per selection.
+            parent=parent or self.root, title="Choose the oTree project folder",
+            initialdir=start)
+        if not chosen:
+            return ""
+        path = os.path.normpath(chosen)
+        self.var["project_path"].set(path)
+        self._remember_project(path)
+        level, message = validate_project(chosen)
+        self.log("Project folder: %s" % chosen, "info")
+        self.log(message, {"ok": "ok", "warn": "warn", "error": "err"}[level])
+        # Right after a fresh selection, offer the one-click lab setup if the
+        # project is not ready. Shown at most once, here, per selection.
+        if offer_get_ready:
             self._maybe_offer_get_ready(path)
+        return path
 
     def _prefill_last_project(self):
         """Prefill the last project folder used on this machine into the built-in
@@ -3500,7 +3567,7 @@ class LauncherApp(object):
         _center_on(self.root, top)
         top.update_idletasks()
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
 
@@ -3670,17 +3737,21 @@ class LauncherApp(object):
         self.refresh_block_status()
         return True, "Done. Now press Launch, pick your lab, and go."
 
-    # -- export ------------------------------------------------------------
+    # -- one-click shortcut ------------------------------------------------
 
-    def export_bat(self):
+    def save_shortcut(self):
+        """Save a standalone .bat for the current config.  Double-clicking that
+        file later launches this config with no UI (it sets DATABASE_URL and the
+        admin/auth env, cds into the project, runs resetdb and starts the
+        server).  This is the promoted version of the old gear-menu export."""
         cfg = self.form_values()
         name = "config"
         if self.selected_index is not None and not self.dirty:
             name = self.presets[self.selected_index].get("name", "config")
         safe = re.sub(r"[^A-Za-z0-9 _.-]", "_", name).strip() or "config"
         target = filedialog.asksaveasfilename(
-            parent=self.root, title="Export a standalone batch file",
-            defaultextension=".bat", initialfile="set_up_otree_%s.bat" % safe.replace(" ", "_"),
+            parent=self.root, title="Save one-click shortcut",
+            defaultextension=".bat", initialfile="%s.bat" % safe,
             filetypes=[("Batch file", "*.bat"), ("All files", "*.*")])
         if not target:
             return
@@ -3688,24 +3759,22 @@ class LauncherApp(object):
             with open(target, "w", encoding="utf-8", newline="") as handle:
                 handle.write(export_bat_text(cfg, name))
         except OSError as error:
-            messagebox.showerror("Could not export", str(error), parent=self.root)
-            self.log("Export failed: %s" % error, "err")
+            messagebox.showerror("Could not save shortcut", str(error), parent=self.root)
+            self.log("Saving the shortcut failed: %s" % error, "err")
             return
-        self.log("Exported a standalone batch file to %s" % target, "ok")
-        self.log("That file is a convenience only. Launch does not use any batch file.", "muted")
+        self.log("Saved one-click shortcut: %s" % target, "ok")
+        self.log("Double-click it to launch this config.", "muted")
 
     # -- Lab Settings (admin config + lab presets, Feature 4) --------------
 
     def _open_settings_menu(self, event=None):
-        """The gear opens a small menu: Lab settings, the advanced view of the
-        settings.py block, and the legacy batch-file export (all off the main
-        page). View-block lives here so the main page shows nothing about the
-        block when it is fine."""
+        """The gear opens a small menu: Lab settings and the advanced view of
+        the settings.py block (both off the main page). View-block lives here so
+        the main page shows nothing about the block when it is fine.  (The old
+        batch-file export was promoted to the "Save one-click shortcut" button.)"""
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Lab settings...", command=self.open_lab_settings)
         menu.add_command(label="View settings.py block...", command=self.show_block)
-        menu.add_separator()
-        menu.add_command(label="Export batch file...", command=self.export_bat)
         try:
             if event is not None:
                 menu.tk_popup(event.x_root, event.y_root)
@@ -3827,52 +3896,147 @@ class LauncherApp(object):
             self.log("A launch is already running.", "warn")
             return
         cfg = self.form_values()
-        problems = self.preflight(cfg)
-        if problems:
-            self.inline_status.set("error", problems[0])
-            self.log("Cannot launch:", "err")
-            for problem in problems:
-                self.log("  " + problem, "err", prefix=False)
-            if any("oTree lab support block" in problem for problem in problems):
-                self.show_block()
-            return
+        self._show_before_launch(cfg)
 
-        # If the setup is not a saved named config yet (the built-in default with
-        # a chosen folder, or a changed config), remind the user to save it first.
-        # A saved, unchanged named config goes straight to the briefing.
-        if self._needs_save():
-            SaveBeforeLaunchDialog(
-                self.root, self.fonts,
-                on_save=lambda: self.save_as_new(
-                    on_success=lambda: self._show_briefing(self.form_values())),
-                on_launch=lambda: self._show_briefing(cfg))
-        else:
-            self._show_briefing(cfg)
+    def gather_launch_issues(self, cfg):
+        """Everything worth telling the user before a launch, as one ordered list.
 
-    def _show_briefing(self, cfg):
-        # Instructions/confirmation popup (principle 12). It names the lab,
-        # host and per-seat link, warns on a non-study room, and shows the red
-        # caution bar for the shared shared lab database (Feature 1). The
-        # server starts only on OKAY. All of the host/room/caution decisions come
-        # from core.launch_briefing; this dialog only renders them.
-        briefing = core.launch_briefing(cfg, self.lab_presets)
+        Merges the hard blocks (things that make a launch impossible and have no
+        one-click fix), the fail-SOFT preflight warnings (database, port,
+        project/room, oTree, psycopg2) and the "no lab support block yet" case
+        (a warning with an inline one-click fix). Each entry is a dict:
+        ``{level: 'block'|'warn', title, hint, fix, fix_label}`` where ``fix`` is
+        either None or a callable returning ``(ok, message)``. Rebuilt on demand
+        so the consolidated screen can re-check itself after an inline fix."""
+        issues = []
+        folder_problem = self._project_folder_problem(cfg)
+        for message in self._hard_block_problems(cfg):
+            issue = {"level": "block", "title": message, "hint": "",
+                     "fix": None, "fix_label": ""}
+            if folder_problem and message == folder_problem:
+                # Fixable right here: the same folder picker as the main Browse.
+                issue["fix"] = lambda cfg=cfg: self._choose_folder_fix(cfg)
+                issue["fix_label"] = "Choose folder…"
+            issues.append(issue)
+        # Missing lab support block: not a hard block (you can launch without it),
+        # and the launcher can add it in place, so it is a one-click-fixable warning.
+        if self._project_needs_block(cfg):
+            issues.append({
+                "level": "warn",
+                "title": "This project has no oTree lab support block — the lab "
+                         "room, seat board and lab database won’t take effect "
+                         "without it.",
+                "hint": "Adds a clearly-marked block to the end of settings.py, "
+                        "after a timestamped .bak backup (fully revertible). The "
+                        "manual copy/paste is on the info screen.",
+                "fix": self._get_ready_for_lab, "fix_label": "Add it for me",
+                "info": "block"})
+        for failure in core.preflight_failures(core.preflight(cfg, core.load_lab_info())):
+            issue = {"level": "warn", "title": failure.get("message", ""),
+                     "hint": str(failure.get("detail", "")),
+                     "fix": None, "fix_label": ""}
+            self._attach_inline_fix(issue, failure, cfg)
+            issues.append(issue)
+        return issues
+
+    def _choose_folder_fix(self, cfg):
+        """Inline fix for the project-folder must-fix: open the SAME folder
+        picker the main "Browse..." uses, above the pre-launch screen. On a pick
+        the form AND the cfg dict the launch will use are updated, and the screen
+        re-checks itself. A cancelled picker changes nothing (returns None, so
+        the screen shows no note)."""
+        dialog = getattr(self, "_briefing_dialog", None)
+        parent = getattr(dialog, "top", None)
+        try:
+            if parent is not None and not parent.winfo_exists():
+                parent = None
+        except tk.TclError:
+            parent = None
+        path = self.browse_project(parent=parent, offer_get_ready=False)
+        if not path:
+            return None
+        cfg["project_path"] = path
+        return True, "Project folder set."
+
+    def _attach_inline_fix(self, issue, failure, cfg):
+        """Give a preflight-failure issue an inline action so the user can fix it
+        on the pre-launch screen and Launch at once (Julian). The fix mutates the
+        SAME cfg dict the launch will use, so a re-check clears the issue and the
+        change carries straight into the launch.
+
+          Postgres without psycopg2 -> [Change to SQLite]
+          room not in the project's ROOMS -> an inline "Rooms found" picker
+          port in use -> [Re-check]
+        """
+        meta = core.issue_fix_for(failure)
+        tag = meta.get("fix")
+        if tag == "change_to_sqlite":
+            def _to_sqlite(cfg=cfg):
+                cfg["db_mode"] = core.DB_MODE_NONE
+                return True, ("Switched to the oTree default database (SQLite). "
+                              "Postgres and psycopg2 are no longer needed.")
+            issue["fix"] = _to_sqlite
+            issue["fix_label"] = meta.get("fix_label", "Change to SQLite")
+        elif tag == "recheck":
+            issue["fix"] = lambda: (True, "Re-checked.")
+            issue["fix_label"] = meta.get("fix_label", "Re-check")
+        elif tag == "pick_room":
+            issue["kind"] = "room_pick"
+            issue["rooms"] = meta.get("rooms", [])
+
+            def _apply_room(room, cfg=cfg):
+                cfg["room_name"] = room
+                return True, "Room set to %r for this launch." % room
+            issue["apply_room"] = _apply_room
+
+    def _project_needs_block(self, cfg):
+        """True when a seat-using launch would need the lab support block but the
+        project's settings.py does not have it yet."""
+        if effective_seat_mode(cfg) == SEAT_NONE:
+            return False
+        path = cfg["project_path"].strip()
+        if not path or not os.path.isdir(path):
+            return False
+        state = inspect_settings(path)
+        return bool(state.get("readable")) and not state.get("has_block")
+
+    def _show_before_launch(self, cfg):
+        # ONE consolidated pre-launch screen (Julian): the launch summary PLUS
+        # every issue found (hard blocks + fail-soft warnings, each with an inline
+        # one-click fix or a short hint), and the action row. No chain of separate
+        # warning/error dialogs — a clean setup is a single confirm. All host/room/
+        # caution content comes from core.launch_briefing; the dialog only renders.
         # Carry the admin credentials into the briefing so the handoff is one
         # combined popup. Auto login (default ON) decides whether the dashboard
         # opens through the credentials-embedded URL (pre-authenticated) or the
         # plain URL; pre_auth is computed exactly as _launch_worker does so the
         # intro wording and the takeover "Click here" link match what happens.
         use_auto = bool(self.auto_login.get())
+        cfg = dict(cfg)
+        cfg["auto_login"] = use_auto
+        # The briefing is recomputed on demand (get_briefing), so an inline fix on
+        # the pre-launch screen — Change to SQLite, or picking a different room —
+        # updates the caution bar and per-seat link in place. The takeover URL is
+        # likewise recomputed from the CURRENT cfg when the launch actually starts.
+        def get_briefing(cfg=cfg):
+            return core.launch_briefing(cfg, self.lab_presets)
+
         plain_url = self._build_url(cfg)
         open_url = (core.credentialed_url(plain_url, cfg["admin_username"], cfg["admin_password"])
                     if use_auto else plain_url)
         pre_auth = (open_url != plain_url)
-        cfg = dict(cfg)
-        cfg["auto_login"] = use_auto
-        LaunchBriefingDialog(self.root, self.fonts, briefing,
-                             on_okay=lambda: self._begin_launch(cfg),
-                             admin_username=cfg["admin_username"],
-                             admin_password=cfg["admin_password"],
-                             pre_auth=pre_auth, takeover_url=open_url)
+        # Keep a reference so the launch worker can drive this popup's handoff
+        # banner with the REAL outcome (success vs failure) via set_result.
+        self._briefing_dialog = LaunchBriefingDialog(
+            self.root, self.fonts, get_briefing,
+            on_okay=lambda: self._begin_launch(cfg),
+            gather_issues=lambda: self.gather_launch_issues(cfg),
+            needs_save=self._needs_save,
+            on_save=self.save_as_new,
+            on_view_block=self.show_block,
+            admin_username=cfg["admin_username"],
+            admin_password=cfg["admin_password"],
+            pre_auth=pre_auth, takeover_url=open_url)
 
     def _begin_launch(self, cfg):
         if self.running:
@@ -3895,70 +4059,78 @@ class LauncherApp(object):
             except tk.TclError:
                 pass
 
-    def preflight(self, cfg):
-        """Reasons this config cannot be launched, in plain language."""
-        problems = []
+    def _project_folder_problem(self, cfg):
+        """The project-folder must-fix message, or "" when the folder is fine.
+        Same two conditions as always (none chosen / does not exist); split out
+        of _hard_block_problems only so the pre-launch screen can attach its
+        inline [Choose folder…] button to exactly this item."""
         path = cfg["project_path"].strip()
         if not path:
-            problems.append(
-                "No oTree project folder chosen. Click Browse in section 1 and pick the folder "
-                "that holds settings.py.")
-        elif not os.path.isdir(path):
-            problems.append(
-                'The project folder does not exist: "%s". Click Browse in section 1 and pick it '
-                "again, or ask whether the drive is connected." % path)
-        if shutil.which("otree") is None:
-            problems.append(
-                "otree is not on PATH, so the launcher cannot start it. Open a terminal and run "
-                '"pip install otree", or start the launcher from the Python environment that has '
-                "oTree installed.")
+            return ("Choose your oTree project folder before launching (the folder that "
+                    "holds settings.py).")
+        if not os.path.isdir(path):
+            return ('The project folder does not exist: "%s". Choose it again, or check '
+                    "whether the drive is connected." % path)
+        return ""
+
+    def _hard_block_problems(self, cfg):
+        """Reasons this config cannot be launched at all, in plain language.
+
+        Only genuine blockers with no one-click fix live here (no project folder,
+        an empty custom host, an unusable seat list). oTree-not-installed and the
+        missing lab support block are handled as fail-soft warnings on the
+        consolidated screen (the former via core.preflight, the latter with an
+        inline "Add it for me"), so they are NOT repeated here."""
+        problems = []
+        folder_problem = self._project_folder_problem(cfg)
+        if folder_problem:
+            problems.append(folder_problem)
         if cfg["lab"] == LAB_CUSTOM and not cfg["custom_host"].strip():
             problems.append(
                 "Custom host is selected in section 3 but the address box is empty. Type an "
                 "address, or choose Small lab or Large lab.")
 
+        # Seats are NEVER a hard block (Julian): no seat file / no default seats
+        # falls back to the open (none) room. The ONLY genuine seat block is a
+        # chosen FILE that DOES exist but holds labels oTree would reject.
         mode = cfg["seat_mode"]
         if mode == SEAT_FILE:
             seat_file = cfg["seat_file"].strip()
-            if not seat_file:
-                problems.append(
-                    "Section 3 is set to use a file from your project but no file is chosen. "
-                    "Click Browse, or choose another seat option.")
-            elif not os.path.isfile(seat_file):
-                problems.append(
-                    'The participant label file does not exist: "%s". Pick it again in '
-                    "section 3." % seat_file)
-        elif mode in (SEAT_DEFAULT, SEAT_EDIT):
-            seats = self._resolve_seats(cfg)
-            if not seats:
-                problems.append(
-                    "Section 3 would produce no seats. A custom host has no default seat "
-                    "list, and unticking every seat leaves nothing. Choose a file, or None.")
-            else:
-                bad = invalid_seats(seats)
+            if seat_file and os.path.isfile(seat_file):
+                try:
+                    bad = invalid_seats(read_seat_file(seat_file))
+                except OSError:
+                    bad = []
                 if bad:
                     problems.append(
-                        "oTree only accepts letters, numbers and underscores in a seat label. "
-                        "These would be rejected: %s" % ", ".join(bad[:6]))
-
-        if mode != SEAT_NONE and path and os.path.isdir(path):
-            state = inspect_settings(path)
-            if state["readable"] and not state["has_block"]:
+                        "The chosen participant file has labels oTree would reject "
+                        "(only letters, numbers and underscores are allowed): %s"
+                        % ", ".join(bad[:6]))
+        elif mode in (SEAT_DEFAULT, SEAT_EDIT):
+            seats = self._resolve_seats(cfg)
+            bad = invalid_seats(seats)
+            if bad:
                 problems.append(
-                    "settings.py in this project does not have the oTree lab support block, so "
-                    "the lab room and the seat board will not work. Click \"Show the "
-                    "settings.py block\" in section 3 to copy it in, or set Seats to None.")
+                    "oTree only accepts letters, numbers and underscores in a seat label. "
+                    "These would be rejected: %s" % ", ".join(bad[:6]))
         return problems
 
     def _launch_worker(self, cfg):
+        # _do_launch returns (ok, info): info is the open-dashboard URL on a real
+        # success, or a plain-language failure reason otherwise. That result — the
+        # REAL outcome — is what drives the handoff popup, so the takeover can
+        # never claim "dashboard opening" when nothing actually started.
+        result = (False, "Launch did not complete. See the activity log above.")
         try:
-            self._do_launch(cfg)
+            result = self._do_launch(cfg) or result
         except Exception as error:  # keep the window alive whatever happens
             self.log("Unexpected error: %s: %s" % (type(error).__name__, error), "err")
             self._on_main(lambda: self.inline_status.set(
                 "error", "Launch stopped: %s" % error))
+            result = (False, "Launch stopped: %s" % error)
         finally:
-            self._on_main(self._launch_finished)
+            ok, info = result
+            self._on_main(lambda: self._deliver_launch_result(ok, info))
 
     def _on_main(self, callback):
         """Run a callback on the GUI thread, unless the window has gone."""
@@ -3966,6 +4138,17 @@ class LauncherApp(object):
             self.root.after(0, callback)
         except (tk.TclError, RuntimeError):
             pass
+
+    def _deliver_launch_result(self, ok, info):
+        """Reset the launch button and tell the briefing/takeover popup the REAL
+        outcome, so its banner reflects success or failure honestly."""
+        self._launch_finished()
+        dialog = getattr(self, "_briefing_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.set_result(ok, info)
+            except tk.TclError:
+                pass
 
     def _launch_finished(self):
         self.running = False
@@ -3987,7 +4170,7 @@ class LauncherApp(object):
             self.log("Could not write the seat file: %s" % error, "err")
             self._on_main(lambda: self.inline_status.set(
                 "error", "Could not write the seat file: %s" % error))
-            return
+            return False, "Could not write the seat file: %s" % error
         self.log(note, "info")
         if label_file and cfg["seat_mode"] != SEAT_FILE:
             self.log("    " + seat_preview(self._resolve_seats(cfg)), "muted", prefix=False)
@@ -4012,19 +4195,20 @@ class LauncherApp(object):
         if cfg["resetdb"]:
             code = self._run_resetdb(path, env)
             if code is None:
-                return
+                return False, "otree resetdb could not be started. See the log above."
             if code != 0:
                 self.log("otree resetdb exited with code %d, so the server was not started."
                          % code, "err")
                 self._on_main(lambda: self.inline_status.set(
                     "error", "otree resetdb failed (exit code %d). See the log above." % code))
-                return
+                return False, ("otree resetdb failed (exit code %d). Nothing was started — "
+                               "see the activity log." % code)
             self.log("otree resetdb finished with exit code 0.", "ok")
         else:
             self.log("Reset database is off, so otree resetdb was skipped.", "muted")
 
         if not self._start_server(cfg, path, env):
-            return
+            return False, "The oTree server could not be started. See the activity log above."
 
         self._stamp_last_run(cfg)
 
@@ -4062,9 +4246,11 @@ class LauncherApp(object):
         self._on_main(lambda: self.inline_status.set(
             "ok", "Server started. Its window stays open; press Ctrl-C there to stop it."))
         self.log("Done. The server keeps running in its own window.", "ok")
-        # The launch briefing popup is still open and has already switched to its
-        # post-launch takeover banner ("Experiment launched, dashboard opening.
-        # No dashboard? Click here."), so there is no separate handoff modal.
+        # The launch briefing popup is still open in its "launching" state; on
+        # this real success it switches to the post-launch takeover banner
+        # ("Experiment launched, dashboard opening. No dashboard? Click here.")
+        # via _deliver_launch_result, with the working open-dashboard URL below.
+        return True, open_url
 
     def _run_resetdb(self, path, env):
         command = resetdb_command()
@@ -4294,7 +4480,7 @@ class GetReadyDialog(object):
         self._recenter()
         # The shared shade helper keeps the dialog lifted above the shade; the
         # grab goes on the dialog (never the shade) so clicks reach the dialog.
-        top.grab_set()
+        _grab_modal(top)
         top.focus_set()
 
     def _info_text(self):
@@ -4420,7 +4606,7 @@ class BlockDialog(object):
             self.add_button.state(["disabled"])
 
         top.bind("<Escape>", lambda _e: top.destroy())
-        top.grab_set()
+        _grab_modal(top)
 
     def _show_state(self, state):
         if not state.get("readable"):
@@ -4498,7 +4684,7 @@ class NameDialog(object):
         x = parent.winfo_rootx() + (parent.winfo_width() - top.winfo_width()) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - top.winfo_height()) // 3
         top.geometry("+%d+%d" % (max(x, 0), max(y, 0)))
-        top.grab_set()
+        _grab_modal(top)
         parent.wait_window(top)
 
     def confirm(self):
@@ -4534,6 +4720,32 @@ def _modal_close(top):
         pass
     try:
         top.destroy()
+    except tk.TclError:
+        pass
+
+
+def _grab_modal(top):
+    """Take the modal input grab reliably across platforms.
+
+    On macOS (aqua) ``grab_set()`` on a Toplevel that is not yet viewable can
+    silently fail; the dialog then holds no grab the user can reach and the whole
+    app looks frozen. So on darwin we first force the window realised, visible,
+    raised and focused, then grab it. On Windows/Linux the historical plain
+    ``grab_set()`` is kept (the dim shade already handles stacking there).
+
+    Every step is guarded — a modal that cannot grab is far better than a crash —
+    and this is the single choke-point every launcher modal goes through, so no
+    dialog can leak a broken grab.
+    """
+    if sys.platform == "darwin":
+        for step in (top.update_idletasks, top.wait_visibility, top.lift,
+                     top.focus_force):
+            try:
+                step()
+            except tk.TclError:
+                pass
+    try:
+        top.grab_set()
     except tk.TclError:
         pass
 
@@ -4582,7 +4794,18 @@ def _attach_shade(parent, top, alpha=0.45):
     creation. This is cross-platform-correct: the re-lift is a harmless no-op on
     Windows and X11 (where the initial lower already keeps the shade underneath),
     so there is no per-platform branch and the Windows lab path is unchanged.
+
+    macOS (aqua) is the exception: the dim-shade overlay is itself what freezes
+    the app there. An overrideredirect/transient Toplevel plus a grab taken
+    before the dialog is viewable can leave the shade stacked ABOVE the dialog —
+    greying it out and swallowing every click — while the unreachable grab blocks
+    the main window too, so one stuck modal freezes everything. The shade is
+    purely cosmetic, so on darwin we skip it entirely and rely on the reliable
+    grab in ``_grab_modal`` to keep the dialog fully modal and interactive.
+    Windows/Linux keep the nicer dimmed look unchanged.
     """
+    if sys.platform == "darwin":
+        return None
     shade = _make_shade(parent, alpha)
     if shade is None:
         return None
@@ -4616,6 +4839,78 @@ def _attach_shade(parent, top, alpha=0.45):
 
     top.bind("<Destroy>", _cleanup, add="+")
     return shade
+
+
+class PreflightWarningDialog(object):
+    """The pre-launch preflight gate popup (checks 1–4).
+
+    Shown only when one or more of core.preflight's fast checks failed. It lists
+    each failed check's message (database, port, project/room, oTree) and offers
+    two choices: "Launch anyway" (proceeds — nothing here hard-blocks) or
+    "Cancel" (back to the launcher). It decides nothing itself; on "Launch
+    anyway" it calls the callback the app passes."""
+
+    def __init__(self, parent, fonts, failures, on_launch_anyway):
+        self.on_launch_anyway = on_launch_anyway
+        top = self.top = tk.Toplevel(parent)
+        top.title("Pre-launch checks")
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.resizable(False, False)
+
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=20, pady=18)
+
+        count = len(failures)
+        tk.Label(body,
+                 text="%d pre-launch check%s did not pass"
+                      % (count, "" if count == 1 else "s"),
+                 bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold, anchor="w",
+                 justify="left", wraplength=440).pack(fill="x")
+        tk.Label(body,
+                 text="These are warnings, not blocks. Review them, then launch "
+                      "anyway or cancel and fix them first.",
+                 bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small, anchor="w",
+                 justify="left", wraplength=440).pack(fill="x", pady=(4, 12))
+
+        for failure in failures:
+            item = tk.Frame(body, bg=COLORS["warn_soft"], highlightthickness=1,
+                            highlightbackground=COLORS["card_line"])
+            item.pack(fill="x", pady=(0, 8))
+            tk.Label(item, text=failure.get("message", ""), bg=COLORS["warn_soft"],
+                     fg=COLORS["warn"], font=fonts.body, anchor="w", justify="left",
+                     wraplength=420).pack(fill="x", padx=10, pady=(7, 2))
+            detail = str(failure.get("detail", "")).strip()
+            if detail:
+                tk.Label(item, text=detail, bg=COLORS["warn_soft"], fg=COLORS["muted"],
+                         font=fonts.small, anchor="w", justify="left",
+                         wraplength=420).pack(fill="x", padx=10, pady=(0, 7))
+
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.pack(fill="x", pady=(6, 0))
+        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
+        launch = tk.Button(buttons, text="Launch anyway", command=self._launch,
+                           font=fonts.bold, bg=COLORS["accent"], fg="#ffffff",
+                           activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
+                           relief="flat", padx=12, pady=5, cursor="hand2")
+        launch.pack(side="right", padx=(0, 8))
+
+        top.bind("<Escape>", lambda _e: self._cancel())
+        top.bind("<Return>", lambda _e: self._launch())
+        _center_on(parent, top)
+        launch.focus_set()
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+
+    def _launch(self):
+        _modal_close(self.top)
+        self.on_launch_anyway()
+
+    def _cancel(self):
+        _modal_close(self.top)
 
 
 class SaveBeforeLaunchDialog(object):
@@ -4661,7 +4956,7 @@ class SaveBeforeLaunchDialog(object):
         _center_on(parent, top)
         save.focus_set()
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
 
@@ -4680,6 +4975,18 @@ class SaveBeforeLaunchDialog(object):
 class LaunchBriefingDialog(object):
     """The pre-launch instructions/confirmation popup (principle 12 + Feature 1).
 
+    Layout, top to bottom, the same in every state: the issues (every MUST-FIX
+    card first, each with an inline fix button where one exists, then the
+    warning cards; scrollable when tall; no banner), the minimal "What will
+    launch" card (top line = the Lab with an (i) that expands the lab / Server /
+    Room details; then what to open on the participant computers, where the
+    study room shows only its shortcut chip and reveals the per-seat link on
+    hover, and any other room shows its link; the dashboard login sits behind a
+    collapsed expander), then the bottom bar — the
+    ONLY place a launch is offered ("Ready to launch" + Launch / the highlighted
+    "N warnings" + Launch anyway callout / a disabled Launch while a must-fix
+    stands).
+
     Renders the dict from core.launch_briefing: the chosen lab and host, the
     exact per-seat link the lab machines open, a warning when the room is not
     the study room the desktop shortcuts point at, and a bright red caution bar
@@ -4689,13 +4996,38 @@ class LaunchBriefingDialog(object):
     """
 
     def __init__(self, parent, fonts, briefing, on_okay,
+                 gather_issues=None, needs_save=None, on_save=None, on_view_block=None,
                  admin_username="", admin_password="", pre_auth=False, takeover_url=""):
+        # ``briefing`` is either a static dict or a zero-arg callable returning a
+        # fresh briefing. The callable form lets an inline fix (Change to SQLite,
+        # pick a room) rebuild the caution bar and per-seat link in place.
+        self.get_briefing = briefing if callable(briefing) else (lambda: briefing)
         self.on_okay = on_okay
+        self.gather_issues = gather_issues or (lambda: [])
+        self.needs_save = needs_save or (lambda: False)
+        self.on_save = on_save
+        self.on_view_block = on_view_block
         self.parent = parent
         self.fonts = fonts
+        self.admin_username = admin_username
+        self.admin_password = admin_password
+        self.pre_auth = pre_auth
         self.takeover_url = takeover_url
+        self._issues = []
+        self._fix_note = None
+        self._launching = False
+        # The two "What will launch" reveals (the lab (i) details, the dashboard
+        # login) start COLLAPSED, and keep their state across the in-place
+        # re-renders an inline fix / re-check triggers.
+        self._info_open = False
+        self._creds_open = False
+        # The per-seat link hover card under the study-room chip (hidden by default).
+        self.room_chip = None
+        self.copy_link_button = None
+        self._link_reveal = None
+        self._reveal_after = None
         top = self.top = tk.Toplevel(parent)
-        top.title("Before you start the server")
+        top.title("Before you launch")
         top.configure(bg=COLORS["card"])
         _attach_shade(parent, top)
         top.transient(parent)
@@ -4703,145 +5035,675 @@ class LaunchBriefingDialog(object):
 
         body = tk.Frame(top, bg=COLORS["card"])
         body.pack(fill="both", expand=True, padx=20, pady=18)
-        body.columnconfigure(0, weight=1)
-        row = 0
+        # A steady width, so the dialog does not jump as issues come and go.
+        body.columnconfigure(0, weight=1, minsize=self.WRAP + 20)
 
-        # Caution bar (Feature 1): only for the shared shared lab database.
-        if briefing.get("caution"):
-            bar = tk.Frame(body, bg=COLORS["error"], highlightthickness=0)
-            bar.grid(row=row, column=0, sticky="ew", pady=(0, 12))
-            bar.columnconfigure(0, weight=1)
-            tk.Label(bar, text=briefing.get("caution_text", ""), bg=COLORS["error"],
-                     fg="#ffffff", font=fonts.bold, anchor="w", justify="left",
-                     wraplength=440).grid(row=0, column=0, sticky="ew", padx=12, pady=9)
-            row += 1
+        # ONE consolidated pre-launch screen. Fixed layout rows so the summary,
+        # issues, save affordance and action row can each be rebuilt in place
+        # (after an inline fix or a re-check) without disturbing the others:
+        #   row 0  issues: MUST-FIX cards first, then the warning cards. No banner
+        #          and no "launch anyway" here. Scrolls when the list is tall.
+        #   row 1  caution bar + minimal "What will launch" card (rebuildable)
+        #   row 2  save affordance (rebuildable)
+        #   row 3  separator + the state-dependent bottom bar (rebuildable): the
+        #          ONLY place a launch / "Launch anyway" is offered.
+        # The issue cards live in ``issues_frame``, an inner frame inside a canvas,
+        # so a tall list (5+ issues) scrolls instead of overflowing a small
+        # screen. A short list (0-2 issues) is shown in full with no scrollbar.
+        self._issues_outer = tk.Frame(body, bg=COLORS["card"])
+        self._issues_outer.grid(row=0, column=0, sticky="ew")
+        self._issues_outer.columnconfigure(0, weight=1)
+        self._issues_canvas = tk.Canvas(self._issues_outer, bg=COLORS["card"], height=1,
+                                        width=self.WRAP + 20, highlightthickness=0, bd=0)
+        self._issues_canvas.grid(row=0, column=0, sticky="ew")
+        self._issues_scroll = ttk.Scrollbar(self._issues_outer, orient="vertical",
+                                            command=self._issues_canvas.yview)
+        self._issues_canvas.configure(yscrollcommand=self._issues_scroll.set)
+        self.issues_frame = tk.Frame(self._issues_canvas, bg=COLORS["card"])
+        self.issues_frame.columnconfigure(0, weight=1)
+        self._issues_window = self._issues_canvas.create_window(
+            (0, 0), window=self.issues_frame, anchor="nw")
+        self._issues_canvas.bind(
+            "<Configure>",
+            lambda e: self._issues_canvas.itemconfigure(self._issues_window, width=e.width))
+        self._issues_scrollable = False
+        # Bound on the toplevel: every child has it in its bindtags, so the wheel
+        # works wherever the pointer is (MouseWheel = Windows/macOS, 4/5 = X11).
+        top.bind("<MouseWheel>", self._on_wheel)
+        top.bind("<Button-4>", lambda _e: self._scroll_issues(-2))
+        top.bind("<Button-5>", lambda _e: self._scroll_issues(2))
 
-        tk.Label(body, text="Starting the oTree server on:",
-                 bg=COLORS["card"], fg=COLORS["muted"], font=fonts.body,
-                 anchor="w").grid(row=row, column=0, sticky="ew")
-        row += 1
-        tk.Label(body, text="%s  (%s)" % (briefing.get("lab_label", ""), briefing.get("host", "")),
-                 bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold,
-                 anchor="w").grid(row=row, column=0, sticky="ew", pady=(2, 10))
-        row += 1
+        self.summary_frame = tk.Frame(body, bg=COLORS["card"])
+        self.summary_frame.grid(row=1, column=0, sticky="ew")
+        self.summary_frame.columnconfigure(0, weight=1)
 
-        if briefing.get("has_participant_links", False):
-            # Default room: a lab desktop shortcut exists (it encodes both the
-            # room AND which server, large vs small), so name the shortcut to
-            # open, not a raw link.
-            line = tk.Frame(body, bg=COLORS["card"])
-            line.grid(row=row, column=0, sticky="w", pady=(0, 12))
-            row += 1
-            tk.Label(line, text="Open", bg=COLORS["card"], fg=COLORS["muted"],
-                     font=fonts.body).pack(side="left")
-            chip = tk.Frame(line, bg=COLORS["accent_soft"], highlightthickness=1,
-                            highlightbackground=COLORS["accent"])
-            chip.pack(side="left", padx=7)
-            tk.Label(chip, text=briefing.get("shortcut_name", ""), bg=COLORS["accent_soft"],
-                     fg=COLORS["accent"], font=fonts.bold).pack(padx=9, pady=3)
-            tk.Label(line, text="on each participant computer.", bg=COLORS["card"],
-                     fg=COLORS["muted"], font=fonts.body).pack(side="left")
-        else:
-            # Non-default room: no lab shortcut points at it, so give the manual
-            # per-seat link to open on each computer, plus the warning.
-            warn = tk.Frame(body, bg=COLORS["warn_soft"], highlightthickness=1,
-                            highlightbackground=COLORS["card_line"])
-            warn.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-            row += 1
-            warn.columnconfigure(0, weight=1)
-            tk.Label(warn, bg=COLORS["warn_soft"], fg=COLORS["warn"], font=fonts.small,
-                     anchor="w", justify="left", wraplength=440,
-                     text=("The lab desktop shortcuts point at the %r room, which has participant "
-                           "PC links. You chose %r, which has no shortcut, so each computer must "
-                           "open the link below instead."
-                           % (briefing.get("default_room", "study"), briefing.get("room", "")))
-                     ).grid(row=0, column=0, sticky="ew", padx=10, pady=7)
-            tk.Label(body, text="Open this link on each participant computer, one per seat:",
-                     bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
-                     anchor="w").grid(row=row, column=0, sticky="ew")
-            row += 1
-            template = briefing.get("link_template", "")
-            linkrow = tk.Frame(body, bg=COLORS["card"])
-            linkrow.grid(row=row, column=0, sticky="ew", pady=(3, 10))
-            linkrow.columnconfigure(0, weight=1)
-            _copyable_line(linkrow, fonts, template).grid(row=0, column=0, sticky="ew")
-            self.copy_link_button = ttk.Button(
-                linkrow, text="Copy link", style="Slim.TButton",
-                command=lambda t=template: self._copy_link(t))
-            self.copy_link_button.grid(row=0, column=1, padx=(6, 0))
-            row += 1
+        self.save_frame = tk.Frame(body, bg=COLORS["card"])
+        self.save_frame.grid(row=2, column=0, sticky="ew")
+        self.save_frame.columnconfigure(0, weight=1)
 
-        # Admin credentials, combined into the briefing so the whole handoff is
-        # one popup (round 7). They are needed when the browser login box appears
-        # AFTER Okay, so the same block is also carried onto the post-launch
-        # takeover (the launch briefing itself) and does not vanish when Okay is hit.
-        if admin_username or admin_password:
-            _build_credentials_block(body, fonts, admin_username, admin_password,
-                                     pre_auth).grid(row=row, column=0, sticky="ew",
-                                                    pady=(0, 12))
-            row += 1
-
-        # The action row. Pre-launch it is Cancel / Okay; on Okay the popup does
-        # NOT close - everything above stays visible and only this row swaps to a
-        # short post-launch banner with a "Click here" fallback link (this one
-        # popup is both the confirmation and the post-launch takeover).
         self.action = tk.Frame(body, bg=COLORS["card"])
-        self.action.grid(row=row, column=0, sticky="ew", pady=(4, 0))
-        self.action.columnconfigure(0, weight=1)
-        ttk.Button(self.action, text="Cancel", command=self._close).grid(
-            row=0, column=0, sticky="w")
-        okay = tk.Button(self.action, text="Okay, start the experiment", command=self._okay,
-                         font=fonts.bold, bg=COLORS["accent"], fg="#ffffff",
-                         activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
-                         relief="flat", padx=14, pady=6, cursor="hand2")
-        okay.grid(row=0, column=1, sticky="e")
+        self.action.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.action.columnconfigure(1, weight=1)
 
-        # Enter confirms (Julian: the briefing is itself the confirmation step,
-        # so an accidental double-Enter is unlikely). Escape cancels.
-        top.bind("<Return>", lambda _e: self._okay())
+        self._render_summary()
+        self._render_issues()
+        self._render_save()
+        self._render_action()
+
         top.bind("<Escape>", lambda _e: self._close())
         _center_on(parent, top)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+
+    def _render_summary(self):
+        """(Re)build the caution bar + launch summary from a FRESH briefing, so an
+        inline fix (Change to SQLite clears the shared-db caution; picking a room
+        changes the per-seat link) is reflected without reopening the dialog."""
+        for child in list(self.summary_frame.winfo_children()):
+            child.destroy()
+        briefing = self.get_briefing()
+        r = 0
+        if briefing.get("caution"):
+            bar = tk.Frame(self.summary_frame, bg=COLORS["error"], highlightthickness=0)
+            bar.grid(row=r, column=0, sticky="ew", pady=(6, 10))
+            bar.columnconfigure(1, weight=1)
+            tk.Label(bar, text="▲", bg=COLORS["error"], fg="#ffffff",
+                     font=self.fonts.bold).grid(row=0, column=0, sticky="n", padx=(12, 0), pady=9)
+            tk.Label(bar, text=briefing.get("caution_text", ""), bg=COLORS["error"],
+                     fg="#ffffff", font=self.fonts.bold, anchor="w", justify="left",
+                     wraplength=self.WRAP - 30).grid(row=0, column=1, sticky="ew",
+                                                     padx=(8, 12), pady=9)
+            r += 1
+        tk.Label(self.summary_frame, text="WHAT WILL LAUNCH", bg=COLORS["card"],
+                 fg=COLORS["faint"], font=self.fonts.small_bold,
+                 anchor="w").grid(row=r, column=0, sticky="ew", pady=(2, 4))
+        r += 1
+        card = tk.Frame(self.summary_frame, bg=COLORS["card"], highlightthickness=1,
+                        highlightbackground=COLORS["card_line"])
+        card.grid(row=r, column=0, sticky="ew", pady=(0, 10))
+        card.columnconfigure(0, weight=1)
+        summary = tk.Frame(card, bg=COLORS["card"])
+        summary.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 0))
+        summary.columnconfigure(0, weight=1)
+        self._build_summary(summary, self.fonts, briefing,
+                            self.admin_username, self.admin_password, self.pre_auth)
+
+    # Text wrap width (px) shared by the issue rows and the summary.
+    WRAP = 500
+
+    def _build_summary(self, summary, fonts, briefing, admin_username, admin_password, pre_auth):
+        """The MINIMAL launch summary, the same in every state.
+
+        Top line: the LAB name with an (i) icon on the right; the (i) expands, in
+        place, what that lab is plus the Server and Room. Below: what to open on
+        the participant computers. For the study room the desktop shortcuts
+        already point at, that is just the shortcut chip, and the per-seat link
+        shows only while the pointer is over the chip. Any other room has no
+        shortcut, so its link is shown. The dashboard login sits behind its own
+        collapsed expander."""
+        sr = 0
+        self._hide_link_reveal()
+        self.copy_link_button = None
+        self.room_chip = None
+
+        # 1. Top line: the Lab, with the (i) that folds in Server + Room.
+        head = tk.Frame(summary, bg=COLORS["card"])
+        head.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+        head.columnconfigure(0, weight=1)
+        sr += 1
+        tk.Label(head, text=briefing.get("lab_label", ""), bg=COLORS["card"],
+                 fg=COLORS["text"], font=fonts.subhead, anchor="w").grid(
+            row=0, column=0, sticky="w")
+        self.info_icon = self._info_icon(head)
+        self.info_icon.grid(row=0, column=1, sticky="e")
+        if self._info_open:
+            info = tk.Frame(summary, bg=COLORS["field_off"], highlightthickness=1,
+                            highlightbackground=COLORS["card_line"])
+            info.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+            info.columnconfigure(1, weight=1)
+            sr += 1
+            tk.Label(info, text=self._lab_about(briefing), bg=COLORS["field_off"],
+                     fg=COLORS["muted"], font=fonts.small, anchor="w", justify="left",
+                     wraplength=self.WRAP - 50).grid(row=0, column=0, columnspan=2,
+                                                     sticky="ew", padx=10, pady=(7, 4))
+            server = briefing.get("host", "")
+            if server and briefing.get("port"):
+                server = "%s:%s" % (server, briefing.get("port"))
+            room_text = briefing.get("room", "")
+            if room_text and briefing.get("open_room"):
+                room_text += "  (open room, no seat list)"
+            fr = 1
+            for key, value in (("Server", server), ("Room", room_text)):
+                if not value:
+                    continue
+                tk.Label(info, text=key, bg=COLORS["field_off"], fg=COLORS["faint"],
+                         font=fonts.small, anchor="w", width=8).grid(
+                    row=fr, column=0, sticky="w", padx=(10, 0), pady=1)
+                tk.Label(info, text=value, bg=COLORS["field_off"], fg=COLORS["muted"],
+                         font=fonts.mono_small, anchor="w").grid(
+                    row=fr, column=1, sticky="w", pady=1)
+                fr += 1
+            tk.Frame(info, bg=COLORS["field_off"], height=6).grid(row=fr, column=0)
+
+        # 2. What to open on the participant computers. An open room has no seat
+        # label, so its link is the plain room link.
+        if briefing.get("open_room"):
+            link_label = "Each participant computer opens"
+            template = briefing.get("example_link", "")
+        else:
+            link_label = "Per-seat link (replace SEAT with the seat number)"
+            template = briefing.get("link_template", "")
+        if briefing.get("has_participant_links", False):
+            # The study room: the shortcut is already on the PCs, so the link is
+            # HIDDEN. It appears only while the pointer is over the chip (and a
+            # click on the chip copies it).
+            line = tk.Frame(summary, bg=COLORS["card"])
+            line.grid(row=sr, column=0, sticky="w", pady=(0, 8))
+            sr += 1
+            tk.Label(line, text="Open", bg=COLORS["card"], fg=COLORS["muted"],
+                     font=fonts.body).pack(side="left")
+            chip = self.room_chip = tk.Label(
+                line, text=briefing.get("shortcut_name", ""), bg=COLORS["accent_soft"],
+                fg=COLORS["accent"], font=fonts.bold, padx=9, pady=3, highlightthickness=1,
+                highlightbackground=COLORS["accent"], cursor="hand2")
+            chip.pack(side="left", padx=7)
+            tk.Label(line, text="on each participant computer.", bg=COLORS["card"],
+                     fg=COLORS["muted"], font=fonts.body).pack(side="left")
+            if template:
+                chip.bind("<Enter>", lambda _e, t=template, l=link_label:
+                          self._schedule_link_reveal(t, l))
+                chip.bind("<Leave>", lambda _e: self._hide_link_reveal())
+                chip.bind("<Button-1>", lambda _e, t=template: self._copy_link(t))
+        else:
+            # Non-study room: no shortcut exists, so the link IS shown. State the
+            # room, give the one-per-seat link to open on each computer, and note
+            # the study-room alternative (do NOT claim the shortcuts "will not
+            # match" — the link still works).
+            warn = tk.Frame(summary, bg=COLORS["warn_soft"], highlightthickness=1,
+                            highlightbackground=COLORS["card_line"])
+            warn.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+            sr += 1
+            warn.columnconfigure(0, weight=1)
+            tk.Label(warn, bg=COLORS["warn_soft"], fg=COLORS["warn"], font=fonts.small,
+                     anchor="w", justify="left", wraplength=self.WRAP - 50,
+                     text=("This session uses the room %r. Open the link below on each "
+                           "participant computer, one per seat. Or use the %r room to use "
+                           "the shortcuts already on the participant PC."
+                           % (briefing.get("room", ""),
+                              briefing.get("default_room", "study")))
+                     ).grid(row=0, column=0, sticky="ew", padx=10, pady=7)
+            if template:
+                # Label + Copy on one line, then the link at FULL width below so
+                # it is readable without scrolling the field.
+                linkrow = tk.Frame(summary, bg=COLORS["card"])
+                linkrow.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+                linkrow.columnconfigure(0, weight=1)
+                sr += 1
+                tk.Label(linkrow, text=link_label, bg=COLORS["card"], fg=COLORS["muted"],
+                         font=fonts.small, anchor="w").grid(row=0, column=0, sticky="ew")
+                self.copy_link_button = ttk.Button(
+                    linkrow, text="Copy link", style="Slim.TButton",
+                    command=lambda t=template: self._copy_link(t))
+                self.copy_link_button.grid(row=0, column=1, padx=(6, 0))
+                _copyable_line(linkrow, fonts, template).grid(
+                    row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+
+        # Dashboard login: collapsed by default, so the username/password are not
+        # on screen until asked for (the password stays masked behind Show).
+        if admin_username or admin_password:
+            self._expander(summary, sr, "Dashboard login (if the browser asks)", "_creds_open")
+            sr += 1
+            if self._creds_open:
+                _build_credentials_block(summary, fonts, admin_username, admin_password,
+                                         pre_auth).grid(row=sr, column=0, sticky="ew",
+                                                        pady=(2, 6))
+                sr += 1
+        tk.Frame(summary, bg=COLORS["card"], height=6).grid(row=sr, column=0)
+
+    def _lab_about(self, briefing):
+        """One plain sentence on what the chosen lab is (from the briefing only)."""
+        name = briefing.get("lab_label", "") or "This lab"
+        count = briefing.get("seat_count") or 0
+        if briefing.get("open_room"):
+            seats = "Open room: any computer can join, there is no seat list."
+        elif briefing.get("seat_mode") == "file":
+            seats = "%d seat labels, from your own seat file." % count
+        else:
+            seats = "%d participant seats." % count
+        return ("%s. The oTree server for this session runs on the server below, "
+                "and the participant computers join the room below. %s" % (name, seats))
+
+    def _info_icon(self, parent):
+        """The (i) on the lab line: a drawn circle (no glyph a font could lack).
+        A click expands the lab / Server / Room details in place, and the state
+        survives the summary being rebuilt after an inline fix / re-check."""
+        size = 20
+        icon = tk.Canvas(parent, width=size, height=size, bg=COLORS["card"],
+                         highlightthickness=0, bd=0, cursor="hand2")
+        fill = COLORS["accent"] if self._info_open else COLORS["card"]
+        ink = "#ffffff" if self._info_open else COLORS["accent"]
+        icon.create_oval(2, 2, size - 2, size - 2, outline=COLORS["accent"], fill=fill, width=1)
+        icon.create_text(size // 2, size // 2, text="i", fill=ink, font=self.fonts.small_bold)
+
+        def _toggle(_event=None):
+            self._info_open = not self._info_open
+            self._render_summary()
+            try:
+                self.top.update_idletasks()
+            except tk.TclError:
+                pass
+        icon.bind("<Button-1>", _toggle)
+        return icon
+
+    def _schedule_link_reveal(self, link, label, delay=120):
+        self._hide_link_reveal()
+        try:
+            self._reveal_after = self.top.after(
+                delay, lambda: self._show_link_reveal(link, label))
+        except tk.TclError:
+            self._reveal_after = None
+
+    def _show_link_reveal(self, link, label):
+        """The hover card under the room chip: "Open this desktop shortcut on each
+        PC" + the per-seat link, for reference. It is a frame PLACED over the
+        dialog's own content (not a new Toplevel), so it cannot disturb the modal
+        grab or the window stacking on any platform, and the layout never jumps."""
+        self._reveal_after = None
+        chip = self.room_chip
+        try:
+            if chip is None or not chip.winfo_exists() or self._link_reveal is not None:
+                return
+            top = self.top
+            card = tk.Frame(top, bg="#2c3440", highlightthickness=1,
+                            highlightbackground="#2c3440")
+            tk.Label(card, text="Open this desktop shortcut on each PC.", bg="#2c3440",
+                     fg="#f2f5f9", font=self.fonts.small_bold, anchor="w").pack(
+                fill="x", padx=9, pady=(6, 1))
+            tk.Label(card, text=label + ", for reference. Click the chip to copy it.",
+                     bg="#2c3440", fg="#c3cad4", font=self.fonts.small, anchor="w").pack(
+                fill="x", padx=9)
+            tk.Label(card, text=link, bg="#2c3440", fg="#f2f5f9", font=self.fonts.mono_small,
+                     anchor="w").pack(fill="x", padx=9, pady=(3, 7))
+            card.update_idletasks()
+            width, height = card.winfo_reqwidth(), card.winfo_reqheight()
+            x = chip.winfo_rootx() - top.winfo_rootx()
+            y = chip.winfo_rooty() - top.winfo_rooty() + chip.winfo_height() + 4
+            x = max(8, min(x, top.winfo_width() - width - 8))
+            if y + height > top.winfo_height() - 4:        # no room below: go above
+                y = max(4, chip.winfo_rooty() - top.winfo_rooty() - height - 4)
+            card.place(x=x, y=y)
+            card.lift()
+            self._link_reveal = card
+        except tk.TclError:
+            self._link_reveal = None
+
+    def _hide_link_reveal(self):
+        after_id, self._reveal_after = getattr(self, "_reveal_after", None), None
+        if after_id is not None:
+            try:
+                self.top.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        card, self._link_reveal = getattr(self, "_link_reveal", None), None
+        if card is not None:
+            try:
+                card.destroy()
+            except tk.TclError:
+                pass
+
+    def _expander(self, parent, row, text, flag):
+        """A small click-to-reveal row ("▸ text" collapsed / "▾ text" open).
+        ``flag`` names the bool attribute that holds its state, so the state
+        survives the summary being rebuilt after an inline fix / re-check."""
+        is_open = bool(getattr(self, flag))
+        link = tk.Label(parent, text=("▾  " if is_open else "▸  ") + text, bg=COLORS["card"],
+                        fg=COLORS["accent"], font=self.fonts.small_bold, cursor="hand2",
+                        anchor="w")
+        link.grid(row=row, column=0, sticky="w", pady=(0, 6))
+
+        def _toggle(_event=None):
+            setattr(self, flag, not is_open)
+            self._render_summary()
+            try:
+                self.top.update_idletasks()
+            except tk.TclError:
+                pass
+        link.bind("<Button-1>", _toggle)
+        return link
+
+    def _render_issues(self):
+        """(Re)build the issues area: every must-fix card first, then every
+        warning card, each with its inline fix button or a short hint. No banner,
+        no "launch anyway" here — that lives only in the bottom bar. Called again
+        after an inline fix or a re-check, so a resolved issue simply disappears."""
+        for child in list(self.issues_frame.winfo_children()):
+            child.destroy()
+        self._issues = list(self.gather_issues())
+        r = 0
+        blocks = [i for i in self._issues if i.get("level") == "block"]
+        warns = [i for i in self._issues if i.get("level") != "block"]
+        # Must-fix at the very top: blocks disable Launch, warnings allow "Launch
+        # anyway" (bottom bar). Order WITHIN each group is core's.
+        for issue in blocks + warns:
+            self._render_issue_row(r, issue)
+            r += 1
+        if self._fix_note is not None:
+            ok, msg = self._fix_note
+            tk.Label(self.issues_frame, text=("✓ " if ok else "") + msg,
+                     bg=COLORS["card"], fg=COLORS["ok"] if ok else COLORS["error"],
+                     font=self.fonts.small_bold, anchor="w", justify="left",
+                     wraplength=450).grid(row=r, column=0, sticky="ew", pady=(2, 6))
+            r += 1
+        self._sync_issues_scroll()
+
+    def _max_issues_height(self):
+        """Tallest the issues area may grow before it scrolls: roughly three
+        cards, less on a short screen so the summary + bottom bar stay in view."""
+        try:
+            screen = self.top.winfo_screenheight()
+        except tk.TclError:
+            screen = 800
+        return max(150, min(340, screen - 520))
+
+    def _sync_issues_scroll(self):
+        """Size the issues canvas to its content; past the cap, fix the height
+        and show the scrollbar. Few issues => full height, no scrollbar."""
+        try:
+            self.issues_frame.update_idletasks()
+            has_rows = bool(self.issues_frame.winfo_children())
+            need = self.issues_frame.winfo_reqheight() if has_rows else 0
+            if not need:
+                self._issues_scrollable = False
+                self._issues_scroll.grid_remove()
+                self._issues_outer.grid_remove()
+                return
+            self._issues_outer.grid()
+            cap = self._max_issues_height()
+            self._issues_scrollable = need > cap
+            # The scrollbar takes its width FROM the canvas, so the dialog keeps
+            # the same steady width whether or not the list scrolls.
+            bar = (self._issues_scroll.winfo_reqwidth() + 4) if self._issues_scrollable else 0
+            self._issues_canvas.configure(height=min(need, cap), width=self.WRAP + 20 - bar,
+                                          scrollregion=(0, 0, self.WRAP + 20 - bar, need))
+            if self._issues_scrollable:
+                self._issues_scroll.grid(row=0, column=1, sticky="ns", padx=(4, 0))
+            else:
+                self._issues_scroll.grid_remove()
+            self._issues_canvas.yview_moveto(0)
+        except tk.TclError:
+            pass
+
+    def _scroll_issues(self, units):
+        if self._issues_scrollable:
+            try:
+                self._issues_canvas.yview_scroll(units, "units")
+            except tk.TclError:
+                pass
+
+    def _on_wheel(self, event):
+        delta = getattr(event, "delta", 0)
+        if not delta:
+            return
+        # Windows sends multiples of 120; macOS sends small raw deltas.
+        step = -int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+        self._scroll_issues(step * 2)
+
+    # How each issue level looks. Presentation only: the level itself (and so
+    # whether Launch is allowed) is decided by core / gather_issues.
+    _LEVEL_STYLE = {
+        "block": {"fg": "error", "bg": "error_soft", "glyph": "■"},
+        "warn": {"fg": "warn", "bg": "warn_soft", "glyph": "▲"},
+    }
+
+    def _fix_button(self, parent, text, command):
+        """The inline one-click fix: a solid crimson button, unmistakably
+        clickable next to the soft row background (hover darkens it)."""
+        button = tk.Button(parent, text=text, command=command, font=self.fonts.small_bold,
+                           bg=COLORS["accent"], fg="#ffffff",
+                           activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
+                           relief="flat", bd=0, padx=12, pady=4, cursor="hand2")
+        button.bind("<Enter>", lambda _e: button.configure(bg=COLORS["accent_dark"]))
+        button.bind("<Leave>", lambda _e: button.configure(bg=COLORS["accent"]))
+        return button
+
+    def _render_issue_row(self, row, issue):
+        level = "block" if issue.get("level") == "block" else "warn"
+        style = self._LEVEL_STYLE[level]
+        bg = COLORS[style["bg"]]
+        fix = issue.get("fix")
+        is_block_info = (issue.get("info") == "block")
+        is_room_pick = (issue.get("kind") == "room_pick")
+        # Row anatomy:  [colour rail] [glyph] [title / hint / secondary]  [fix button]
+        frame = tk.Frame(self.issues_frame, bg=bg, highlightthickness=0)
+        frame.grid(row=row, column=0, sticky="ew", pady=(0, 5))
+        frame.columnconfigure(2, weight=1)
+        tk.Frame(frame, bg=COLORS[style["fg"]], width=4).grid(
+            row=0, column=0, rowspan=4, sticky="ns")
+        tk.Label(frame, text=style["glyph"], bg=bg, fg=COLORS[style["fg"]],
+                 font=self.fonts.small_bold).grid(row=0, column=1, sticky="n",
+                                                  padx=(9, 0), pady=(9, 0))
+        # A fix button sits to the right of its issue, so reserve room for it
+        # (and for the scrollbar a tall list gets).
+        wrap = self.WRAP - (206 if fix else 66)
+        tk.Label(frame, text=issue.get("title", ""), bg=bg, fg=COLORS["text"],
+                 font=self.fonts.bold if level == "block" else self.fonts.body,
+                 anchor="w", justify="left", wraplength=wrap).grid(
+            row=0, column=2, sticky="ew", padx=(7, 10), pady=(7, 2))
+        hint = str(issue.get("hint", "")).strip()
+        if hint:
+            tk.Label(frame, text=hint, bg=bg, fg=COLORS["muted"], font=self.fonts.small,
+                     anchor="w", justify="left", wraplength=wrap).grid(
+                row=1, column=2, sticky="ew", padx=(7, 10), pady=(0, 2))
+        if fix:
+            self._fix_button(frame, issue.get("fix_label", "Fix"),
+                             lambda f=fix: self._run_fix(f)).grid(
+                row=0, column=3, rowspan=2, sticky="e", padx=(0, 10), pady=8)
+        if is_room_pick or (is_block_info and self.on_view_block):
+            actions = tk.Frame(frame, bg=bg)
+            actions.grid(row=2, column=2, columnspan=2, sticky="w", padx=(7, 10), pady=(2, 0))
+            if is_room_pick:
+                self._render_room_pick(actions, bg, issue)
+            if is_block_info and self.on_view_block:
+                link = tk.Label(actions, text="More information", bg=bg,
+                                fg=COLORS["accent"], font=self.fonts.small_bold, cursor="hand2")
+                link.pack(side="left")
+                link.bind("<Button-1>", lambda _e: self.on_view_block())
+        tk.Frame(frame, bg=bg, height=7).grid(row=3, column=2)
+
+    def _render_room_pick(self, actions, bg, issue):
+        """Inline "Rooms found" picker: choose one of the project's own rooms and
+        apply it right here, so the room issue clears without leaving the screen."""
+        rooms = [r for r in issue.get("rooms", []) if r]
+        apply_room = issue.get("apply_room")
+        if not rooms or apply_room is None:
+            return
+        tk.Label(actions, text="Rooms found:", bg=bg, fg=COLORS["muted"],
+                 font=self.fonts.small).pack(side="left", padx=(0, 6))
+        choice = tk.StringVar(actions, value=rooms[0])
+        combo = ttk.Combobox(actions, textvariable=choice, state="readonly",
+                             values=rooms, width=max(10, min(24, max(len(r) for r in rooms) + 2)))
+        combo.pack(side="left", padx=(0, 6))
+
+        def _use():
+            self._run_fix(lambda: apply_room(choice.get()))
+        self._fix_button(actions, "Use this room", _use).pack(side="left")
+
+    def _render_save(self):
+        for child in list(self.save_frame.winfo_children()):
+            child.destroy()
+        if self._launching or not self.needs_save():
+            return
+        line = tk.Frame(self.save_frame, bg=COLORS["card"])
+        line.grid(row=0, column=0, sticky="w", pady=(2, 4))
+        tk.Label(line, text="These settings aren’t saved as a config yet.",
+                 bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
+        link = tk.Label(line, text="Save as a new config", bg=COLORS["card"],
+                        fg=COLORS["accent"], font=self.fonts.small_bold, cursor="hand2")
+        link.pack(side="left", padx=(6, 0))
+        link.bind("<Button-1>", lambda _e: self._do_save())
+
+    def _render_action(self):
+        """The state-dependent bottom bar — the ONLY place a launch is offered:
+          all clear     [Cancel]              ✓ Ready to launch   [Launch]
+          warnings only [Cancel] [Re-check]   ( ⚠ N warnings  [Launch anyway] )
+          must-fix      [Cancel] [Re-check]   Fix the must-fix item above…  [Launch] (disabled)
+        """
+        for child in list(self.action.winfo_children()):
+            child.destroy()
+        n_block = sum(1 for i in self._issues if i.get("level") == "block")
+        n_warn = sum(1 for i in self._issues if i.get("level") == "warn")
+        tk.Frame(self.action, bg=COLORS["card_line"], height=1).grid(
+            row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        left = tk.Frame(self.action, bg=COLORS["card"])
+        left.grid(row=1, column=0, sticky="w")
+        ttk.Button(left, text="Cancel", command=self._close).pack(side="left")
+        if n_block or n_warn:
+            # Something fixed outside the launcher (database started, port freed)?
+            ttk.Button(left, text="Re-check", style="Slim.TButton",
+                       command=self._recheck).pack(side="left", padx=(8, 0))
+        if n_block:
+            # A hard block stands: launching is disabled until it is fixed.
+            tk.Label(self.action, text="Fix the %s above to launch."
+                     % ("must-fix item" if n_block == 1 else "%d must-fix items" % n_block),
+                     bg=COLORS["card"], fg=COLORS["error"], font=self.fonts.small,
+                     anchor="e").grid(row=1, column=1, sticky="e", padx=(0, 10))
+            tk.Button(self.action, text="Launch", state="disabled", relief="flat", bd=0,
+                      font=self.fonts.bold, bg=COLORS["field_off"], fg=COLORS["faint"],
+                      padx=16, pady=6, disabledforeground=COLORS["faint"],
+                      highlightthickness=1, highlightbackground=COLORS["card_line"],
+                      cursor="arrow").grid(row=1, column=2, sticky="e")
+            self.top.bind("<Return>", lambda _e: None)
+            return
+        if n_warn:
+            # The single highlighted callout: icon + "N warnings" + Launch anyway.
+            callout = tk.Frame(self.action, bg=COLORS["warn_soft"], highlightthickness=1,
+                               highlightbackground=COLORS["warn"])
+            callout.grid(row=1, column=1, columnspan=2, sticky="e")
+            tk.Label(callout, text="⚠", bg=COLORS["warn_soft"], fg=COLORS["warn"],
+                     font=self.fonts.bold).pack(side="left", padx=(12, 0), pady=7)
+            tk.Label(callout, text="%d warning%s" % (n_warn, "" if n_warn == 1 else "s"),
+                     bg=COLORS["warn_soft"], fg=COLORS["warn"],
+                     font=self.fonts.bold).pack(side="left", padx=(6, 12), pady=7)
+            okay = tk.Button(callout, text="Launch anyway", command=self._okay,
+                             font=self.fonts.bold, bg=COLORS["warn"], fg="#ffffff",
+                             activebackground=COLORS["warn"], activeforeground="#ffffff",
+                             relief="flat", bd=0, padx=16, pady=6, cursor="hand2")
+            okay.pack(side="left", padx=(0, 7), pady=7)
+        else:
+            ready = tk.Frame(self.action, bg=COLORS["card"])
+            ready.grid(row=1, column=1, sticky="e", padx=(0, 12))
+            tk.Label(ready, text="✓", bg=COLORS["card"], fg=COLORS["ok"],
+                     font=self.fonts.bold).pack(side="left")
+            tk.Label(ready, text="Ready to launch", bg=COLORS["card"], fg=COLORS["ok"],
+                     font=self.fonts.bold).pack(side="left", padx=(5, 0))
+            okay = tk.Button(self.action, text="Launch", command=self._okay,
+                             font=self.fonts.bold, bg=COLORS["accent"], fg="#ffffff",
+                             activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
+                             relief="flat", bd=0, padx=20, pady=6, cursor="hand2")
+            okay.grid(row=1, column=2, sticky="e")
+        self.launch_button = okay
+        self.top.bind("<Return>", lambda _e: self._okay())
         try:
             okay.focus_set()
         except tk.TclError:
             pass
+
+    def _run_fix(self, fix):
         try:
-            top.grab_set()
+            result = fix()
+        except Exception as error:  # a fix must never crash the dialog
+            result = (False, str(error))
+        if result is None:
+            # Nothing happened (e.g. the folder picker was cancelled): no note.
+            self._fix_note = None
+        else:
+            ok, msg = result
+            self._fix_note = (bool(ok), str(msg))
+        self._rerender()
+
+    def _recheck(self):
+        self._fix_note = None
+        self._rerender()
+
+    def _do_save(self):
+        if self.on_save is not None:
+            self.on_save()
+        self._rerender()
+
+    def _rerender(self):
+        self._render_summary()
+        self._render_issues()
+        self._render_save()
+        self._render_action()
+        try:
+            self.top.update_idletasks()
+            _center_on(self.parent, self.top)
         except tk.TclError:
             pass
 
     def _copy_link(self, text):
+        """Copy the per-seat link. Feedback goes on the Copy link button when the
+        link is on screen (non-study room), else on the room chip it hides behind."""
         try:
             self.top.clipboard_clear()
             self.top.clipboard_append(text)
-            self.copy_link_button.configure(text="Copied")
-            self.top.after(1200, lambda: self.copy_link_button.configure(text="Copy link"))
         except tk.TclError:
-            pass
+            return
+        button, chip = self.copy_link_button, self.room_chip
+        self._hide_link_reveal()
+
+        def _flash(widget, during, after):
+            def _restore():
+                try:
+                    if widget.winfo_exists():
+                        widget.configure(text=after)
+                except tk.TclError:
+                    pass
+            try:
+                widget.configure(text=during)
+                self.top.after(1200, _restore)
+            except tk.TclError:
+                pass
+        if button is not None:
+            _flash(button, "Copied", "Copy link")
+        elif chip is not None:
+            _flash(chip, "Link copied", str(chip.cget("text")))
 
     def _okay(self):
-        # Start the launch, then transition THIS popup into the takeover state
-        # (it stays open, content unchanged, only the action row adapts).
+        # Start the launch, then transition THIS popup into a neutral "launching"
+        # state. It does NOT claim success yet: the real success/failure banner is
+        # set later by set_result, driven by the launch worker's actual outcome.
+        if self._launching:
+            return
+        # Safety net: never launch while a hard block still stands (the button is
+        # disabled in that state, but Return could otherwise reach here).
+        if any(i.get("level") == "block" for i in self._issues):
+            return
+        self._launching = True
         self.on_okay()
-        self._enter_takeover()
+        self._enter_launching()
 
-    def _enter_takeover(self):
+    def _enter_launching(self):
         try:
-            self.top.title("Session running")
+            self.top.title("Launching…")
         except tk.TclError:
             pass
+        # Clear the issues + save affordance so the popup becomes a clean handoff.
+        for frame in (self.issues_frame, self.save_frame):
+            for child in list(frame.winfo_children()):
+                child.destroy()
+        self._sync_issues_scroll()
         for child in list(self.action.winfo_children()):
             child.destroy()
-        line = tk.Frame(self.action, bg=COLORS["card"])
-        line.grid(row=0, column=0, sticky="w")
-        tk.Label(line, text="Experiment launched, dashboard opening. No dashboard? ",
+        self._handoff_line = tk.Frame(self.action, bg=COLORS["card"])
+        self._handoff_line.grid(row=0, column=0, sticky="w")
+        tk.Label(self._handoff_line,
+                 text="Starting the server… this window will confirm when it is up.",
                  bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
-        link = tk.Label(line, text="Click here", bg=COLORS["card"], fg=COLORS["accent"],
-                        font=self.fonts.small_bold, cursor="hand2")
-        link.pack(side="left")
-        link.bind("<Button-1>", lambda _e: self._open_takeover_url())
-        # Enter/Escape/window-close now just dismiss the takeover; the server
-        # keeps running in its own window regardless.
+        # While launching, closing/Enter/Escape just dismiss this popup; the
+        # launch keeps running and reports to the activity log regardless.
         self.top.bind("<Return>", lambda _e: self._close())
         self.top.bind("<Escape>", lambda _e: self._close())
         self.top.protocol("WM_DELETE_WINDOW", self._close)
@@ -4850,6 +5712,45 @@ class LaunchBriefingDialog(object):
             _center_on(self.parent, self.top)
         except tk.TclError:
             pass
+
+    def set_result(self, ok, info):
+        """Show the REAL outcome. On success ``info`` is the open-dashboard URL
+        and the banner offers a working link; on failure ``info`` is a reason and
+        the banner shows a clear failure state — never a false 'dashboard opening'.
+        """
+        line = getattr(self, "_handoff_line", None)
+        if line is None:
+            return
+        try:
+            for child in list(line.winfo_children()):
+                child.destroy()
+        except tk.TclError:
+            return
+        if ok:
+            if info:
+                self.takeover_url = info
+            try:
+                self.top.title("Session running")
+            except tk.TclError:
+                pass
+            tk.Label(line, text="Experiment launched, dashboard opening. No dashboard? ",
+                     bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
+            link = tk.Label(line, text="Click here", bg=COLORS["card"], fg=COLORS["accent"],
+                            font=self.fonts.small_bold, cursor="hand2")
+            link.pack(side="left")
+            link.bind("<Button-1>", lambda _e: self._open_takeover_url())
+        else:
+            try:
+                self.top.title("Launch failed")
+            except tk.TclError:
+                pass
+            tk.Label(line, text="Launch failed — see the activity log.",
+                     bg=COLORS["card"], fg=COLORS["error"],
+                     font=self.fonts.small_bold, anchor="w", justify="left").pack(side="left")
+            if info:
+                tk.Label(self.action, text=str(info), bg=COLORS["card"], fg=COLORS["muted"],
+                         font=self.fonts.small, anchor="w", justify="left",
+                         wraplength=460).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     def _open_takeover_url(self):
         if self.takeover_url:
@@ -4944,7 +5845,7 @@ class CreateDatabaseDialog(object):
 
         _center_on(parent, top)
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
 
@@ -5101,7 +6002,7 @@ class RoomPickerDialog(object):
                                                                   pady=(12, 0))
         _center_on(parent, top)
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
         self._start_enumerate()
@@ -5254,7 +6155,7 @@ class LabPresetEditDialog(object):
                   cursor="hand2").grid(row=0, column=1, sticky="e")
         _center_on(parent, top)
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
 
@@ -5397,7 +6298,7 @@ class LabSettingsDialog(object):
         self._reload_tree()
         _center_on(parent, top, divisor=6)
         try:
-            top.grab_set()
+            _grab_modal(top)
         except tk.TclError:
             pass
 
@@ -5765,7 +6666,7 @@ def run_first_run_wizard(root):
     """Show the first-run wizard modally. Returns True if lab_info.json was
     written, False if the user cancelled."""
     wizard = FirstRunWizard(root)
-    wizard.top.grab_set()
+    _grab_modal(wizard.top)
     root.wait_window(wizard.top)
     return wizard.ok
 

@@ -170,9 +170,17 @@
     {
       "r": 1,
       "c": 4,
-      "kind": "wall",
-      "colspan": 3,
-      "rowspan": 1.5
+      "kind": "wall"
+    },
+    {
+      "r": 1,
+      "c": 5,
+      "kind": "wall"
+    },
+    {
+      "r": 1,
+      "c": 6,
+      "kind": "wall"
     }
   ]
 }

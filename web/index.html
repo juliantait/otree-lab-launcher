@@ -1,0 +1,1813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oTree Lab Launcher</title>
+<style>
+/* ===========================================================================
+   oTree Lab Launcher — web re-skin (v2, rebuilt on the Tk layout)
+   Information architecture mirrors the Tkinter desktop app:
+     • left sidebar = saved configs (+ gear -> Lab settings)
+     • main = "1. oTree project", "2. Database" cards (left col) + "3. Lab"
+       card (right col), an activity log, and the Launch button bottom-right.
+   Styling reuses the dark VS Code-grey / crimson polish language from the
+   first pass (rounded scale, soft shadows/gradients, focus rings, launch glow).
+   Self-contained: all CSS/JS inline, system fonts only, no external requests.
+   =========================================================================== */
+:root{
+  --bg:            #1e1e20;
+  --bg-deep:       #171719;
+  --panel:         #252528;
+  --panel-2:       #2e2e31;
+  --panel-3:       #37373b;
+  --line:          #3a3a3e;
+  --line-soft:     #303033;
+  --text:          #dcdce0;
+  --text-strong:   #f4f4f6;
+  --muted:         #9d9da3;
+  --faint:         #71717a;
+  --accent:        #e0466e;
+  --accent-dim:    #b7315a;
+  --accent-soft:   rgba(224,70,110,.15);
+  --focus:         #5aa3ff;
+  --focus-soft:    rgba(90,163,255,.25);
+  --ok:            #4ec98a;
+  --ok-soft:       rgba(78,201,138,.13);
+  --warn:          #e6c069;
+  --warn-soft:     rgba(230,192,105,.12);
+  --warn-line:     #6b5a2c;
+  --err:           #f0776b;
+  --err-soft:      rgba(240,119,107,.13);
+  --caution:       #b3261e;
+  --r-xs:          7px;
+  --r-sm:          10px;
+  --r-md:          13px;
+  --r-lg:          18px;
+  --r-xl:          22px;
+  --shadow-sm:     0 1px 2px rgba(0,0,0,.28);
+  --shadow-md:     0 3px 10px rgba(0,0,0,.30);
+  --shadow-lg:     0 14px 40px rgba(0,0,0,.45);
+  --mono: "SF Mono","Cascadia Code","JetBrains Mono","Consolas","Menlo","DejaVu Sans Mono",monospace;
+  --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{
+  margin:0;font-family:var(--sans);font-size:13.5px;line-height:1.55;color:var(--text);
+  background:
+    radial-gradient(120% 80% at 12% -6%, rgba(224,70,110,.05), transparent 55%),
+    var(--bg);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  /* The window itself never scrolls — each column owns its own scroll region, so
+     an aggressive swipe can't drag the whole page (overscroll bounce). */
+  overflow:hidden;overscroll-behavior:none;
+}
+
+/* ============================ APP SHELL ============================ */
+/* Fixed to the window height with each column its own scroll region: the left
+   SAVED CONFIGS panel and the right main column scroll independently and never
+   drag one another or the page. */
+.app{display:grid;grid-template-columns:clamp(226px,21vw,290px) minmax(0,1fr);height:100vh;overflow:hidden}
+
+/* ---------------------------- SIDEBAR ---------------------------- */
+/* Full-bleed, full-height rail: one solid colour running to the window edges,
+   no rounded card / margins, separated from the content by a single hairline.
+   The content column carries its own left gutter, so nothing butts the rail. */
+.sidebar{
+  background:var(--bg-deep);
+  border:0;border-right:1px solid var(--line-soft);border-radius:0;
+  display:flex;flex-direction:column;
+  margin:0;height:100vh;overflow:hidden;
+  box-shadow:none;
+}
+.side-brand{
+  display:flex;align-items:center;gap:10px;padding:17px 18px 12px;
+}
+.side-brand .mark{
+  font-size:14.5px;font-weight:700;letter-spacing:.01em;color:var(--text-strong);
+  display:flex;align-items:center;gap:9px;margin-right:auto;min-width:0;
+}
+.side-brand .mark::before{
+  content:"";width:9px;height:9px;border-radius:3px;background:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft);flex:none;
+}
+.gear{
+  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid transparent;
+  background:transparent;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;
+  display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s,border-color .12s;
+}
+.gear:hover{background:var(--panel-2);color:var(--text-strong);border-color:var(--line)}
+.side-head{
+  display:flex;align-items:center;gap:8px;padding:6px 18px 8px;
+}
+.side-head .cap{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);margin-right:auto}
+.side-head .count{font-size:11px;color:var(--faint)}
+.side-head .add{
+  width:22px;height:22px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);
+  color:var(--muted);cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.side-head .add:hover{background:var(--panel-3);color:var(--text);border-color:#4a4a4d}
+.cfg-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 10px 14px}
+.cfg-row{
+  position:relative;display:block;width:100%;text-align:left;cursor:pointer;
+  background:transparent;border:1px solid transparent;border-radius:var(--r-md);
+  padding:11px 12px 11px 14px;margin:2px 0;color:inherit;font-family:inherit;
+  transition:background .12s ease,border-color .12s;
+}
+.cfg-row:hover{background:var(--panel)}
+.cfg-row.sel{background:var(--panel);border-color:var(--line-soft);box-shadow:var(--shadow-sm)}
+.cfg-row.sel::before{
+  content:"";position:absolute;left:-1px;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--accent);
+}
+.cfg-row .nm{display:block;font-size:13px;color:var(--text-strong);font-weight:500;padding-right:16px;line-height:1.35}
+.cfg-row.sel .nm{font-weight:700}
+.cfg-row .meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:2px}
+.cfg-row .fold{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.cfg-row .fold.empty{color:var(--faint);font-style:italic}
+.cfg-row .fold:not(.empty)::before{content:"\1F4C1";font-style:normal;opacity:.6;font-size:10px}
+.cfg-row .au{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.cfg-row .au::before{content:"\1F464";font-style:normal;opacity:.6;font-size:10px}
+.cfg-row .wh{display:block;font-size:11px;color:var(--faint);margin-top:2px}
+.cfg-row .del{
+  position:absolute;top:8px;right:7px;width:18px;height:18px;line-height:16px;text-align:center;
+  border-radius:5px;font-size:12px;color:var(--faint);background:transparent;cursor:pointer;
+  opacity:0;transition:opacity .1s,color .1s,background .1s;
+}
+.cfg-row:hover .del,.cfg-row .del:focus-visible{opacity:1}
+.cfg-row .del:hover{color:var(--err);background:var(--err-soft)}
+
+/* ---------------------------- MAIN ---------------------------- */
+/* Its own scroll region (height:100vh + overflow-y:auto), so the config content
+   scrolls independently of the left panel and the "Config: …" header stays put. */
+.main{display:flex;flex-direction:column;min-width:0;height:100vh;overflow-y:auto;overscroll-behavior:contain}
+.main-head{
+  position:sticky;top:0;z-index:20;
+  display:flex;align-items:flex-start;gap:16px;padding:18px clamp(16px,2.4vw,26px) 14px;
+  background:rgba(28,28,30,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft);
+}
+.main-head .htext{margin-right:auto;min-width:0}
+.main-head h1{margin:0;font-size:20px;font-weight:650;color:var(--text-strong);letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+.content{
+  flex:1;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
+  gap:clamp(12px,1.6vw,18px);padding:22px clamp(16px,2.4vw,26px) 8px;align-items:start;
+}
+@media (max-width:1080px){ .content{grid-template-columns:1fr} }
+.col{display:flex;flex-direction:column;gap:18px;min-width:0}
+
+/* card */
+.card{
+  background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r-xl);
+  padding:18px 20px 20px;box-shadow:var(--shadow-md);min-width:0;
+}
+.card-num{
+  display:flex;align-items:center;gap:9px;margin:0 0 14px;
+  font-size:14px;font-weight:700;color:var(--text-strong);letter-spacing:.005em;
+}
+.card-num .n{
+  flex:none;min-width:22px;height:22px;padding:0 6px;border-radius:6px;
+  background:var(--accent-soft);border:1px solid rgba(224,70,110,.28);color:var(--accent);
+  font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;
+}
+.card--lab{
+  position:relative;overflow:hidden;
+  background:radial-gradient(150% 120% at 100% -14%, rgba(224,70,110,.09), transparent 46%),var(--panel);
+}
+.card--lab::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent 26%,var(--accent-dim) 68%,var(--accent))}
+
+/* project path box */
+.pathrow{display:flex;align-items:center;gap:10px}
+.pathbox{
+  flex:1;min-width:0;font-size:12.5px;color:var(--text);font-family:var(--mono);
+  background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 13px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left;
+}
+.pathbox.empty{color:var(--faint);font-family:var(--sans);direction:ltr}
+.pathrow input.pathinput{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px}
+
+/* validation status line */
+.statusline{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;margin-top:11px;line-height:1.5}
+.statusline .dot{flex:none;margin-top:1px;font-size:10px}
+.statusline.ok{color:var(--ok)} .statusline.ok .dot{color:var(--ok)}
+.statusline.warn{color:var(--warn)} .statusline.warn .dot{color:var(--warn)}
+.statusline.err{color:var(--err)} .statusline.err .dot{color:var(--err)}
+.statusline.muted{color:var(--muted)} .statusline.muted .dot{color:var(--faint)}
+.bullets{margin:8px 0 0;padding-left:22px}
+.bullets li{font-size:12.5px;color:var(--text);margin:2px 0}
+
+.divider{height:1px;background:var(--line-soft);margin:14px 0}
+
+/* generic label + control rows */
+.subhead{font-size:12px;font-weight:700;color:var(--text-strong);margin:0 0 8px}
+.adminrow{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px}
+.adminrow .lead{font-size:12.5px;font-weight:700;color:var(--text-strong)}
+.adminrow .lbl{font-size:12px;color:var(--muted)}
+.adminrow .editlink{margin-left:auto;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;background:none;border:0;font-family:inherit}
+.adminrow .editlink:hover{color:var(--accent)}
+.chk{display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
+.chk input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex:none}
+.creds{margin-top:12px;display:grid;grid-template-columns:118px 1fr;gap:9px 12px;align-items:center;max-width:520px}
+.creds > label{font-size:12.5px;color:var(--muted)}
+.study{margin-top:2px}
+
+/* selects + inputs */
+select,input[type=text],input[type=password],input[type=number]{
+  width:100%;font-family:inherit;font-size:13px;color:var(--text);
+  background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;
+  transition:border-color .14s,background .14s,box-shadow .14s;
+}
+select{cursor:pointer;background:var(--panel-2);appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'><path d='M1 1l4 4 4-4' stroke='%239d9da3' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 11px center;padding-right:30px}
+select.auto{width:auto;min-width:104px}
+input:hover:not(:disabled):not([readonly]),select:hover{border-color:#4c4c50}
+input:focus,select:focus{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus-soft);outline:none;background:#232326}
+input[readonly],input:disabled{background:#202022;color:var(--faint);cursor:not-allowed;border-color:var(--line-soft)}
+input::placeholder{color:var(--faint)}
+.pwrap{display:flex;gap:8px}
+.pwrap input{flex:1}
+.pw-toggle{
+  flex:none;font-family:inherit;font-size:11.5px;color:var(--muted);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:0 13px;cursor:pointer;min-width:58px;
+  transition:background .12s,color .12s;
+}
+.pw-toggle:hover{background:var(--panel-3);color:var(--text)}
+
+/* buttons */
+.btn{
+  font-family:inherit;font-size:12.5px;font-weight:500;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:linear-gradient(180deg,var(--panel-2),#292a2d);color:var(--text);
+  padding:8px 15px;cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-sm);
+  transition:background .14s,border-color .14s,transform .05s,box-shadow .14s;
+}
+.btn:hover{background:linear-gradient(180deg,var(--panel-3),#2e2f32);border-color:#4c4c50;box-shadow:var(--shadow-md)}
+.btn:active{background:var(--panel);transform:translateY(1px);box-shadow:var(--shadow-sm)}
+.btn.tiny{padding:6px 11px;font-size:11.5px;border-radius:var(--r-xs)}
+.btn.ghost{background:transparent;box-shadow:none}
+.btn.ghost:hover{background:var(--panel-2);box-shadow:none}
+.btn.accent{background:linear-gradient(180deg,#e85a80,var(--accent));border-color:var(--accent-dim);color:#fff}
+.btn.accent:hover{background:linear-gradient(180deg,#ef688c,#e85a80)}
+.btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+.btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
+.link:hover{color:var(--accent)}
+/* "Save as new config" grows + turns amber when the form has unsaved changes,
+   so it reads as "you have changes to save" rather than a passive reminder. */
+#saveAsBtn.dirty{
+  font-size:13.5px;font-weight:650;color:#1c1c1e;padding:9px 18px;
+  background:linear-gradient(180deg,#f0d284,var(--warn));border-color:var(--warn-line);
+  box-shadow:0 2px 12px rgba(230,192,105,.30);
+}
+#saveAsBtn.dirty:hover{background:linear-gradient(180deg,#f4d992,#ecc978);border-color:#7a672f}
+
+/* database summary + change section */
+.sumrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sumrow .k{font-size:12.5px;color:var(--muted)}
+.sumrow .v{font-size:13px;font-weight:600;color:var(--text-strong)}
+.sumrow .btn{margin-left:auto}
+/* pen/edit icon + always-visible reset on the database summary line */
+.db-edit{background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
+.db-edit:hover{color:var(--accent-dim,var(--accent))}
+.db-reset{margin-left:auto;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
+/* the database dropdown opened by the pen icon */
+.db-menu{position:fixed;z-index:60;background:#26262a;border:1px solid var(--line);border-radius:var(--r-sm);
+  box-shadow:var(--shadow-md);padding:5px;min-width:230px}
+.db-menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);
+  font-family:inherit;font-size:12.5px;padding:7px 9px;border-radius:6px;cursor:pointer}
+.db-menu button:hover{background:var(--accent-soft);color:var(--accent)}
+.db-menu .sep{border-top:1px solid var(--line-soft);margin:4px 0}
+.db-section{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:14px}
+.field{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:12px;margin:10px 0}
+.field > label{font-size:12.5px;color:var(--muted)}
+.field.narrow input{max-width:150px}
+.hostport{display:flex;align-items:center;gap:8px}
+.hostport input.host{flex:1}
+.hostport .plbl{font-size:12px;color:var(--muted)}
+.hostport input.port{width:78px;flex:none}
+.preview{margin-top:12px;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:10px 13px}
+.preview .k{font-size:10px;letter-spacing:.08em;color:var(--faint);text-transform:uppercase}
+.preview .v{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all;margin-top:3px}
+.db-create{margin:12px 0 4px}
+
+/* lab tiles */
+.lab-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.lab-tile{
+  border:1px solid var(--line);border-radius:var(--r-md);background:linear-gradient(180deg,var(--panel-2),#26262a);
+  padding:13px 12px;text-align:center;cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:border-color .12s,background .12s,transform .06s,box-shadow .14s;
+}
+.lab-tile:hover{border-color:#4c4c50;transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.lab-tile .nm{font-size:14px;font-weight:650;color:var(--text-strong)}
+.lab-tile .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+.lab-tile.active{
+  background:radial-gradient(120% 120% at 50% 0%, rgba(224,70,110,.22), var(--accent-soft));
+  border-color:var(--accent);box-shadow:0 3px 14px rgba(224,70,110,.28);
+}
+.lab-tile.active .nm{color:var(--accent)} .lab-tile.active .sub{color:#e79db3}
+.lab-tile.faded{opacity:.45}
+.single-lab{font-size:14px;font-weight:650;color:var(--text-strong);padding:2px 0 4px}
+.otherhost{margin-top:11px}
+/* host affordances rendered as two clear pill buttons: localhost on the LEFT,
+   Other host on the RIGHT (pushed over with margin-left:auto). */
+.host-pick{display:flex;align-items:center;gap:10px;margin-top:12px}
+.host-pick .host-pill{flex:none}
+.host-pick .host-pill.other{margin-left:auto}
+.custom-fields{margin-top:12px}
+/* localhost quick option, folded into the Other-host flow */
+.hostquick{display:flex;align-items:center;gap:10px}
+.hostquick input{flex:1;min-width:0}
+.localquick{white-space:nowrap;color:var(--accent);flex:none}
+
+/* room + participant rows */
+.labrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+.labrow .k{font-size:12.5px;color:var(--muted);flex:none}
+.labrow .roomval{font-size:13px;font-weight:700;color:var(--text-strong)}
+.labrow .roomtag{font-size:12px;color:var(--muted)}
+.labrow select{flex:1;min-width:0}
+.labrow .btn{flex:none}
+.seatfile{margin-top:12px}
+.seatfile .note{font-size:11.5px;color:var(--faint);margin:0 0 7px}
+.seatfile .frow{display:flex;gap:8px;align-items:center;margin-top:7px}
+
+/* seat map */
+.maprow{margin-top:16px}
+.map-cap{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;letter-spacing:.03em;
+  text-transform:uppercase;color:var(--muted);cursor:pointer;user-select:none}
+.map-cap .arw{font-size:10px;color:var(--faint)}
+.map-sub{font-size:11.5px;color:var(--faint);margin:2px 0 0}
+.seatmap{display:grid;gap:7px;margin-top:11px;min-width:0}
+.seatcell{
+  min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;
+  font-family:var(--mono);font-size:11px;color:var(--text);
+  background:linear-gradient(180deg,var(--panel-2),#2a2a2d);
+  border:1px solid var(--line);border-radius:var(--r-xs);box-shadow:var(--shadow-sm);
+  /* Hover must never change layout/size (no transform/height/padding) or the
+     grid reflows. Only colour + a non-reflowing box-shadow ring change. */
+  transition:border-color .12s,color .12s,box-shadow .12s;
+}
+.seatcell[data-seat]:hover{border-color:var(--accent-dim);color:var(--text-strong);
+  box-shadow:0 0 0 1px var(--accent-dim),var(--shadow-sm)}
+.seatcell.exp{color:var(--faint);background:transparent;border-style:dashed;border-color:var(--line-soft);font-size:8.5px;letter-spacing:.05em}
+.seatcell.wall{
+  background:repeating-linear-gradient(45deg,var(--bg-deep),var(--bg-deep) 4px,transparent 4px,transparent 8px);
+  border:1px dashed var(--line-soft);border-radius:6px;pointer-events:none;opacity:.5;
+}
+.seatcell.off{opacity:.4}
+
+/* first-run notice inside the lab card */
+.labnotice{
+  font-size:12.5px;color:var(--muted);line-height:1.55;
+  background:var(--bg-deep);border:1px dashed var(--line);border-radius:var(--r-md);padding:13px 14px;
+}
+.labnotice b{color:var(--text-strong)} .labnotice code{font-family:var(--mono);font-size:11.5px}
+
+/* block warning (only when broken) */
+.blockwarn{margin-top:14px}
+.blockwarn .btn{margin-top:9px}
+
+/* ---------------------------- ACTIVITY LOG ---------------------------- */
+.logwrap{padding:6px clamp(16px,2.4vw,26px) 18px}
+.log-head{display:flex;align-items:center;gap:8px;padding:6px 2px}
+.log-head .cap{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px}
+.log-head .cap .arw{font-size:10px;color:var(--faint)}
+.log-head .copy{margin-left:auto}
+.log-body{
+  background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);
+  font-family:var(--mono);font-size:12px;line-height:1.6;padding:12px 15px;margin-top:4px;
+  max-height:190px;overflow:auto;overscroll-behavior:contain;
+}
+.log-body .ln{white-space:pre-wrap;word-break:break-word}
+.log .t{color:#6f7d90}.log .info{color:var(--text)}.log .muted{color:#8e9aab}
+.log .cmd{color:#7fd1ff}.log .ok{color:#7ee0a8}.log .warn{color:#f2c66b}.log .err{color:#ff9a90}
+.log .out{color:#b6c0cf;padding-left:20px;display:block}
+
+/* ---------------------------- LAUNCH BAR ---------------------------- */
+.launchbar{
+  position:sticky;bottom:0;z-index:15;display:flex;align-items:center;gap:14px;
+  padding:14px clamp(16px,2.4vw,26px);margin-top:auto;
+  background:var(--bg);
+  border-top:1px solid var(--line-soft);
+}
+/* The fade sits ABOVE the bar and ends cleanly AT its top edge (the line):
+   it fades the scrolling content up into transparency, terminating solid at
+   the bar, so nothing fades below the line. */
+.launchbar::before{
+  content:"";position:absolute;left:0;right:0;bottom:100%;height:34px;
+  pointer-events:none;
+  background:linear-gradient(180deg,rgba(30,30,32,0),var(--bg));
+}
+.launch-status{font-size:12.5px;color:var(--muted);margin-right:auto;min-height:1em}
+.launch-status.ok{color:var(--ok)} .launch-status.err{color:var(--err)}
+.btn-launch{
+  font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:#fff;
+  background:linear-gradient(180deg,#e85a80,var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
+  padding:13px 40px;cursor:pointer;
+  box-shadow:0 2px 12px rgba(224,70,110,.32),inset 0 1px 0 rgba(255,255,255,.14);
+  transition:background .14s,box-shadow .18s,transform .05s;
+}
+.btn-launch:hover{background:linear-gradient(180deg,#ef688c,#e85a80);box-shadow:0 6px 26px rgba(224,70,110,.5),inset 0 1px 0 rgba(255,255,255,.18)}
+.btn-launch:active{transform:translateY(1px)}
+.btn-shortcut{
+  font-family:inherit;font-size:14px;font-weight:600;color:var(--accent);
+  background:transparent;border:1px solid var(--accent-dim);border-radius:var(--r-md);
+  padding:12px 20px;cursor:pointer;transition:background .14s,border-color .14s;
+}
+.btn-shortcut:hover{background:rgba(224,70,110,.10);border-color:var(--accent)}
+.btn-shortcut:active{transform:translateY(1px)}
+
+/* ============================ MODALS ============================ */
+.modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+.modal-card{position:relative;max-width:560px;width:100%;max-height:86vh;overflow:auto;overscroll-behavior:contain;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--r-xl);
+  box-shadow:var(--shadow-lg);padding:24px 26px}
+.modal-card.wide{max-width:660px}
+.modal-x{position:absolute;top:12px;right:15px;background:transparent;border:0;color:var(--muted);
+  font-size:23px;line-height:1;cursor:pointer}
+.modal-x:hover{color:var(--text-strong)}
+.modal-title{margin:0 34px 6px 0;font-size:18px;font-weight:650;color:var(--text-strong)}
+.modal-desc{margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.55}
+.modal-body{font-size:13px;color:var(--text);line-height:1.6}
+.modal-body p{margin:0 0 10px}
+.modal-body strong{color:var(--text-strong)}
+.modal-body code{font-family:var(--mono);font-size:12px;background:var(--bg-deep);
+  border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px}
+.mono-line{font-family:var(--mono);font-size:12px;color:var(--text);background:var(--bg-deep);
+  border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin:8px 0;word-break:break-all}
+.cta{margin-top:16px;display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap}
+.cta.spread{justify-content:space-between}
+.modal-err{display:none;margin-top:8px;font-size:12px;color:var(--err)}
+.mfield{display:grid;grid-template-columns:150px 1fr;align-items:center;gap:10px 12px;margin:11px 0}
+.mfield > label{font-size:12.5px;color:var(--muted)}
+
+/* room picker */
+.room-primary{width:100%;margin:4px 0 14px}
+.roomlist{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-deep);
+  max-height:210px;overflow:auto;overscroll-behavior:contain;padding:5px}
+.room-item{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;
+  border-radius:var(--r-xs);padding:9px 12px;color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;margin:1px 0}
+.room-item:hover{background:var(--panel-2)}
+.room-item.sel{background:var(--panel-2);border-color:var(--line)}
+.room-item.study{color:var(--accent);font-weight:600}
+.room-note{font-size:11.5px;color:var(--faint);margin:10px 0 6px}
+.room-type{display:flex;gap:8px;align-items:center;margin-top:14px}
+.room-type input{flex:1}
+.info-panel{background:var(--accent-soft);border:1px solid rgba(224,70,110,.3);border-radius:var(--r-md);
+  padding:11px 13px;font-size:12px;color:var(--text);margin:0 0 12px;line-height:1.55}
+.i-btn{width:24px;height:24px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);
+  color:var(--muted);cursor:pointer;font-style:italic;font-weight:700;font-size:12px}
+.i-btn:hover{color:var(--text);border-color:#4c4c50}
+
+/* lab settings */
+.ls-card{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:15px 16px;margin-bottom:14px}
+.ls-card h4{margin:0 0 3px;font-size:13.5px;font-weight:650;color:var(--text-strong)}
+.ls-card .d{margin:0 0 12px;font-size:11.5px;color:var(--faint);line-height:1.5}
+.ls-status{font-size:12px;color:var(--ok);margin-top:9px}
+.ls-status.warn{color:var(--warn)}
+.presets-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px}
+.presets-table th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
+  font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line-soft)}
+.presets-table th.c,.presets-table td.c{text-align:center}
+.presets-table td{padding:8px;border-bottom:1px solid var(--line-soft);color:var(--text)}
+.presets-table tr.sel td{background:var(--panel-2)}
+.presets-table tr{cursor:pointer}
+.shown-toggle{cursor:pointer;color:var(--ok);font-weight:700}
+.shown-toggle.off{color:var(--faint)}
+.ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
+
+/* launch briefing / handoff */
+.caution-bar{background:var(--caution);color:#fff;font-weight:700;font-size:13.5px;line-height:1.5;
+  border-radius:var(--r-md);padding:14px 16px;margin:0 0 16px}
+.server-line{font-size:13px;color:var(--muted);margin:0 0 2px}
+.server-name{font-size:15px;font-weight:700;color:var(--text-strong);margin:0 0 12px}
+.open-line{font-size:13.5px;color:var(--text);margin:0 0 6px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.room-chip{display:inline-flex;align-items:center;font-size:12.5px;font-weight:600;color:var(--accent);
+  background:var(--accent-soft);border:1px solid rgba(224,70,110,.3);border-radius:20px;padding:4px 13px}
+.creds-box{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:13px 15px;margin:14px 0 6px}
+.creds-box .intro{font-size:12.5px;color:var(--muted);margin:0 0 10px}
+.cred-row{display:grid;grid-template-columns:78px 1fr auto auto;gap:8px;align-items:center;margin:6px 0}
+.cred-row label{font-size:12.5px;color:var(--muted)}
+.cred-row input{font-family:var(--mono);font-size:12.5px}
+.warn-box{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:var(--r-md);
+  padding:12px 14px;font-size:12.5px;color:var(--warn);line-height:1.55;margin:0 0 12px}
+.handoff-note{font-size:12.5px;color:var(--muted);margin:14px 0 0}
+.handoff-note a{color:var(--accent);font-weight:600;cursor:pointer;text-decoration:none}
+.handoff-note.err{color:var(--err)} .handoff-note.err strong{color:var(--err)}
+.preflight-list{list-style:none;padding:0;margin:6px 0 0}
+.preflight-list li{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:9px 11px;margin:6px 0;font-size:13px;color:var(--text)}
+.preflight-list li .d{display:block;color:var(--muted);font-size:11.5px;margin-top:3px;font-family:var(--mono);word-break:break-word}
+
+/* consolidated "Before you launch" screen (one modal): the MUST-FIX cards, then
+   the warning cards (no banner), then the minimal "What will launch" card, then a
+   sticky bottom bar — the ONLY place a launch / "Launch anyway" is offered.
+   Presentation only; levels/fixes come from the backend. */
+.bl-ic{flex:none;width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;
+  font-size:11px;font-weight:800;line-height:1;color:#1b1b1d}
+.bl-ic.block{background:var(--err)} .bl-ic.warn{background:var(--warn)} .bl-ic.ok{background:var(--ok)}
+.bl-issue{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:11px;align-items:start;
+  background:var(--warn-soft);border-left:3px solid var(--warn);border-radius:var(--r-xs);
+  padding:10px 12px;margin:6px 0}
+.bl-issue.block{background:var(--err-soft);border-left-color:var(--err)}
+.bl-issue .bl-ic{margin-top:1px}
+.bl-title{font-size:13px;color:var(--text-strong);line-height:1.45}
+.bl-issue.block .bl-title{font-weight:650}
+.bl-hint{color:var(--muted);font-size:11.5px;margin-top:3px;line-height:1.5}
+.bl-fix{align-self:center}
+.bl-acts{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.bl-viewblock{font-size:12px;color:var(--accent);font-weight:600}
+.bl-viewblock:hover{text-decoration:underline}
+.bl-roomlabel{font-size:12px;color:var(--muted)}
+select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+  border-radius:var(--r-xs);padding:5px 26px 5px 9px;font-family:inherit;font-size:12.5px}
+/* launch summary card */
+.bl-sumhead{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 0 6px}
+.bl-sumcard{border:1px solid var(--line-soft);border-radius:var(--r-md);padding:13px 15px 8px;background:rgba(0,0,0,.12)}
+.bl-sumcard .caution-bar{margin:0 0 12px;display:flex;gap:9px;align-items:flex-start}
+.bl-kv{display:grid;grid-template-columns:64px minmax(0,1fr);row-gap:4px;column-gap:10px;margin:10px 0 8px;font-size:13px}
+.bl-kv.more{margin:2px 0 0} .bl-kv.more dt{color:var(--faint)}
+.bl-kv.more dd,.bl-kv.more dd.mono{color:var(--muted)}
+/* top line = the Lab, with the (i) that expands lab / Server / Room in place */
+.bl-lab{margin:0 0 10px}
+.bl-lab>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;
+  gap:12px;user-select:none}
+.bl-lab>summary::-webkit-details-marker{display:none}
+.bl-labname{font-size:15px;font-weight:700;color:var(--text-strong);min-width:0;overflow-wrap:anywhere}
+.bl-info{flex:none;width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;
+  border:1px solid var(--accent);color:var(--accent);font-size:12px;font-weight:700;font-style:italic;
+  font-family:Georgia,"Times New Roman",serif;line-height:1;transition:background .12s,color .12s}
+.bl-lab>summary:hover .bl-info,.bl-lab[open] .bl-info{background:var(--accent);color:#fff}
+.bl-lab>summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:var(--r-xs)}
+.bl-labinfo{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-sm);
+  padding:10px 12px;margin:9px 0 0}
+.bl-labinfo p{font-size:12px;color:var(--muted);line-height:1.55;margin:0 0 8px}
+/* study room: the per-seat link is hidden; it shows only while the chip is hovered */
+.bl-chipwrap{position:relative;display:inline-block}
+.bl-chipwrap .room-chip{cursor:default}
+.bl-chipwrap:hover .room-chip,.bl-chipwrap:focus-within .room-chip,.bl-chipwrap.show .room-chip{
+  border-color:var(--accent)}
+.bl-chipwrap .room-chip:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+/* position:fixed (placed by blPlaceLinkPop) so the scrolling modal card never clips
+   it; still a DOM child of the chip wrapper, so :hover holds while the pointer is
+   on it. The padding bridges the gap between chip and card. */
+.bl-linkpop{display:none;position:fixed;left:0;top:0;z-index:95;padding:7px 0;width:max-content;max-width:min(600px,calc(100vw - 24px))}
+.bl-chipwrap:hover .bl-linkpop,.bl-chipwrap:focus-within .bl-linkpop,.bl-chipwrap.show .bl-linkpop{display:block}
+.bl-linkpop-in{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm);
+  box-shadow:var(--shadow-lg);padding:10px 12px 11px}
+.bl-linkpop-in strong{display:block;font-size:12.5px;font-weight:650;color:var(--text-strong);margin:0 0 2px}
+.bl-linkpop-in .bl-linklabel{margin:0 0 7px}
+.bl-linkpop-in .bl-linkrow{margin:0}
+/* click-to-reveal row (collapsed by default): dashboard login */
+.bl-exp{margin:0 0 6px}
+.bl-exp>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+  font-size:12px;font-weight:600;color:var(--accent);padding:3px 0;user-select:none}
+.bl-exp>summary::-webkit-details-marker{display:none}
+.bl-exp>summary::before{content:"\25B8";font-size:11px;display:inline-block;transition:transform .12s}
+.bl-exp[open]>summary::before{transform:rotate(90deg)}
+.bl-exp>summary:hover{text-decoration:underline}
+.bl-exp .creds-box{margin:6px 0 8px}
+.bl-kv dt{color:var(--muted);font-size:12px;padding-top:1px}
+.bl-kv dd{margin:0;color:var(--text-strong);word-break:break-word}
+.bl-kv dd.mono{font-family:var(--mono);font-size:12px;color:var(--text)}
+.bl-kv dd.lab{font-weight:650}
+.bl-linkrow{display:flex;align-items:stretch;gap:8px;margin:0 0 6px}
+.bl-linkrow .mono-line{flex:1;min-width:0;margin:0;overflow-wrap:anywhere}
+.bl-linkrow .btn{flex:none;align-self:center}
+.bl-linklabel{font-size:12px;color:var(--muted);margin:0 0 5px}
+/* action bar: stays in view while a long issue list scrolls */
+.cta.bl-cta{position:sticky;bottom:-24px;align-items:center;justify-content:flex-start;
+  margin:16px -26px -24px;padding:12px 26px 18px;background:var(--panel);border-top:1px solid var(--line-soft);
+  border-radius:0 0 var(--r-xl) var(--r-xl)}
+.bl-blocknote{font-size:12px;color:var(--err)}
+.bl-recheck{margin-right:auto}
+.bl-cta .bl-cancel.solo{margin-right:auto}
+.bl-ready{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:650;color:var(--ok)}
+/* warnings-only: the single highlighted "launch anyway" callout */
+.bl-callout{display:inline-flex;align-items:center;gap:10px;background:var(--warn-soft);
+  border:1px solid var(--warn);border-radius:var(--r-md);padding:6px 6px 6px 14px}
+.bl-callout .ic{font-size:16px;line-height:1;color:var(--warn)}
+.bl-callout .n{font-size:13px;font-weight:700;color:var(--warn);margin-right:4px}
+.btn.bl-primary{padding:9px 20px;font-size:13px;font-weight:650}
+.btn.bl-launch-off,.btn.bl-launch-off:hover,.btn.bl-launch-off:active{background:var(--panel-2);color:#6e6e74;
+  border:1px dashed #4a4a4e;box-shadow:none;cursor:not-allowed;transform:none}
+.btn.bl-anyway{background:var(--warn);border-color:var(--warn);color:#1b1b1d}
+.btn.bl-anyway:hover{filter:brightness(1.08)}
+
+/* gear popup menu */
+.gearmenu{position:fixed;z-index:90;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);
+  box-shadow:var(--shadow-lg);padding:5px;min-width:210px}
+.gearmenu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text);
+  font-family:inherit;font-size:13px;padding:9px 11px;border-radius:var(--r-xs);cursor:pointer}
+.gearmenu button:hover{background:var(--panel-2)}
+.gearmenu .sep{height:1px;background:var(--line-soft);margin:4px 6px}
+
+/* scrollbars */
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:#3a3a3d;border-radius:6px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#4a4a4d;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============================ SIDEBAR ============================ -->
+  <aside class="sidebar">
+    <div class="side-brand">
+      <span class="mark">oTree Lab Launcher</span>
+      <button class="gear" id="gearBtn" title="Settings, tools and advanced" onclick="openGearMenu(event)">&#9881;</button>
+    </div>
+    <div class="side-head">
+      <span class="cap">Saved configs</span>
+      <span class="count" id="cfgCount">3</span>
+      <button class="add" title="New / blank config" onclick="onSaveAs()">+</button>
+    </div>
+    <div class="cfg-list" id="cfgList"></div>
+  </aside>
+
+  <!-- ============================ MAIN ============================ -->
+  <div class="main">
+    <div class="main-head">
+      <div class="htext">
+        <h1 id="cfgTitle">Config: Dictator study</h1>
+        <p class="sub">Save this setup as a named config so you can reuse it.</p>
+      </div>
+      <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save as new config...</button>
+    </div>
+
+    <div class="content">
+
+      <!-- LEFT COLUMN: project + database -->
+      <div class="col">
+
+        <!-- 1. oTree project -->
+        <section class="card">
+          <h2 class="card-num"><span class="n">1</span> oTree project</h2>
+
+          <div class="pathrow">
+            <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
+              placeholder="Click Browse to choose your oTree project folder">
+            <button class="btn" onclick="onBrowseProject()">Browse...</button>
+          </div>
+
+          <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
+          <ul class="bullets" id="appBullets" hidden></ul>
+
+          <div class="divider"></div>
+
+          <!-- oTree admin -->
+          <div class="adminrow">
+            <span class="lead">oTree admin</span>
+            <span class="lbl">Authentication level</span>
+            <select id="auth_level" class="auto"><option>STUDY</option><option>DEMO</option><option>none</option></select>
+            <label class="chk"><input type="checkbox" id="auto_login" checked> Auto login</label>
+            <button class="editlink" id="adminEdit" onclick="toggleAdminEdit()">Edit</button>
+          </div>
+          <div class="creds" id="adminCreds" hidden>
+            <label for="admin_user">Admin username</label>
+            <input type="text" id="admin_user" value="admin">
+            <label for="admin_pw">Admin password</label>
+            <div class="pwrap">
+              <input type="password" id="admin_pw" value="" placeholder="admin password">
+              <button type="button" class="pw-toggle" data-target="admin_pw" onclick="togglePw(this)">Show</button>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <h3 class="subhead">Study settings:</h3>
+          <label class="chk study"><input type="checkbox" id="production" checked> Production mode (serve as a real study, no debug pages)</label>
+        </section>
+
+        <!-- 2. Database -->
+        <section class="card">
+          <h2 class="card-num"><span class="n">2</span> Database</h2>
+          <div class="sumrow">
+            <span class="k">Database</span>
+            <span class="v" id="dbSummary">Lab shared database (Postgres)</span>
+            <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbMenu(event)">&#9998;</button>
+            <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
+          </div>
+
+          <div class="db-section" id="dbSection" hidden>
+            <div id="dbDetails">
+              <div class="field"><label>Database name</label><input type="text" id="db_name" value="otree" readonly></div>
+              <div class="field"><label>User</label><input type="text" id="db_user" value="otree" readonly></div>
+              <div class="field"><label>Password</label>
+                <div class="pwrap">
+                  <input type="password" id="db_pw" value="" readonly>
+                  <button type="button" class="pw-toggle" data-target="db_pw" onclick="togglePw(this)">Show</button>
+                </div>
+              </div>
+              <div class="field"><label>Host</label>
+                <div class="hostport">
+                  <input type="text" class="host" id="db_host" value="localhost" readonly>
+                  <span class="plbl">Port</span>
+                  <input type="text" class="port" id="db_port" value="5432" readonly>
+                </div>
+              </div>
+              <div class="preview">
+                <div class="k">DATABASE_URL</div>
+                <div class="v" id="dbUrl">postgres://otree:••••••••@localhost:5432/otree</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- RIGHT COLUMN: lab -->
+      <div class="col">
+        <section class="card card--lab">
+          <h2 class="card-num"><span class="n">3</span> Lab</h2>
+
+          <div class="labnotice" id="labNotice" hidden>
+            <b>No lab_info.json found.</b> Run first-time setup, or copy
+            <code>lab_info.example.json</code> to <code>lab_info.json</code> and edit it.
+          </div>
+
+          <div id="labBody">
+            <div class="lab-tiles" id="labTiles"></div>
+
+            <div class="host-pick" id="hostLinks">
+              <button class="btn tiny host-pill" id="localHostBtn" onclick="selectLocalHost()">localhost</button>
+              <button class="btn tiny host-pill other" id="otherHostLink" onclick="selectCustomHost()">Other host&hellip;</button>
+            </div>
+            <button class="link otherhost" id="backToLabLink" onclick="backToLab()" hidden>&larr; Back to a lab</button>
+
+            <div class="custom-fields" id="customFields" hidden>
+              <div class="field"><label>Host</label>
+                <div class="hostquick">
+                  <input type="text" id="custom_host" placeholder="host or IP">
+                  <button class="link localquick" onclick="selectLocalHost()">use this computer (localhost)</button>
+                </div>
+              </div>
+              <div class="field"><label>Room name</label><input type="text" id="custom_room" value="study" oninput="syncCustomRoom()"></div>
+            </div>
+
+            <!-- Local (this computer) note -->
+            <div class="labnotice" id="localNote" hidden>
+              Runs oTree on this computer (<code>localhost</code>). Pair it with the
+              <b>&ldquo;No lab database (oTree SQLite)&rdquo;</b> database for a self-contained off-lab test.
+            </div>
+
+            <!-- Room row (normal labs) -->
+            <div class="labrow" id="roomRow">
+              <span class="k">Room</span>
+              <span class="roomval" id="roomVal">study</span>
+              <span class="roomtag" id="roomTag">(lab default)</span>
+              <button class="btn tiny" onclick="openRoomPicker()">Change room...</button>
+            </div>
+
+            <!-- Participant list -->
+            <div class="labrow">
+              <span class="k">Participant list</span>
+              <select id="seat_mode" onchange="onSeatMode()">
+                <option value="lab_default">Lab default</option>
+                <option value="edit">Edit for this run</option>
+                <option value="file">Use a file from my project</option>
+                <option value="none">None (open room, no seat board)</option>
+              </select>
+            </div>
+
+            <!-- Seat file picker (file mode) -->
+            <div class="seatfile" id="seatFile" hidden>
+              <p class="note">Read from a file in your project; the file is never changed.</p>
+              <div class="frow">
+                <div class="pathbox empty" id="seatFilePath" style="flex:1">No file chosen yet</div>
+                <button class="btn tiny" onclick="onBrowseFile()">Browse...</button>
+              </div>
+            </div>
+
+            <!-- Room layout seat map -->
+            <div class="maprow" id="mapRow">
+              <div class="map-cap" id="mapCap" onclick="toggleMap()"><span class="arw" id="mapArw">&#9662;</span><span id="mapCapText">Room layout · 31 seats</span></div>
+              <p class="map-sub" id="mapSub" hidden></p>
+              <div class="seatmap" id="seatMap"></div>
+            </div>
+
+            <!-- settings.py block warning (shown only when missing/broken) -->
+            <div class="blockwarn" id="blockWarn" hidden>
+              <div class="statusline warn"><span class="dot">&#9650;</span><span id="blockWarnMsg">settings.py is missing the oTree lab support block.</span></div>
+              <button class="btn accent tiny" onclick="onAppendBlock()">Add block to settings.py</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </div>
+
+    <!-- Activity log -->
+    <div class="logwrap">
+      <div class="log-head">
+        <span class="cap" onclick="toggleLog()"><span class="arw" id="logArw">&#9656;</span>Activity log</span>
+        <button class="btn ghost tiny copy" onclick="copyLog()">Copy</button>
+      </div>
+      <div class="log-body log" id="logBody" hidden>
+        <div class="ln"><span class="muted">oTree Lab Launcher ready. Pick a config on the left, then click Launch.</span></div>
+      </div>
+    </div>
+
+    <!-- Launch bar -->
+    <div class="launchbar">
+      <p class="launch-status" id="launchStatus"></p>
+      <button class="btn-shortcut" onclick="onExport()">Save one-click shortcut</button>
+      <button class="btn-launch" onclick="onLaunch()">Launch</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ GENERIC MODAL ============================ -->
+<div class="modal" id="infoModal" hidden onclick="if(event.target===this)closeModal()">
+  <div class="modal-card" id="infoCard">
+    <button class="modal-x" onclick="closeModal()" aria-label="Close">&times;</button>
+    <h3 class="modal-title" id="modalTitle"></h3>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+/* ======================================================================
+   oTree Lab Launcher — web front end.
+   Hosted in pywebview (otree_launcher_web.py) the controls do real work
+   through window.pywebview.api.*. In a plain browser the whole page still
+   runs as a static preview with example data (lab_info.example + maps/).
+   ====================================================================== */
+
+var NATIVE=false, API=null, booted=false;
+var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
+var lastSettings=null, defaultAuthor="", pendingDelete=null;
+var LABS=[], LAB_BY_ID={}, selectedLabId="";
+var LAB_PRESETS=[], PG_ADMIN={admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"};
+var PROJECT_ROOMS=null, roomSelIndex=0, labMarker="";
+var mapExpanded=true, prevDbMode="lab";
+
+/* ---------- static preview data (example labs/maps, no real hosts) ---------- */
+var PREVIEW_LABS=[
+  {"id":"large","name":"Large lab","host":"localhost","seats":["A1","A2","A3","A5","A6","A7","A8","B1","B2","B3","B4","B5","B6","B7","B8","C1","C2","C3","C4","C5","C6","C7","C8","D1","D2","D3","D4","E1","E2","E3","E4"],"map":{"cols":9,"rows":5,"cells":[{"r":5,"c":9,"kind":"seat"},{"r":5,"c":8,"kind":"seat"},{"r":5,"c":7,"kind":"seat"},{"r":5,"c":6,"kind":"exp"},{"r":5,"c":4,"kind":"seat"},{"r":5,"c":3,"kind":"seat"},{"r":5,"c":2,"kind":"seat"},{"r":5,"c":1,"kind":"seat"},{"r":4,"c":9,"kind":"seat"},{"r":4,"c":8,"kind":"seat"},{"r":4,"c":7,"kind":"seat"},{"r":4,"c":6,"kind":"seat"},{"r":4,"c":4,"kind":"seat"},{"r":4,"c":3,"kind":"seat"},{"r":4,"c":2,"kind":"seat"},{"r":4,"c":1,"kind":"seat"},{"r":3,"c":9,"kind":"seat"},{"r":3,"c":8,"kind":"seat"},{"r":3,"c":7,"kind":"seat"},{"r":3,"c":6,"kind":"seat"},{"r":3,"c":4,"kind":"seat"},{"r":3,"c":3,"kind":"seat"},{"r":3,"c":2,"kind":"seat"},{"r":3,"c":1,"kind":"seat"},{"r":2,"c":9,"kind":"seat"},{"r":2,"c":8,"kind":"seat"},{"r":2,"c":2,"kind":"seat"},{"r":2,"c":1,"kind":"seat"},{"r":1,"c":9,"kind":"seat"},{"r":1,"c":8,"kind":"seat"},{"r":1,"c":2,"kind":"seat"},{"r":1,"c":1,"kind":"seat"},{"r":1,"c":4,"kind":"wall"},{"r":1,"c":5,"kind":"wall"},{"r":1,"c":6,"kind":"wall"}]}},
+  {"id":"small","name":"Small lab","host":"localhost","seats":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22"],"map":{"cols":5,"rows":5,"cells":[{"r":5,"c":1,"kind":"exp"},{"r":5,"c":2,"kind":"seat"},{"r":5,"c":3,"kind":"seat"},{"r":5,"c":4,"kind":"seat"},{"r":5,"c":5,"kind":"seat"},{"r":4,"c":1,"kind":"seat"},{"r":4,"c":2,"kind":"seat"},{"r":4,"c":3,"kind":"seat"},{"r":4,"c":4,"kind":"seat"},{"r":4,"c":5,"kind":"wall"},{"r":3,"c":1,"kind":"seat"},{"r":3,"c":2,"kind":"seat"},{"r":3,"c":3,"kind":"seat"},{"r":3,"c":4,"kind":"seat"},{"r":3,"c":5,"kind":"wall"},{"r":2,"c":1,"kind":"seat"},{"r":2,"c":2,"kind":"seat"},{"r":2,"c":3,"kind":"seat"},{"r":2,"c":4,"kind":"seat"},{"r":2,"c":5,"kind":"seat"},{"r":1,"c":1,"kind":"seat"},{"r":1,"c":2,"kind":"seat"},{"r":1,"c":3,"kind":"seat"},{"r":1,"c":4,"kind":"seat"},{"r":1,"c":5,"kind":"seat"}]}}
+];
+var PREVIEW_CONFIGS=[
+  {name:"Lab default",builtin:true,lab:"large",folder:"",author:"builtin",when:"Never run"},
+  {name:"Dictator study",builtin:false,lab:"large",folder:"C:\\experiments\\dictator_game",author:"J. Tait",when:"15 Sep 2026"},
+  {name:"Bargaining wave 2",builtin:false,lab:"large",folder:"C:\\experiments\\bargaining_v2",author:"S. Vermeer",when:"11 Sep 2026"},
+  {name:"Trust game pilot",builtin:false,lab:"small",folder:"C:\\experiments\\trust_pilot",author:"M. Researcher",when:"3 Sep 2026"},
+  {name:"Public goods",builtin:false,lab:"small",folder:"C:\\experiments\\public_goods",author:"A. Kowalski",when:"28 Aug 2026"},
+  {name:"Risk elicitation",builtin:false,lab:"large",folder:"C:\\experiments\\risk_task",author:"L. Rossi",when:"22 Aug 2026"},
+  {name:"Auction study",builtin:false,lab:"small",folder:"C:\\experiments\\auction",author:"P. Andersson",when:"9 Aug 2026"}
+];
+var PREVIEW_ROOMS=["study","pilot","bargaining","teaching_demo"];
+var PREVIEW_PROJECT={name:"dictator_game",level:"ok",
+  message:"Looks like an oTree project: settings.py and 1 app package",apps:["dictator"]};
+var PREVIEW_PATH="C:\\experiments\\dictator_game";
+
+/* ---------------------------- helpers ---------------------------- */
+function el(id){return document.getElementById(id);}
+function val(id){var e=el(id);return e?e.value:"";}
+function escapeHtml(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+function togglePw(btn){var i=el(btn.dataset.target);
+  if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
+function labById(id){return LAB_BY_ID[id]||null;}
+function currentLab(){if(selectedLabId&&LAB_BY_ID[selectedLabId])return selectedLabId;return LABS.length?LABS[0].id:"";}
+
+/* ---------------------------- log + status ---------------------------- */
+window.pywLog=function(cls,text){appendLog(cls,text);};
+window.pywStatus=function(cls,text){
+  var s=el("launchStatus");s.className="launch-status"+(cls?" "+cls:"");s.textContent=text;
+  var t=el("takeoverStatus");
+  if(t&&!el("infoModal").hidden){t.className="handoff-note"+(cls?" "+cls:"");}
+};
+function appendLog(cls,text){
+  var body=el("logBody");if(el("logBody").hidden)toggleLog();
+  var ln=document.createElement("div");ln.className="ln";
+  var t=document.createElement("span");t.className="t";
+  t.textContent="["+new Date().toTimeString().slice(0,8)+"] ";
+  var m=document.createElement("span");m.className=cls||"info";m.textContent=text;
+  ln.appendChild(t);ln.appendChild(m);body.appendChild(ln);body.scrollTop=body.scrollHeight;
+}
+function applyLog(r){if(r&&r.log&&r.log.length)r.log.forEach(function(e){appendLog(e[0],e[1]);});}
+function toggleLog(){var b=el("logBody");b.hidden=!b.hidden;el("logArw").innerHTML=b.hidden?"&#9656;":"&#9662;";}
+function copyLog(){try{navigator.clipboard.writeText(el("logBody").innerText);}catch(e){}}
+
+/* results delivered from Python worker threads (native dialogs) */
+window.pywOnProjectPicked=function(p){if(!p||!p.path)return;
+  currentProjectPath=p.path;setPath(p.path);applyProject(p.project);applySettings(p.settings);
+  /* Picked from the Before-you-launch [Choose folder…] button: re-check in place. */
+  if(!el("infoModal").hidden&&el("blIssues")&&el("blActions"))blRecheck();};
+window.pywOnFilePicked=function(p){if(!p||!p.path)return;currentSeatFile=p.path;setSeatFilePath(p.path);};
+window.pywOnBatResult=function(r){if(!r)return;
+  if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this config.");
+  else if(r.message)window.pywStatus("err",r.message);};
+
+/* ======================================================================
+   SIDEBAR — saved configs
+   ====================================================================== */
+function labSuffix(lab){var l=LAB_BY_ID[lab];return l?(" ("+l.name+")"):"";}
+function configDisplay(c){return c.name+(c.builtin?labSuffix(c.lab):"");}
+function renderConfigList(configs,selected){
+  var list=el("cfgList");list.innerHTML="";
+  el("cfgCount").textContent=configs.length;
+  configs.forEach(function(c){
+    var b=document.createElement("button");
+    b.className="cfg-row"+(c.name===selected?" sel":"");
+    b.onclick=function(){selectConfig(c.name,b);};
+    var nm=document.createElement("span");nm.className="nm";nm.textContent=configDisplay(c);b.appendChild(nm);
+    var meta=document.createElement("span");meta.className="meta";
+    // The built-in Lab default has NEITHER a folder NOR an author (it only
+    // pre-fills settings), so suppress both for it. Researcher configs keep
+    // folder (basename, or "empty" when unset) + author.
+    if(!c.builtin){
+      var fold=document.createElement("span");
+      if(c.folder){fold.className="fold";fold.textContent=c.folder.replace(/[\\/]+$/,"").split(/[\\/]/).pop();}else{fold.className="fold empty";fold.textContent="empty";}
+      meta.appendChild(fold);
+      if(c.author){var au=document.createElement("span");au.className="au";au.textContent=c.author;meta.appendChild(au);}
+    }
+    b.appendChild(meta);
+    var wh=document.createElement("span");wh.className="wh";wh.textContent=c.when;b.appendChild(wh);
+    if(!c.builtin){var d=document.createElement("span");d.className="del";d.title="Delete this config";d.textContent="✕";
+      d.onclick=function(e){e.stopPropagation();deleteConfig(c.name);};b.appendChild(d);}
+    list.appendChild(b);
+  });
+  var cur=configs.filter(function(c){return c.name===selected;})[0];
+  if(cur)el("cfgTitle").textContent="Config: "+configDisplay(cur);
+}
+function selectConfig(name,row){
+  document.querySelectorAll("#cfgList .cfg-row").forEach(function(r){r.classList.remove("sel");});
+  if(row)row.classList.add("sel");
+  currentConfigName=name;
+  var disp=name;var c=(NATIVE?null:PREVIEW_CONFIGS.filter(function(x){return x.name===name;})[0]);
+  if(c)disp=configDisplay(c);
+  el("cfgTitle").textContent="Config: "+disp;
+  if(NATIVE&&API){
+    API.select_config(name).then(function(r){
+      if(r&&r.ok){applyFields(r.fields);applyProject(r.project);applySettings(r.settings);
+        var cd=lastConfigDisplay(name);if(cd)el("cfgTitle").textContent="Config: "+cd;}
+    });
+  }
+}
+function lastConfigDisplay(name){return name;}
+
+/* ======================================================================
+   CARD 1 — oTree project
+   ====================================================================== */
+function setPath(p){var i=el("projPathInput");if(i)i.value=p||"";updateDirtyState();}
+function applyProject(p){
+  p=p||{};
+  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets");
+  if(p.name){el("cfgTitle");}
+  msg.textContent=p.message||"Choose your oTree project folder.";
+  var lvl=p.level||"muted";
+  line.className="statusline "+lvl;
+  line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
+  bul.innerHTML="";
+  if(p.apps&&p.apps.length){p.apps.forEach(function(a){var li=document.createElement("li");li.textContent=titlecase(a);bul.appendChild(li);});bul.hidden=false;}
+  else bul.hidden=true;
+}
+function titlecase(s){return String(s).replace(/[_-]+/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});}
+function toggleAdminEdit(){var c=el("adminCreds"),b=el("adminEdit");
+  var open=c.hidden;c.hidden=!open;b.textContent=open?"Done":"Edit";b.style.color=open?"var(--accent)":"";}
+
+/* ======================================================================
+   CARD 2 — Database
+   ====================================================================== */
+/* The pen icon opens a dropdown of databases; the connection fields show (and
+   are editable) only for a custom database. "Reset before start" is the
+   always-visible checkbox on the summary line. */
+function openDbMenu(ev){
+  ev.stopPropagation();closeDbMenu();
+  var m=document.createElement("div");m.className="db-menu";m.id="dbMenu";
+  var h='<button onclick="chooseDbMode(\'lab\')">Lab shared database (Postgres)</button>'+
+        '<button onclick="chooseDbMode(\'none\')">oTree default (SQLite)</button>';
+  var name=(val("db_name")||"").trim();
+  if(currentDbMode==="custom"||name){
+    h+='<button onclick="chooseDbMode(\'custom\')">'+escapeHtml(name||"custom database")+' (custom Postgres)</button>';
+  }
+  h+='<div class="sep"></div><button onclick="closeDbMenu();openCreateDb()">Add new database…</button>';
+  m.innerHTML=h;document.body.appendChild(m);
+  var r=el("dbEditBtn").getBoundingClientRect();
+  m.style.left=r.left+"px";m.style.top=(r.bottom+6)+"px";
+  setTimeout(function(){document.addEventListener("click",closeDbMenu,{once:true});},0);
+}
+function closeDbMenu(){var m=el("dbMenu");if(m)m.remove();}
+function chooseDbMode(mode){closeDbMenu();applyDbMode(mode);refreshDbSummary();updateDirtyState();}
+function applyDbMode(mode){
+  currentDbMode=mode;
+  var fields=["db_name","db_user","db_pw","db_host","db_port"];
+  var section=el("dbSection");
+  if(mode==="custom"){
+    /* Editable connection fields — this is what lets you edit the current
+       custom database (the gap the old "Change…" left). */
+    fields.forEach(function(f){var e=el(f);e.readOnly=false;e.disabled=false;});
+    section.hidden=false;refreshUrl();
+  }else{
+    /* lab or none: nothing to type. Lab credentials are forced by the backend
+       at launch (normalize_config); none = the oTree default (SQLite). */
+    section.hidden=true;
+  }
+}
+function setDbVals(n,u,p,h,pt){el("db_name").value=n;el("db_user").value=u;el("db_pw").value=p;el("db_host").value=h;el("db_port").value=pt;}
+function refreshUrl(){el("dbUrl").textContent="postgres://"+val("db_user")+":••••••••@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");}
+["db_name","db_user","db_host","db_port"].forEach(function(f){document.addEventListener("DOMContentLoaded",function(){
+  var e=el(f);if(e)e.addEventListener("input",function(){if(currentDbMode==="custom")refreshUrl();refreshDbSummary();});});});
+function refreshDbSummary(){
+  var mode=currentDbMode,base;
+  if(mode==="lab")base="Lab shared database (Postgres)";
+  else if(mode==="none")base="oTree default (SQLite)";
+  else{var name=(val("db_name")||"").trim()||"custom database";var host=(val("db_host")||"").trim()||"localhost";base=name+" on "+host+" (Postgres)";}
+  el("dbSummary").textContent=base;
+}
+
+/* ======================================================================
+   CARD 3 — Lab (tiles, room, participant list, seat map)
+   ====================================================================== */
+function setLabs(labs){
+  LABS=(labs||[]).map(function(l){return {id:l.id,name:l.name||l.id,host:l.host||"localhost",
+    seats:(l.seats||[]).slice(),map:(l.map&&typeof l.map==="object")?l.map:null};});
+  LAB_BY_ID={};LABS.forEach(function(l){LAB_BY_ID[l.id]=l;});buildLabTiles();
+}
+function buildLabTiles(){
+  var box=el("labTiles");box.innerHTML="";
+  if(LABS.length===1){
+    box.style.display="block";var l=LABS[0];
+    var d=document.createElement("div");d.className="single-lab";
+    d.textContent=l.name+" ("+l.host+") · "+l.seats.length+" seats";box.appendChild(d);
+    selectedLabId=l.id;return;
+  }
+  box.style.display="grid";
+  LABS.forEach(function(l){
+    var t=document.createElement("button");t.className="lab-tile";t.dataset.lab=l.id;
+    t.innerHTML='<div class="nm">'+escapeHtml(l.name)+'</div><div class="sub">'+escapeHtml(l.host)+' · '+l.seats.length+' seats</div>';
+    t.onclick=function(){selectLab(l.id);};box.appendChild(t);
+  });
+}
+function selectLab(id){
+  if(!LAB_BY_ID[id]&&LABS.length)id=LABS[0].id;
+  selectedLabId=id||"";
+  document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){
+    t.classList.toggle("active",t.dataset.lab===selectedLabId);t.classList.remove("faded");});
+  el("hostLinks").hidden=false;el("backToLabLink").hidden=true;
+  el("customFields").hidden=true;el("localNote").hidden=true;el("roomRow").hidden=false;
+  try{localStorage.setItem("otreeLab",id);}catch(e){}
+  updateSeats();updateDirtyState();
+}
+function selectCustomHost(){
+  selectedLabId="custom";
+  document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
+  el("hostLinks").hidden=true;el("backToLabLink").hidden=false;
+  el("customFields").hidden=false;el("localNote").hidden=true;el("roomRow").hidden=true;el("mapRow").hidden=true;
+  updateDirtyState();
+}
+/* Local (this computer): a first-class off-lab host on localhost. Its host is
+   fixed (no typed field), it shows the normal Room row and a note, and it has no
+   seat board, so the map is hidden. Pairs with the oTree default (SQLite) DB. */
+function selectLocalHost(){
+  selectedLabId="local";
+  document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
+  el("hostLinks").hidden=true;el("backToLabLink").hidden=false;
+  el("customFields").hidden=true;el("localNote").hidden=false;el("roomRow").hidden=false;el("mapRow").hidden=true;
+  updateDirtyState();
+}
+function backToLab(){var id=LABS.length?LABS[0].id:"";selectLab(id);el("mapRow").hidden=false;}
+function syncCustomRoom(){}
+function onSeatMode(){
+  var mode=el("seat_mode").value;
+  el("seatFile").hidden=(mode!=="file");
+  var showMap=(mode==="lab_default"||mode==="edit")&&selectedLabId!=="custom";
+  el("mapRow").hidden=!showMap;
+  if(showMap)updateSeats();
+}
+function updateSeats(){
+  var lab=labById(currentLab());var seats=lab?lab.seats:[];
+  el("mapCapText").textContent="Room layout · "+seats.length+" seats";
+  renderSeatMap(currentLab());
+}
+function toggleMap(){mapExpanded=!mapExpanded;el("mapArw").innerHTML=mapExpanded?"&#9662;":"&#9656;";
+  el("seatMap").hidden=!mapExpanded;}
+function renderSeatMap(labId){
+  var lab=labById(labId),box=el("seatMap");if(!box)return;box.innerHTML="";
+  if(!lab){box.style.gridTemplateColumns="";return;}
+  var map=lab.map;
+  if(map&&map.cells&&map.cells.length)renderMappedSeats(box,map,lab.seats);else renderPlainGrid(box,lab.seats);
+}
+function renderMappedSeats(box,map,seats){
+  var maxC=0;(map.cells||[]).forEach(function(c){var cc=parseInt(c.c,10);if(!isNaN(cc)&&cc>maxC)maxC=cc;});
+  var cols=parseInt(map.cols,10)||maxC||1;box.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  var list=seats||[],si=0;
+  (map.cells||[]).forEach(function(cell){
+    var r=parseInt(cell.r,10),c=parseInt(cell.c,10);if(isNaN(r)||isNaN(c))return;
+    var kind=cell.kind||"seat";var d=document.createElement("div");
+    d.className="seatcell"+(kind==="exp"?" exp":(kind==="wall"?" wall":""));
+    d.style.gridColumn=cell.colspan?(c+" / span "+cell.colspan):c;
+    d.style.gridRow=cell.rowspan?(r+" / span "+Math.round(cell.rowspan)):r;
+    if(kind==="wall")d.setAttribute("aria-hidden","true");
+    else if(kind==="exp")d.textContent="EXP";
+    else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;if(lab)d.setAttribute("data-seat",lab);}
+    box.appendChild(d);
+  });
+}
+function renderPlainGrid(box,seats){
+  seats=seats||[];var cols=Math.min(Math.max(Math.ceil(Math.sqrt(seats.length||1)),1),8);
+  box.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;d.setAttribute("data-seat",s);box.appendChild(d);});
+}
+function setSeatFilePath(p){var b=el("seatFilePath");if(p){b.textContent=p;b.classList.remove("empty");}else{b.textContent="No file chosen yet";b.classList.add("empty");}updateDirtyState();}
+
+/* room default tag */
+function setRoom(name){
+  el("roomVal").textContent=name;el("customFields")&&(el("custom_room").value=name);
+  el("roomTag").hidden=(name!=="study");
+  updateDirtyState();
+}
+
+/* ======================================================================
+   apply / gather the whole form
+   ====================================================================== */
+function applyFields(f){
+  f=f||{};
+  currentProjectPath=f.project_path||"";setPath(currentProjectPath);
+  currentSeatFile=f.seat_file||"";setSeatFilePath(currentSeatFile);
+  el("admin_user").value=f.admin_username||"admin";
+  el("admin_pw").value=f.admin_password||"";
+  el("auth_level").value=f.auth_level||"STUDY";
+  el("production").checked=!!f.production;
+  el("auto_login").checked=(f.auto_login!==false);
+  var lab=f.lab||currentLab();
+  if(lab==="custom"){selectCustomHost();el("custom_host").value=f.custom_host||"";}
+  else if(lab==="local"){selectLocalHost();}
+  else{selectLab(lab);}
+  var mode=f.db_mode||"lab";
+  setDbVals(f.db_name||"otree",f.db_user||"otree",f.db_password||"",f.db_host||"localhost",f.db_port||"5432");
+  applyDbMode(mode);
+  el("resetdb").checked=(f.resetdb!==false);
+  el("seat_mode").value=f.seat_mode||"lab_default";onSeatMode();
+  setRoom(f.room_name||"study");
+  refreshDbSummary();
+  markFormClean();
+}
+function gatherFields(){
+  var lab=selectedLabId;var custom=(lab==="custom");var pseudo=(custom||lab==="local");
+  return {
+    project_path:currentProjectPath,
+    db_mode:currentDbMode,
+    db_name:val("db_name"),db_user:val("db_user"),db_password:val("db_pw"),
+    db_host:val("db_host"),db_port:val("db_port"),
+    admin_username:val("admin_user"),admin_password:val("admin_pw"),
+    production:el("production").checked,auth_level:val("auth_level"),
+    lab:pseudo?lab:currentLab(),custom_host:val("custom_host"),
+    port:"8000",page:"/rooms",
+    resetdb:el("resetdb").checked,open_browser:true,wait_seconds:5,
+    room_name:custom?val("custom_room"):el("roomVal").textContent,
+    seat_mode:val("seat_mode"),seat_excluded:[],seat_file:currentSeatFile
+  };
+}
+/* ---- unsaved-changes (dirty) tracking for the "Save as new config" button ----
+   A light flag: snapshot the whole form whenever a config is loaded or saved,
+   then compare on every edit. When they differ the button gets .dirty (bigger +
+   amber). No dirty flag existed before, so this is the surfaced one. */
+var cleanSnapshot=null;
+function formSnapshot(){try{return JSON.stringify(gatherFields());}catch(e){return "";}}
+function markFormClean(){cleanSnapshot=formSnapshot();updateDirtyState();}
+function updateDirtyState(){
+  var b=el("saveAsBtn");if(!b)return;
+  var dirty=(cleanSnapshot!==null&&formSnapshot()!==cleanSnapshot);
+  b.classList.toggle("dirty",dirty);
+}
+function applySettings(s){
+  lastSettings=s;
+  if(!s){el("blockWarn").hidden=true;return;}
+  var broken=(s.readable&&!s.has_block);
+  el("blockWarn").hidden=!broken;
+  if(broken)el("blockWarnMsg").textContent=s.message||"settings.py is missing the oTree lab support block.";
+}
+
+/* ======================================================================
+   BUTTON HANDLERS — project / file / path
+   ====================================================================== */
+function onBrowseProject(){if(NATIVE&&API)API.pick_project_folder();}
+function onBrowseFile(){if(NATIVE&&API)API.pick_participant_file();}
+function validateProjectPath(){
+  var p=(val("projPathInput")||"").trim();if(!p)return;
+  if(!NATIVE||!API){window.pywStatus("","Typing a path works in the app, not the static preview.");return;}
+  currentProjectPath=p;setPath(p);
+  API.validate_project(p).then(function(r){if(!r)return;if(r.project)applyProject(r.project);if(r.settings)applySettings(r.settings);});
+}
+document.addEventListener("DOMContentLoaded",function(){
+  var i=el("projPathInput");
+  if(i){
+    i.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();validateProjectPath();}});
+    i.addEventListener("change",validateProjectPath);
+  }
+  var rd=el("resetdb");if(rd)rd.addEventListener("change",refreshDbSummary);
+  /* Any field edit re-checks the dirty state (capture phase catches every
+     input/select/checkbox in the form). State changes that don't fire an input
+     event (lab tile, host, room, db mode) call updateDirtyState() directly. */
+  document.addEventListener("input",updateDirtyState,true);
+  document.addEventListener("change",updateDirtyState,true);
+});
+
+/* ======================================================================
+   GENERIC MODAL
+   ====================================================================== */
+function openModal(title,html,wide){
+  el("infoCard").className="modal-card"+(wide?" wide":"");
+  el("modalTitle").textContent=title;el("modalBody").innerHTML=html;el("infoModal").hidden=false;
+}
+function closeModal(){el("infoModal").hidden=true;}
+document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!el("infoModal").hidden)closeModal();});
+
+/* ---------------------------- Save as ---------------------------- */
+function onSaveAs(){
+  var suggested=currentConfigName?currentConfigName+" copy":"";
+  openModal("Save as new config",
+    '<p class="modal-desc">Saved configs are never changed. This adds a new one and leaves every existing config exactly as it is.</p>'+
+    '<div class="mfield"><label for="saveAsName">Config name</label><input id="saveAsName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
+    '<div class="mfield"><label for="saveAsAuthor">Researcher</label><input id="saveAsAuthor" type="text" value="'+escapeHtml(defaultAuthor)+'"></div>'+
+    '<div class="modal-err" id="saveAsErr"></div>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<button class="btn accent" onclick="doSaveAs()">Save</button></div>');
+  setTimeout(function(){var i=el("saveAsName");if(i){i.focus();i.select();
+    i.addEventListener("keydown",function(e){if(e.key==="Enter")doSaveAs();});}},30);
+}
+function doSaveAs(){
+  var name=(val("saveAsName")||"").trim();if(!name)return;var author=(val("saveAsAuthor")||"").trim();
+  if(!NATIVE){closeModal();window.pywStatus("","Saved (preview only).");return;}
+  API.save_config_as(name,gatherFields(),author).then(function(r){applyLog(r);
+    if(r&&r.ok){closeModal();if(author)defaultAuthor=author;renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
+      markFormClean();window.pywStatus("ok","Saved “"+r.selected+"”.");}
+    else{var e=el("saveAsErr");if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not save.";}}});
+}
+function deleteConfig(name){
+  if(!NATIVE||!API){window.pywStatus("","Delete works in the app, not the static preview.");return;}
+  pendingDelete=name;
+  openModal("Delete lab",'<p>Delete the config <strong>'+escapeHtml(name)+'</strong>? This cannot be undone.</p>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<button class="btn danger" id="btnConfirmDelete">Delete</button></div>');
+  setTimeout(function(){var b=el("btnConfirmDelete");if(b)b.onclick=doDelete;},30);
+}
+function doDelete(){var name=pendingDelete;if(!name||!NATIVE||!API){closeModal();return;}
+  API.delete_config(name).then(function(r){closeModal();pendingDelete=null;
+    if(r&&r.ok){renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
+      if(r.selected)API.select_config(r.selected).then(function(s){if(s&&s.ok){applyFields(s.fields);applyProject(s.project);applySettings(s.settings);}});
+      window.pywStatus("ok","Deleted “"+name+"”.");}
+    else window.pywStatus("err",(r&&r.message)||"Could not delete this config.");});
+}
+
+/* ---------------------------- settings.py block ---------------------------- */
+function onAppendBlock(){
+  if(!NATIVE||!API){window.pywStatus("","Add to settings.py works in the app, not the static preview.");return;}
+  if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
+  API.append_settings_block(currentProjectPath).then(function(r){if(!r)return;applyLog(r);
+    if(r.settings)applySettings(r.settings);
+    if(r.ok)window.pywStatus("ok","Added the lab support block. Backup: "+r.backup);
+    else window.pywStatus(r.already?"":"err",r.message||"Could not add the block.");});
+}
+
+/* ======================================================================
+   ROOM PICKER  ("Choose the room to serve")
+   ====================================================================== */
+function openRoomPicker(){
+  var rooms=NATIVE?["study"]:PREVIEW_ROOMS.slice();
+  roomSelIndex=0;
+  renderRoomPicker(rooms,NATIVE);
+  if(NATIVE&&API&&currentProjectPath){
+    API.list_project_rooms(currentProjectPath).then(function(r){
+      var names=["study"];
+      if(r&&r.ok&&r.rooms)r.rooms.forEach(function(n){if(names.indexOf(n)<0)names.push(n);});
+      renderRoomPicker(names,false,r&&!r.ok?(r.error||""):"");
+    });
+  }
+}
+function renderRoomPicker(rooms,loading,note){
+  var items=rooms.map(function(r,i){
+    return '<button class="room-item'+(r==="study"?" study":"")+(i===roomSelIndex?" sel":"")+'" onclick="roomSelIndex='+i+';roomRepaint()" ondblclick="useSelectedRoom()">'+escapeHtml(r)+(r==="study"?" (lab default)":"")+'</button>';
+  }).join("");
+  window._roomRooms=rooms;
+  openModal("Choose the room to serve",
+    '<div style="display:flex;justify-content:flex-end;margin:-8px 0 6px"><button class="i-btn" onclick="toggleRoomInfo()">i</button></div>'+
+    '<div class="info-panel" id="roomInfo" hidden>The lab desktop shortcuts open a per-machine link like '+
+      '<code>http://HOST:8000/room/study?participant_label=B3</code>, so every computer is a known fixed seat with a presence board. '+
+      'Only change the room if the computers will open a different room’s link.</div>'+
+    '<p class="modal-desc">The study room is the lab default: the lab computers’ desktop shortcuts open its participant PC links. Only change it if the computers will open a different room’s link.</p>'+
+    '<button class="btn-launch room-primary" onclick="useStudyRoom()">Use study (lab default) with participant PC links</button>'+
+    '<p class="room-note">'+(loading?"Reading this project’s rooms…":(note?escapeHtml(note):"Rooms defined in this project’s settings.py:"))+'</p>'+
+    '<div class="roomlist" id="roomList">'+items+'</div>'+
+    '<button class="btn" style="width:100%;margin-top:10px" onclick="useSelectedRoom()">Use the selected room</button>'+
+    '<div class="room-type"><input id="roomTypeName" type="text" placeholder="Or type a room name"><button class="btn" onclick="useTypedRoom()">Use this name</button></div>'+
+    '<div class="cta"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>',true);
+}
+function roomRepaint(){document.querySelectorAll("#roomList .room-item").forEach(function(b,i){b.classList.toggle("sel",i===roomSelIndex);});}
+function toggleRoomInfo(){var p=el("roomInfo");p.hidden=!p.hidden;}
+function useStudyRoom(){setRoom("study");closeModal();}
+function useSelectedRoom(){var r=(window._roomRooms||[])[roomSelIndex];if(r){setRoom(r);closeModal();}}
+function useTypedRoom(){var n=(val("roomTypeName")||"").trim();if(n){setRoom(n);closeModal();}}
+
+/* ======================================================================
+   CREATE DATABASE dialog
+   ====================================================================== */
+function openCreateDb(){
+  var suggested=(PREVIEW_PROJECT.name)||"otree";
+  if(NATIVE){var base=currentProjectPath.replace(/[\\/]+$/,"").split(/[\\/]/).pop();if(base)suggested=base;}
+  openModal("Create a new database",
+    '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
+    '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
+    '<div class="mfield"><label>New user (optional)</label><input id="cdbUser" type="text"></div>'+
+    '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
+    '<div class="modal-err" id="cdbErr"></div>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">Create</button></div>');
+}
+function doCreateDb(){
+  var name=(val("cdbName")||"").trim(),user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
+  if(!name){var e=el("cdbErr");e.style.display="block";e.textContent="Enter a database name.";return;}
+  if(!NATIVE||!API){closeModal();window.pywStatus("","Create database works in the app, not the static preview.");return;}
+  el("cdbCreate").textContent="Creating…";
+  API.create_database(name,user,pw).then(function(r){
+    if(r&&r.ok){closeModal();applyDbMode("custom");
+      if(r.fields)setDbVals(r.fields.db_name,r.fields.db_user,r.fields.db_password,r.fields.db_host,r.fields.db_port);
+      refreshUrl();refreshDbSummary();window.pywStatus("ok",r.message||"Database created.");}
+    else{var e=el("cdbErr");if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent="Create";}
+  });
+}
+
+/* ======================================================================
+   LAB SETTINGS dialog (gear -> Lab settings)
+   ====================================================================== */
+function openLabSettings(){
+  var marker=labMarker,markerName=(LAB_BY_ID[marker]||{}).name||marker;
+  var opts=LAB_PRESETS.map(function(p){return '<option value="'+escapeHtml(p.id)+'"'+(p.id===marker?" selected":"")+'>'+escapeHtml(p.name)+'</option>';}).join("");
+  var rows=LAB_PRESETS.map(function(p){
+    var pid=escapeHtml(p.id);
+    return '<tr><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.ip||p.host||"")+'</td><td class="c">'+(p.seats?p.seats.length:0)+
+      '</td><td class="c"><span class="shown-toggle'+(p.display===false?" off":"")+'" onclick="toggleLabShown(\''+pid+'\')">'+(p.display===false?"–":"✓")+'</span></td>'+
+      '<td class="c"><button class="btn tiny" onclick="labPresetEdit(\''+pid+'\')">Edit</button> '+
+      '<button class="btn tiny" onclick="deleteLabPreset(\''+pid+'\')">Delete</button></td></tr>';
+  }).join("");
+  openModal("Lab settings",
+    '<div class="ls-card"><h4>Which lab is this computer</h4>'+
+      '<p class="d">Sets the machine’s lab (saved to lab.local) and shows only that lab in the main selector. No file editing needed.</p>'+
+      '<div class="mfield" style="grid-template-columns:110px 1fr auto"><label>This computer</label>'+
+      '<select id="lsMarker">'+opts+'</select><button class="btn" onclick="makeThisTheLab()">Make this the lab</button></div>'+
+      '<div class="ls-status'+(marker?"":" warn")+'" id="lsIdentityStatus">'+(marker?("This computer is set to "+escapeHtml(markerName)+"."):"Not set yet: pick this computer’s lab.")+'</div></div>'+
+    '<div class="ls-card"><h4>Postgres admin (used only to create databases)</h4>'+
+      '<p class="d">Only used by “Create a new database”. Never used to launch.</p>'+
+      '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
+      '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
+      '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
+      '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
+      '<div class="ls-status" id="pgStatus">Saved automatically.</div></div>'+
+    '<div class="ls-card"><h4>Lab presets</h4>'+
+      '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Small lab and Large lab are seeded from the lab constants.</p>'+
+      '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
+      '<p class="ls-tip">Tip: click a lab’s ✓ / – in the Shown column to show or hide it.</p>'+
+      '<div class="ls-status" id="lsLabStatus"></div></div>'+
+    '<div class="cta spread"><div><button class="btn" onclick="labPresetEdit(null)">Add lab</button></div>'+
+      '<button class="btn" onclick="closeModal()">Close</button></div>',true);
+  ["pgUser","pgPw","pgHost","pgPort"].forEach(function(id){var e=el(id);if(e)e.addEventListener("change",savePgAdmin);});
+}
+function makeThisTheLab(){
+  var lab=val("lsMarker");
+  if(!NATIVE||!API){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+((LAB_BY_ID[lab]||{}).name||lab)+".";el("lsIdentityStatus").className="ls-status";return;}
+  API.set_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+(r.lab_name||lab)+".";
+    renderConfigList(r.configs,r.selected);}else el("lsIdentityStatus").textContent=(r&&r.message)||"Could not set the lab.";});
+}
+function savePgAdmin(){
+  PG_ADMIN={admin_username:val("pgUser"),admin_password:val("pgPw"),admin_host:val("pgHost"),admin_port:val("pgPort")};
+  if(NATIVE&&API&&API.save_pg_admin)API.save_pg_admin(PG_ADMIN);
+  var s=el("pgStatus");if(s)s.textContent="Saved ✓";
+}
+function toggleLabShown(id){
+  var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];if(!p)return;
+  var next=(p.display===false);
+  if(NATIVE&&API&&API.set_lab_display){API.set_lab_display(id,next).then(function(r){if(r&&r.presets){LAB_PRESETS=r.presets;if(r.labs)setLabs(r.labs);openLabSettings();}});}
+  else{p.display=next;openLabSettings();}
+}
+function labPresetEdit(id){
+  var p=id?(LAB_PRESETS.filter(function(x){return x.id===id;})[0]||null):null;
+  var name=p?(p.name||""):"", ip=p?(p.ip||p.host||""):"", seats=p?((p.seats||[]).join("\n")):"", cols=(p&&p.cols)?p.cols:"";
+  openModal(id?"Edit lab":"Add a lab",
+    '<div class="mfield"><label>Lab name</label><input id="lpName" type="text" value="'+escapeHtml(name)+'"></div>'+
+    '<div class="mfield"><label>IP address or host</label><input id="lpIp" type="text" value="'+escapeHtml(ip)+'"></div>'+
+    '<div class="mfield" style="align-items:start"><label>Seat labels</label><textarea id="lpSeats" rows="4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--bg-deep);color:var(--text);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px" placeholder="one per line, or spaces/commas">'+escapeHtml(seats)+'</textarea></div>'+
+    '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
+    '<div class="ls-status" id="lpStatus"></div>'+
+    '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
+}
+function saveLabPreset(id){
+  var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
+  function fail(m){var s=el("lpStatus");if(s){s.className="ls-status warn";s.textContent=m;}}
+  if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
+  var colsNum=cols?(parseInt(cols,10)||0):0;
+  var done=function(r){
+    if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);openLabSettings();
+      var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}}
+    else fail((r&&r.message)||"Could not save the lab.");};
+  if(id)API.update_lab(id,name,ip,seats,colsNum).then(done);
+  else API.add_lab(name,ip,seats,colsNum).then(done);
+}
+function deleteLabPreset(id){
+  var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;
+  if(!NATIVE||!API){var s=el("lsLabStatus");if(s){s.className="ls-status warn";s.textContent="Deleting labs works in the app, not the static preview.";}return;}
+  if(!confirm("Delete the lab \""+nm+"\"? This cannot be undone."))return;
+  API.delete_lab(id,selectedLabId).then(function(r){
+    if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
+      if(r.next_selected&&(selectedLabId===id))selectLab(r.next_selected);
+      openLabSettings();var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Deleted.";}}
+    else{var s2=el("lsLabStatus");if(s2){s2.className="ls-status warn";s2.textContent=(r&&r.message)||"Could not delete the lab.";}}
+  });
+}
+
+/* ======================================================================
+   FIRST-RUN "which lab is this computer in?"
+   ====================================================================== */
+function maybeChooseLab(marker){
+  if(marker)return;if(!NATIVE||!API)return;if(!LABS.length)return;showChooseLab();
+}
+function showChooseLab(){
+  var buttons=LABS.map(function(l){
+    return '<button class="room-item" style="border:1px solid var(--line);margin:6px 0;padding:12px 14px" onclick="chooseLab(\''+escapeHtml(l.id)+'\')">'+
+      '<div style="font-weight:600;color:var(--text-strong)">'+escapeHtml(l.name)+'</div>'+
+      '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+l.seats.length+' seats · '+escapeHtml(l.host)+'</div></button>';
+  }).join("");
+  openModal("Which lab is this computer in?",
+    '<p class="modal-desc">First launch on this machine: pick the lab it sits in. The launcher then shows just that lab.</p>'+
+    buttons+
+    '<button class="room-item" style="border:1px solid var(--line);margin:8px 0 0;padding:12px 14px;color:var(--accent);font-weight:600" onclick="labPresetEdit(null)">This is a different lab: create a new lab</button>'+
+    '<p class="room-note" style="margin-top:14px">Saved to lab.local on this machine and remembered next time. You can change it later in Lab Settings.</p>');
+}
+function chooseLab(lab){
+  if(!NATIVE||!API){closeModal();labMarker=lab;return;}
+  API.set_lab_marker(lab).then(function(r){closeModal();
+    if(r&&r.ok){labMarker=lab;renderConfigList(r.configs,r.selected);currentConfigName=r.selected;if(r.fields)applyFields(r.fields);
+      window.pywStatus("ok","This machine is set to the "+(r.lab_name||lab)+" lab.");}
+    else window.pywStatus("err",(r&&r.message)||"Could not set the lab.");});
+}
+
+/* ======================================================================
+   LAUNCH  ->  briefing  ->  handoff
+   ====================================================================== */
+function onLaunch(){
+  /* ONE consolidated "Before you launch" screen: fetch the briefing AND every
+     issue at once, then show a single modal (summary + all issues + action). */
+  if(NATIVE&&API){
+    var f=gatherFields();
+    Promise.all([API.launch_briefing(f),API.launch_issues(f)]).then(function(res){
+      showBeforeLaunch(res[0]||{},(res[1]&&res[1].issues)||[]);
+    });
+  }else{
+    showBeforeLaunch(previewBriefing(),[]);
+  }
+}
+function previewBriefing(){
+  var lab=labById(currentLab())||{name:"Lab",host:"localhost"};
+  var f=gatherFields();var open_room=(f.seat_mode==="none");
+  var room=f.room_name||"study";var host=(selectedLabId==="custom")?(val("custom_host")||"localhost"):lab.host;
+  var seats=lab.seats||[];
+  return {lab_label:lab.name,host:host,port:"8000",room:room,is_study:(room==="study"),
+    default_room:"study",open_room:open_room,seat_mode:f.seat_mode,seat_count:seats.length,
+    example_seat:open_room?"":(f.seat_mode==="file"?"SEAT":(seats[0]||"SEAT")),
+    shared_db:(currentDbMode==="lab")};
+}
+function shortcutName(labLabel){return "Study Room "+labLabel;}
+/* The MINIMAL launch summary, the same in every state: caution bar (shared db
+   only); top line = the LAB with an (i) that expands what the lab is + Server +
+   Room in place; then what to open on the participant computers. The study room
+   (the one the desktop shortcuts point at) shows only its shortcut chip and
+   reveals the per-seat link on HOVER over the chip; any other room has no
+   shortcut, so its link is shown. The dashboard login sits behind its own
+   collapsed expander. Shared by the consolidated Before-you-launch screen.
+   Which room has shortcuts is decided in Python (has_participant_links); this
+   only renders it. */
+window._blInfoOpen=false;window._blCredsOpen=false;
+function labAboutText(b){
+  var n=b.seat_count||0,seats;
+  if(b.open_room)seats="Open room: any computer can join, there is no seat list.";
+  else if(b.seat_mode==="file")seats=n+" seat labels, from your own seat file.";
+  else seats=n+" participant seats.";
+  return (b.lab_label||"This lab")+". The oTree server for this session runs on the server below, and the participant computers join the room below. "+seats;
+}
+function briefingSummaryHtml(b){
+  var shared=(b.shared_db!==undefined)?b.shared_db:((b.caution!==undefined)?b.caution:(currentDbMode==="lab"));
+  var loc="http://"+escapeHtml(b.host)+":"+escapeHtml(b.port||"8000")+"/room/"+escapeHtml(b.room);
+  var hasShortcut=(b.has_participant_links!==undefined)?b.has_participant_links:b.is_study;
+  var html='<div class="bl-sumhead">What will launch</div><div class="bl-sumcard">';
+  if(shared)html+='<div class="caution-bar"><span>&#9650;</span><span>Caution: shared lab database. It may be reset between sessions. Download your data as soon as the experiment finishes.</span></div>';
+  var linkRow=function(label,link){
+    return '<p class="bl-linklabel">'+label+'</p><div class="bl-linkrow"><div class="mono-line" id="blLink">'+link+'</div>'+
+      '<button class="btn tiny" onclick="blCopyLink(this)">Copy link</button></div>';
+  };
+  var linkLabel=b.open_room?"Each participant computer opens":"Per-seat link (replace SEAT with the seat number)";
+  var link=b.open_room?loc:(loc+'?participant_label=SEAT');
+  /* 1. top line: the Lab + (i). The (i) folds in what the lab is, Server and Room. */
+  html+='<details class="bl-lab" id="blLab"'+(window._blInfoOpen?' open':'')+' ontoggle="window._blInfoOpen=this.open">'+
+    '<summary title="About this lab, server and room"><span class="bl-labname">'+escapeHtml(b.lab_label)+'</span>'+
+    '<span class="bl-info" aria-label="More about this lab">i</span></summary>'+
+    '<div class="bl-labinfo" id="blLabInfo"><p>'+escapeHtml(labAboutText(b))+'</p>'+
+    '<dl class="bl-kv more"><dt>Server</dt><dd class="mono">'+escapeHtml(b.host)+':'+escapeHtml(b.port||"8000")+'</dd>'+
+    '<dt>Room</dt><dd class="mono">'+escapeHtml(b.room)+(b.open_room?' &nbsp;(open room, no seat list)':'')+'</dd></dl></div></details>';
+  /* 2. what to open on the participant computers */
+  if(hasShortcut){
+    /* Study room: the shortcut is already on the PCs, so the link is HIDDEN and
+       only appears while the chip is hovered (or keyboard-focused). */
+    html+='<div class="open-line">Open <span class="bl-chipwrap" id="blChipWrap" onmouseenter="blPlaceLinkPop()" onfocusin="blPlaceLinkPop()"><span class="room-chip" id="blRoomChip" tabindex="0">'+
+      escapeHtml(b.shortcut_name||shortcutName(b.lab_label))+'</span>'+
+      '<span class="bl-linkpop" id="blLinkPop"><span class="bl-linkpop-in" style="display:block"><strong>Open this desktop shortcut on each PC.</strong>'+
+      linkRow(linkLabel+", for reference",link)+'</span></span></span> on each participant computer.</div>';
+  }else{
+    /* Non-study room: no shortcut exists, so the link IS shown. State the room,
+       give the one-per-seat link to open on each computer, and note the
+       study-room alternative (the link still works — do NOT say the shortcuts
+       "will not match"). */
+    html+='<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
+    html+=linkRow(linkLabel,link);
+  }
+  /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
+  html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
+    '<div class="creds-box"><p class="intro">The dashboard should open already logged in. If the browser DOES ask, type or paste:</p>'+
+    '<div class="cred-row"><label>Username</label><input type="text" id="credUser" value="'+escapeHtml(val("admin_user")||"admin")+'" readonly><span></span><button class="btn tiny" onclick="copyVal(\'credUser\')">Copy</button></div>'+
+    '<div class="cred-row"><label>Password</label><input type="password" id="credPw" value="'+escapeHtml(val("admin_pw"))+'" readonly><button class="btn tiny" onclick="togglePw2(\'credPw\',this)">Show</button><button class="btn tiny" onclick="copyVal(\'credPw\')">Copy</button></div></div></details>';
+  return html+'</div>';
+}
+/* Place the study-room link hover card just under its chip (above it when there
+   is no room below), kept inside the window. Presentation only. */
+function blPlaceLinkPop(){
+  var chip=el("blRoomChip"),pop=el("blLinkPop");if(!chip||!pop)return;
+  pop.style.display="block";                       /* measurable before :hover paints */
+  var c=chip.getBoundingClientRect(),w=pop.offsetWidth,h=pop.offsetHeight;
+  var vw=document.documentElement.clientWidth,vh=document.documentElement.clientHeight;
+  var left=Math.max(12,Math.min(c.left,vw-w-12));
+  var top=(c.bottom+h<=vh-8)?c.bottom:Math.max(8,c.top-h);
+  pop.style.left=left+"px";pop.style.top=top+"px";
+  pop.style.display="";
+}
+function blCopyLink(btn){
+  var box=el("blLink");if(!box)return;
+  try{navigator.clipboard.writeText(box.textContent);}catch(e){}
+  if(btn){btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy link";},1200);}
+}
+/* The ONE consolidated pre-launch screen: summary + every issue (blocks and
+   warnings, each with its inline one-click fix or a hint) + the action row. */
+window._blBriefing=null;window._blIssues=[];
+function showBeforeLaunch(b,issues){
+  window._blBriefing=b||{};window._blIssues=issues||[];
+  window._blInfoOpen=false;window._blCredsOpen=false;   /* both reveals start collapsed */
+  /* Order: what needs action first (must-fix, then warnings), then what will
+     launch, then the sticky bottom bar. */
+  var html='<div id="blIssues"></div>'+
+    '<div id="blSummary">'+briefingSummaryHtml(window._blBriefing)+'</div>'+
+    '<div class="cta bl-cta" id="blActions"></div>';
+  openModal("Before you launch",html,true);
+  renderBlIssues(window._blIssues);
+  renderBlActions(window._blIssues);
+}
+function renderBlIssues(issues){
+  var box=el("blIssues");if(!box)return;issues=issues||[];
+  /* Straight into the items (no banner): every MUST-FIX card first, then every
+     warning card. idx stays the index into the ORIGINAL list so the room
+     selector ids keep matching blPickRoom(idx). */
+  var row=function(it,idx){
+    var block=(it.level==="block");var r='';
+    r+='<div class="bl-issue'+(block?" block":"")+'">';
+    r+='<span class="bl-ic '+(block?"block":"warn")+'">'+(block?"&#10005;":"!")+'</span>';
+    r+='<div><div class="bl-title">'+escapeHtml(it.title||"")+'</div>';
+    if(it.hint)r+='<div class="bl-hint">'+escapeHtml(it.hint)+'</div>';
+    /* Every issue is actionable inline where a fix exists: a single fix button
+       sits to the RIGHT of its issue; the room picker and the secondary "More
+       information" link sit under the text. */
+    var fixBtn='',acts='';
+    if(it.fix==="choose_folder")fixBtn='<button class="btn accent tiny" onclick="blChooseFolder()">'+escapeHtml(it.fix_label||"Choose folder…")+'</button>';
+    else if(it.fix==="add_block")fixBtn='<button class="btn accent tiny" onclick="blFix(\'add_block\')">'+escapeHtml(it.fix_label||"Fix")+'</button>';
+    else if(it.fix==="change_to_sqlite")fixBtn='<button class="btn accent tiny" onclick="blChangeToSqlite()">'+escapeHtml(it.fix_label||"Change to SQLite")+'</button>';
+    else if(it.fix==="recheck")fixBtn='<button class="btn accent tiny" onclick="blRecheck()">'+escapeHtml(it.fix_label||"Re-check")+'</button>';
+    else if(it.fix==="pick_room"){
+      var rooms=(it.rooms||[]);
+      if(rooms.length){
+        var opts=rooms.map(function(r){return '<option value="'+escapeHtml(r)+'">'+escapeHtml(r)+'</option>';}).join("");
+        acts+='<span class="bl-roomlabel">Rooms found:</span>'+
+              '<select class="bl-roomsel" id="blRoomSel'+idx+'">'+opts+'</select>'+
+              '<button class="btn accent tiny" onclick="blPickRoom('+idx+')">'+escapeHtml(it.fix_label||"Use this room")+'</button>';
+      }
+    }
+    if(it.info==="block")acts+='<button class="link bl-viewblock" onclick="viewBlock()">More information</button>';
+    if(acts)r+='<div class="bl-acts">'+acts+'</div>';
+    r+='</div><div class="bl-fix">'+fixBtn+'</div></div>';
+    return r;
+  };
+  var h='';
+  issues.forEach(function(it,idx){if(it.level==="block")h+=row(it,idx);});
+  issues.forEach(function(it,idx){if(it.level!=="block")h+=row(it,idx);});
+  box.innerHTML=h;
+}
+/* Must-fix "choose your project folder": open the SAME native folder picker as
+   the main Browse. The pick arrives via pywOnProjectPicked, which re-checks this
+   screen when it is the one showing. */
+function blChooseFolder(){
+  if(!NATIVE||!API){window.pywStatus&&window.pywStatus("","Choose folder works in the app, not the static preview.");return;}
+  API.pick_project_folder();
+}
+function blChangeToSqlite(){
+  /* Switch to the oTree default database (SQLite); Postgres/psycopg2 no longer
+     needed. Updates the real form field so the re-check and the launch agree. */
+  applyDbMode("none");refreshDbSummary();
+  window.pywStatus&&window.pywStatus("ok","Switched to the oTree default database (SQLite).");
+  blRecheck();
+}
+function blPickRoom(idx){
+  var sel=el("blRoomSel"+idx);if(!sel)return;
+  var room=sel.value;if(!room)return;
+  setRoom(room);
+  window.pywStatus&&window.pywStatus("ok","Room set to "+room+" for this launch.");
+  blRecheck();
+}
+function renderBlActions(issues){
+  var box=el("blActions");if(!box)return;issues=issues||[];
+  var nBlock=issues.filter(function(i){return i.level==="block";}).length;
+  var nWarn=issues.filter(function(i){return i.level==="warn";}).length;
+  /* The state-dependent bottom bar — the ONLY place a launch is offered:
+       all clear      [Cancel]             ✓ Ready to launch  [Launch]
+       warnings only  [Cancel] [Re-check]  ( ⚠ N warnings  [Launch anyway] )
+       must-fix       [Cancel] [Re-check]  Fix the must-fix item above…  [Launch] (disabled) */
+  var any=(nBlock||nWarn);
+  var h='<button class="btn ghost bl-cancel'+(any?'':' solo')+'" onclick="closeModal()">Cancel</button>';
+  if(any)h+='<button class="btn ghost tiny bl-recheck" onclick="blRecheck()">&#8635; Re-check</button>';
+  if(nBlock){
+    h+='<span class="bl-blocknote">Fix the '+(nBlock===1?"must-fix item":nBlock+" must-fix items")+' above to launch.</span>'+
+       '<button class="btn bl-primary bl-launch-off" disabled aria-disabled="true" title="Fix the must-fix items first">Launch</button>';
+  }else if(nWarn){
+    h+='<span class="bl-callout"><span class="ic">&#9888;</span><span class="n">'+nWarn+' warning'+(nWarn===1?"":"s")+'</span>'+
+       '<button class="btn bl-primary bl-anyway" onclick="blProceed()">Launch anyway</button></span>';
+  }else{
+    h+='<span class="bl-ready"><span class="bl-ic ok">&#10003;</span>Ready to launch</span>'+
+       '<button class="btn accent bl-primary" onclick="blProceed()">Launch</button>';
+  }
+  box.innerHTML=h;
+}
+function blFix(kind){
+  if(kind!=="add_block")return;
+  if(!NATIVE||!API){window.pywStatus("","Add to settings.py works in the app, not the static preview.");return;}
+  if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
+  API.append_settings_block(currentProjectPath).then(function(r){
+    if(r){applyLog(r);if(r.settings)applySettings(r.settings);
+      if(r.ok)window.pywStatus("ok","Added the lab support block. Backup: "+r.backup);}
+    blRecheck();
+  });
+}
+function blRecheck(){
+  if(!NATIVE||!API){renderBlIssues([]);renderBlActions([]);return;}
+  var f=gatherFields();
+  /* Refresh BOTH the summary (an inline fix may clear the shared-db caution or
+     change the per-seat link) and the issue list, from the CURRENT fields. */
+  Promise.all([API.launch_briefing(f),API.launch_issues(f)]).then(function(res){
+    var b=res[0]||{};var is=(res[1]&&res[1].issues)||[];
+    window._blBriefing=b;window._blIssues=is;
+    var sum=el("blSummary");if(sum)sum.innerHTML=briefingSummaryHtml(b);
+    renderBlIssues(is);renderBlActions(is);
+  });
+}
+function blProceed(){
+  if(!NATIVE){
+    var is0=el("blIssues");if(is0)is0.innerHTML="";
+    var act0=el("blActions");if(act0)act0.outerHTML='<p class="handoff-note" id="takeoverStatus">Launching… (preview: no real process)</p>';
+    el("modalTitle").textContent="Session running";
+    window.pywStatus("ok","Launching — opening the oTree dashboard. (preview: no real process)");return;
+  }
+  /* All issues were already surfaced here, so proceed straight to the launch
+     (force=true skips the redundant backend preflight). The modal turns into
+     the handoff banner in place. */
+  var is=el("blIssues");if(is)is.innerHTML="";
+  var act=el("blActions");if(act)act.outerHTML='<p class="handoff-note" id="takeoverStatus">Starting the server… this popup will confirm when it is up.</p>';
+  el("modalTitle").textContent="Launching…";
+  window.pywStatus("","Launching…");
+  doLaunch(true);
+}
+function copyVal(id){try{navigator.clipboard.writeText(val(id));}catch(e){}}
+function togglePw2(id,btn){var i=el(id);if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
+var launchDashboardUrl="";
+/* Run the launch. force=true skips the backend preflight gate (the consolidated
+   screen already surfaced everything). The handoff banner is NOT set to success
+   here — it stays "launching" until the real result arrives via pywOnLaunchResult. */
+function doLaunch(force){
+  if(!NATIVE||!API)return;
+  API.launch(gatherFields(),!!force).then(handleLaunchResponse);
+}
+function handleLaunchResponse(r){
+  if(r&&r.ok&&r.launching){enterLaunchingState();return;}   /* wait for pywOnLaunchResult */
+  if(r&&!r.ok){var m=(r.message)||"Launch could not start.";showHandoffFailure(m);window.pywStatus("err",m);return;}
+}
+function enterLaunchingState(){
+  var cta=el("briefingCta");
+  var note='Starting the server… this popup will confirm when it is up.';
+  if(cta){cta.outerHTML='<p class="handoff-note" id="takeoverStatus">'+note+'</p>';}
+  else{var t=el("takeoverStatus");if(t){t.className="handoff-note";t.textContent=note;}}
+  el("modalTitle").textContent="Launching…";
+}
+/* The REAL launch outcome, pushed from the Python worker. Only a genuine
+   success shows "dashboard opening" + a working link; a failure shows a clear
+   failure state and no dead "Click here". */
+window.pywOnLaunchResult=function(res){
+  if(res&&res.ok){showHandoffSuccess(res.url||"");}
+  else{showHandoffFailure((res&&res.message)||"Launch failed — see the activity log.");}
+};
+function showHandoffSuccess(url){
+  launchDashboardUrl=url||"";
+  if(el("infoModal").hidden)return;
+  el("modalTitle").textContent="Session running";
+  var t=el("takeoverStatus");
+  if(t){t.className="handoff-note";
+    t.innerHTML='Experiment launched, dashboard opening. No dashboard? <a onclick="openDashboard()">Click here</a>';}
+}
+function showHandoffFailure(msg){
+  if(el("infoModal").hidden){window.pywStatus("err",msg);return;}
+  el("modalTitle").textContent="Launch failed";
+  var t=el("takeoverStatus");
+  if(t){t.className="handoff-note err";
+    t.innerHTML='<strong>Launch failed — see the activity log.</strong><br>'+escapeHtml(msg||"");}
+}
+function openDashboard(){
+  if(NATIVE&&API&&API.open_url&&launchDashboardUrl)API.open_url(launchDashboardUrl);
+}
+
+/* ======================================================================
+   GEAR MENU
+   ====================================================================== */
+function openGearMenu(ev){
+  ev.stopPropagation();closeGearMenu();
+  var m=document.createElement("div");m.className="gearmenu";m.id="gearMenu";
+  m.innerHTML='<button onclick="closeGearMenu();openLabSettings()">Lab settings...</button>'+
+    '<button onclick="closeGearMenu();viewBlock()">View settings.py block...</button>';
+  document.body.appendChild(m);
+  var r=el("gearBtn").getBoundingClientRect();m.style.left=r.left+"px";m.style.top=(r.bottom+6)+"px";
+  setTimeout(function(){document.addEventListener("click",closeGearMenu,{once:true});},0);
+}
+function closeGearMenu(){var m=el("gearMenu");if(m)m.remove();}
+function viewBlock(){
+  if(NATIVE&&API)API.settings_block_text().then(function(t){showBlock(t);});
+  else showBlock("# === oTree lab support (paste at the END of settings.py) ===\n# OTREE LAB SUPPORT — appended by the oTree lab launcher.\n# TO REMOVE: delete everything from this banner line to the END of the file.\n# Does NOTHING unless the launcher sets its variables at launch.\nimport os as _os\n…\n# === end oTree lab support ===");
+}
+function showBlock(text){
+  openModal("oTree lab support block",
+    '<p class="modal-desc">Paste this at the END of settings.py. With none of the launcher’s variables set, this block does nothing, so it is safe to leave in the project permanently.</p>'+
+    '<div class="mono-line" style="white-space:pre;max-height:300px;overflow:auto">'+escapeHtml(text)+'</div>'+
+    '<div class="cta"><button class="btn" onclick="copyBlockText()">Copy</button>'+
+    '<button class="btn accent" onclick="onAppendBlock()">Add to settings.py</button>'+
+    '<button class="btn ghost" onclick="closeModal()">Close</button></div>',true);
+  window._blockText=text;
+}
+function copyBlockText(){try{navigator.clipboard.writeText(window._blockText||"");}catch(e){}}
+function onExport(){
+  if(!NATIVE){window.pywStatus("","Save one-click shortcut is a placeholder in the preview.");return;}
+  API.export_bat(currentConfigName||"config",gatherFields());
+}
+
+/* ======================================================================
+   BOOTSTRAP — native vs static preview
+   ====================================================================== */
+function initNative(state){
+  NATIVE=true;el("logBody").innerHTML="";
+  defaultAuthor=state.default_author||"";labMarker=state.lab_marker||"";
+  var haveLab=(state.lab_info_present!==false);
+  setLabs(haveLab?(state.labs||[]):[]);
+  LAB_PRESETS=state.lab_presets||state.labs||[];
+  if(state.pg_admin)PG_ADMIN=state.pg_admin;
+  if(!haveLab){el("labNotice").hidden=false;el("labBody").hidden=true;}
+  renderConfigList(state.configs,state.selected);currentConfigName=state.selected;
+  applyFields(state.fields);applyProject(state.project);applySettings(state.settings);
+  appendLog("muted","oTree Lab Launcher ready. Config file: "+state.presets_path);
+  if(haveLab)maybeChooseLab(state.lab_marker);
+}
+function clearPreviewContent(){
+  setPath("");applyProject({});el("dbSummary").textContent="";
+}
+function bootNative(){
+  if(booted)return;booted=true;API=window.pywebview.api;NATIVE=true;clearPreviewContent();
+  API.get_initial_state().then(initNative);
+}
+function bootPreview(){
+  if(booted)return;booted=true;
+  setLabs(PREVIEW_LABS);
+  LAB_PRESETS=PREVIEW_LABS.map(function(l){return {id:l.id,name:l.name,ip:l.host,seats:l.seats,display:true};});
+  PG_ADMIN={admin_username:"postgres",admin_password:"postgres",admin_host:"localhost",admin_port:"5432"};
+  labMarker="large";
+  renderConfigList(PREVIEW_CONFIGS,"Dictator study");
+  currentConfigName="Dictator study";
+  var lab=(function(){try{var v=localStorage.getItem("otreeLab");if(v&&LAB_BY_ID[v])return v;}catch(e){}return "large";})();
+  applyFields({lab:lab,db_mode:"lab",admin_username:"admin",production:true,auth_level:"STUDY",
+    resetdb:true,seat_mode:"lab_default",room_name:"study"});
+  applyProject(PREVIEW_PROJECT);setPath(PREVIEW_PATH);
+  applySettings({readable:true,has_block:true,uses_lab_room:true});
+}
+window.addEventListener("pywebviewready",bootNative);
+setTimeout(function(){
+  if(booted)return;
+  if(window.pywebview&&window.pywebview.api)bootNative();
+  else if(!window.pywebview)bootPreview();
+},700);
+</script>
+</body>
+</html>

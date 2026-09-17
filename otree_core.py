@@ -186,6 +186,15 @@ DB_MODE_BY_LABEL = {v: k for k, v in DB_MODE_LABELS.items()}
 
 LAB_CUSTOM = "custom"
 
+# A first-class "Local (this computer)" host for off-lab testing: it resolves to
+# localhost (no lab infrastructure needed) and pairs naturally with the oTree
+# default (SQLite) database, so a launch runs entirely on the tester's machine.
+# It is a pseudo-lab id (like LAB_CUSTOM), not a lab in lab_info.json, so the
+# real labs are left untouched.
+LAB_LOCAL = "local"
+LOCAL_HOST = "localhost"
+LOCAL_LAB_LABEL = "Local (this computer)"
+
 
 def _default_lab_id_from_info(info):
     chosen = str((info or {}).get("default_lab") or "").strip()
@@ -448,6 +457,8 @@ def resolve_host(cfg, lab_presets=None):
     """
     c = normalize_config(cfg)
     lab = c["lab"]
+    if lab == LAB_LOCAL:
+        return LOCAL_HOST
     if lab == LAB_CUSTOM:
         return c["custom_host"].strip()
     preset = find_lab_preset(lab, _presets_or_default(lab_presets))
@@ -456,8 +467,51 @@ def resolve_host(cfg, lab_presets=None):
     return c["custom_host"].strip()
 
 
+# The admin URL path for a specific room's monitor page (the arrival board:
+# the room's participant-label grid that flips grey→green as people join).
+# Determined EMPIRICALLY against oTree 6.0.15 (see _ai/verify_room_monitor.log):
+# the admin /rooms LIST links each room to the "RoomWithoutSession" view, whose
+# route is /room_without_session/<room_name> (it 302-redirects to
+# /room_with_session/<room_name> once a session is running there). This is the
+# page the experimenter actually wants open, so a real chosen room upgrades the
+# post-launch auto-open from the /rooms LIST to that room's monitor.
+ROOM_MONITOR_PATH = "/room_without_session/%s"
+
+# The launcher's own default auto-open page (the admin rooms LIST). When a config
+# still carries this default value we treat the auto-open as "not customised" and
+# upgrade it to the chosen room's monitor; any other `page` is a deliberate user
+# override and is kept verbatim.
+DEFAULT_OPEN_PAGE = DEFAULT_CONFIG["page"]  # "/rooms"
+
+
+def room_monitor_path(room_name):
+    """Admin URL path for a specific room's monitor page (see ROOM_MONITOR_PATH).
+
+    Falls back to the /rooms list when the room name is empty/unresolvable.
+    """
+    name = str(room_name).strip()
+    return (ROOM_MONITOR_PATH % name) if name else DEFAULT_OPEN_PAGE
+
+
+def _is_default_open_page(page):
+    """True when `page` is still the launcher's default (the rooms list), so it
+    can be upgraded to the chosen room's monitor rather than treated as a
+    deliberate custom override."""
+    p = str(page).strip().strip("/").lower()
+    return p in ("", "rooms")
+
+
 def build_url(cfg, lab_presets=None):
-    """The page the launcher opens after the server has started."""
+    """The page the launcher auto-opens on the EXPERIMENTER PC after the server
+    starts.
+
+    By default this now lands on the CHOSEN room's monitor page (the arrival
+    board), so selecting a room is meaningful to the experimenter; it falls back
+    to the admin /rooms list when no room is resolvable. If the user set an
+    explicit `page` other than the default, that page is respected. This does
+    NOT change the per-seat participant links the launcher tells staff to open on
+    the lab PCs (those stay /room/<name>?participant_label=SEAT).
+    """
     c = normalize_config(cfg)
     host = resolve_host(c, lab_presets)
     port = c["port"].strip()
@@ -467,6 +521,10 @@ def build_url(cfg, lab_presets=None):
     base = "http://" + host
     if port:
         base += ":" + port
+    # A page still at the launcher default means "open the rooms area"; upgrade
+    # it to the chosen room's monitor. Anything else is a deliberate override.
+    if _is_default_open_page(page):
+        page = room_monitor_path(c["room_name"])
     if page and not page.startswith("/"):
         page = "/" + page
     return base + page
@@ -583,6 +641,33 @@ def resolve_seats(cfg, lab_presets=None):
     return seats
 
 
+def effective_seat_mode(cfg, lab_presets=None):
+    """The seat mode a launch will REALLY use, after resolving empties to None.
+
+    Seats are never a hard block (Julian): an absent seat file, a file that
+    cannot be read or is empty, or a lab-default/edit selection that resolves to
+    no seats (e.g. a custom host with no known seat list, or every seat unticked)
+    all fall back to SEAT_NONE — a perfectly valid open-room launch with no seat
+    board. A chosen file that DOES have labels stays SEAT_FILE (so its labels can
+    still be validated), and a lab default with seats stays as chosen.
+    """
+    c = normalize_config(cfg)
+    mode = c["seat_mode"]
+    if mode == SEAT_NONE:
+        return SEAT_NONE
+    if mode == SEAT_FILE:
+        path = c["seat_file"].strip()
+        if not path or not os.path.isfile(path):
+            return SEAT_NONE
+        try:
+            labels = read_seat_file(path)
+        except OSError:
+            return SEAT_NONE
+        return SEAT_FILE if labels else SEAT_NONE
+    # lab_default / edit: none when the resolved list is empty.
+    return mode if resolve_seats(c, lab_presets) else SEAT_NONE
+
+
 def invalid_seats(labels):
     """Labels oTree would reject (otree/common.py: validate_alphanumeric)."""
     return [label for label in labels if not SEAT_LABEL_RE.match(label)]
@@ -650,8 +735,8 @@ def seat_summary(cfg, resolved=None, lab_presets=None):
         return "%d seats from %s" % (len(labels), os.path.basename(path))
     labels = resolve_seats(c, lab_presets) if resolved is None else resolved
     if not labels:
-        return ("No seats. A custom host has no default seat list, so choose "
-                "a file or None.")
+        # No seats is not an error: it simply becomes the open (none) room.
+        return "No seats — the room opens with no seat board (none)."
     return "%d seats" % len(labels)
 
 
@@ -663,9 +748,12 @@ def prepare_label_file(cfg, config_name="session", lab_presets=None):
     exactly as it stands and is never copied or rewritten.
     """
     c = normalize_config(cfg)
-    if c["seat_mode"] == SEAT_NONE:
+    # Resolve empties (no file, unreadable/empty file, no default seats) to the
+    # open (none) room rather than erroring: seats are never a hard block.
+    mode = effective_seat_mode(c, lab_presets)
+    if mode == SEAT_NONE:
         return None, "No participant list, so OTREE_LAB_LABEL_FILE is not set."
-    if c["seat_mode"] == SEAT_FILE:
+    if mode == SEAT_FILE:
         path = os.path.abspath(c["seat_file"].strip())
         return path, "Using the project's own seat file, unchanged: %s" % path
     labels = resolve_seats(c, lab_presets)
@@ -1969,7 +2057,9 @@ def launch_briefing(cfg, lab_presets=None):
     host = resolve_host(c, lab_presets)
     lab = c["lab"]
     preset = find_lab_preset(lab, _presets_or_default(lab_presets))
-    if lab == LAB_CUSTOM:
+    if lab == LAB_LOCAL:
+        lab_label = LOCAL_LAB_LABEL
+    elif lab == LAB_CUSTOM:
         lab_label = "Custom host"
     elif preset is not None:
         lab_label = preset.get("name") or lab
@@ -1979,7 +2069,10 @@ def launch_briefing(cfg, lab_presets=None):
     port = (c["port"] or "8000").strip()
     room = c["room_name"].strip() or DEFAULT_ROOM_NAME
     is_study = (room == DEFAULT_ROOM_NAME)
-    seat_mode = c["seat_mode"]
+    # The mode a launch will REALLY use: no seats (absent/empty file, no default
+    # seats) falls back to the open room, so the briefing shows the open-room
+    # summary rather than a phantom seat board.
+    seat_mode = effective_seat_mode(c, lab_presets)
     seats = resolve_seats(c, lab_presets)
     open_room = (seat_mode == SEAT_NONE)
 
@@ -2118,6 +2211,352 @@ def enumerate_project_rooms(project_path, timeout=8.0, python_exe=None):
     result["rooms"] = names
     result["empty"] = (len(names) == 0)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Pre-launch preflight gate (checks 1–4)
+#
+# A handful of fast, fail-SOFT checks run in-process in the ~couple of seconds
+# BEFORE the launcher hands off to oTree. Each check returns a dict
+# {check, ok, message, detail}. Nothing here hard-blocks a launch: the Tk
+# launcher shows any failures in one modal with a "Launch anyway" button, and
+# everything else still defers to the oTree dashboard. Shared here (not in the
+# Tk file) so the web app can reuse the exact same checks later.
+# ---------------------------------------------------------------------------
+
+PREFLIGHT_DB_TIMEOUT = 4          # seconds for the psycopg2 connect probe
+PREFLIGHT_ROOMS_TIMEOUT = 6.0     # seconds for the ROOMS subprocess import
+
+
+def _preflight_result(check, ok, message, detail=""):
+    return {"check": check, "ok": bool(ok), "message": message, "detail": detail}
+
+
+def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
+    """Check 1: the lab Postgres is reachable and the credentials authenticate.
+
+    Skipped (reported ok, "n/a") in SQLite mode. Otherwise it makes a REAL
+    ``psycopg2.connect`` using the SAME ``DATABASE_URL`` the launcher builds, so
+    a wrong host, a down server, a wrong user/password or a missing database all
+    surface here rather than at the oTree dashboard. Fail-soft throughout: a
+    missing psycopg2 is reported as "could not verify" (ok) rather than crashing.
+    """
+    c = normalize_config(config)
+    if c["db_mode"] == DB_MODE_NONE:
+        return _preflight_result(
+            "database", True,
+            "No lab database (oTree SQLite) — nothing to check.",
+            "db_mode is 'none', so no Postgres connection is attempted.")
+
+    host = c["db_host"]
+    port = c["db_port"]
+    url = build_database_url(c)
+
+    try:
+        import psycopg2
+    except ImportError:
+        return _preflight_result(
+            "database", True,
+            "Could not verify the lab database — psycopg2 is not installed in "
+            "the launcher's Python.",
+            "Install psycopg2-binary to have the launcher pre-check the database.")
+
+    try:
+        conn = psycopg2.connect(url, connect_timeout=timeout)
+    except Exception as error:
+        # OperationalError covers wrong host/port/user/password/missing DB; any
+        # other psycopg2 or DSN problem is treated the same way (fail-soft).
+        return _preflight_result(
+            "database", False,
+            "Could not connect to the lab database at %s:%s — %s"
+            % (host, port, _pg_error(error)),
+            mask_database_url(url))
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return _preflight_result(
+        "database", True,
+        "Connected to the lab database at %s:%s." % (host, port),
+        mask_database_url(url))
+
+
+def preflight_check_port(config):
+    """Check 2: the launch port is free to bind on this machine.
+
+    Tries to bind the port oTree will use (from ``config['port']``). A bind that
+    fails with "address already in use" means another server is probably still
+    running. The probe socket is closed immediately on success. SO_REUSEADDR is
+    deliberately left off, so a genuine listener is detected.
+    """
+    import socket
+    import errno
+    c = normalize_config(config)
+    raw = str(c["port"]).strip()
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        return _preflight_result(
+            "port", True,
+            "No numeric launch port set — skipping the port check.",
+            "port=%r" % raw)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("", port))
+    except OSError as error:
+        if error.errno in (errno.EADDRINUSE, errno.EACCES):
+            return _preflight_result(
+                "port", False,
+                "Port %d is already in use — another server may still be running."
+                % port,
+                str(error))
+        return _preflight_result(
+            "port", True,
+            "Could not test port %d (%s) — continuing." % (port, error),
+            str(error))
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return _preflight_result("port", True, "Port %d is free." % port, "")
+
+
+def preflight_check_project(config, timeout=PREFLIGHT_ROOMS_TIMEOUT):
+    """Check 3: the project has a settings.py and the chosen room is in its ROOMS.
+
+    The project folder must exist and hold a ``settings.py``; then the chosen
+    room (``config['room_name']``) must appear in the project's own ``ROOMS``.
+    Reuses ``enumerate_project_rooms`` (the same path the room picker uses). If
+    the project's rooms cannot be read (import error / timeout) the room half is
+    a soft pass with a note, never a hard failure.
+    """
+    c = normalize_config(config)
+    path = c["project_path"].strip()
+    room = c["room_name"].strip()
+    if not path or not os.path.isdir(path):
+        return _preflight_result(
+            "project", False,
+            "Project folder not found: %s" % (path or "(none chosen)"),
+            "Pick the folder that holds settings.py.")
+    if not os.path.isfile(settings_path_for(path)):
+        return _preflight_result(
+            "project", False,
+            "No settings.py found in %s — is this an oTree project?" % path,
+            settings_path_for(path))
+
+    info = enumerate_project_rooms(path, timeout=timeout)
+    if info["ok"]:
+        if room and room not in info["rooms"]:
+            out = _preflight_result(
+                "project", False,
+                "Room '%s' is not defined in this project's ROOMS." % room,
+                "Rooms found: %s" % (", ".join(info["rooms"]) or "(none)"))
+            # Carry the machine-readable room list + a kind tag so the pre-launch
+            # screen can offer an inline room picker (issue_fix_for reads these).
+            out["kind"] = "room"
+            out["rooms"] = list(info["rooms"])
+            return out
+        return _preflight_result(
+            "project", True,
+            "settings.py found and room '%s' is defined in ROOMS." % room,
+            "Rooms: %s" % (", ".join(info["rooms"]) or "(none)"))
+    return _preflight_result(
+        "project", True,
+        "settings.py found; could not read the project's ROOMS to confirm '%s'."
+        % room,
+        info.get("error", ""))
+
+
+def otree_available():
+    """True when oTree can be launched here: the ``otree`` command is on PATH or
+    the ``otree`` package is importable in this Python."""
+    if shutil.which("otree"):
+        return True
+    try:
+        import importlib.util
+        return importlib.util.find_spec("otree") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def preflight_check_otree(config=None):
+    """Check 4: oTree is installed / runnable in this environment."""
+    if otree_available():
+        return _preflight_result(
+            "otree", True, "oTree is available in this environment.", "")
+    return _preflight_result(
+        "otree", False,
+        "oTree is not installed in this environment.",
+        "The launcher runs 'otree resetdb' / 'otree prodserver'; install oTree "
+        "or start the launcher from the Python environment that has it.")
+
+
+PREFLIGHT_PSYCOPG2_TIMEOUT = 6   # seconds for the oTree-runtime import probe
+
+
+def otree_runtime_python():
+    """Best-effort path to the Python interpreter the ``otree`` command runs under.
+
+    This matters because the launcher starts oTree as a SUBPROCESS
+    (``otree resetdb`` / ``otree prodserver``), and on macOS especially the
+    interpreter behind that ``otree`` console script can DIFFER from the
+    launcher's own ``sys.executable`` (e.g. the launcher runs under the system
+    ``python3`` while oTree lives in ``~/Library/Python/3.12``). To answer
+    "is psycopg2 importable where oTree actually runs?" we must probe THAT
+    interpreter, not our own.
+
+    The reliable, cross-tool signal is the Python interpreter CO-LOCATED with the
+    ``otree`` launcher: pip, uv, pipx and system installs all place the console
+    script next to the interpreter it targets (``.../bin/otree`` beside
+    ``.../bin/python``; on Windows ``Scripts\\otree.exe`` beside
+    ``Scripts\\python.exe``). We fall back to parsing the console script's
+    shebang, including the ``#!/bin/sh`` ... ``'''exec' '<python>'`` polyglot that
+    pip/uv emit (a naive shebang read would see ``/bin/sh`` there). Returns
+    ``None`` when it cannot be determined."""
+    exe = shutil.which("otree")
+    if not exe:
+        return None
+    bindir = os.path.dirname(exe)
+    names = ("python3", "python", "python3.13", "python3.12", "python3.11",
+             "python3.10", "python.exe", "python3.exe")
+    for base in (bindir, os.path.dirname(bindir), os.path.join(bindir, "..", "Scripts")):
+        for name in names:
+            cand = os.path.normpath(os.path.join(base, name))
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+    # Fall back to the shebang of the console script.
+    try:
+        with open(exe, "rb") as handle:
+            head = handle.read(4096)
+    except OSError:
+        return None
+    text = head.decode("utf-8", "replace")
+    lines = text.splitlines()
+    if lines and lines[0].startswith("#!"):
+        parts = lines[0][2:].strip().split()
+        if parts:
+            cand = parts[1] if (len(parts) > 1 and os.path.basename(parts[0]) == "env") else parts[0]
+            if os.path.basename(cand).startswith("python"):
+                if os.path.isabs(cand) and os.path.exists(cand):
+                    return cand
+                found = shutil.which(cand)
+                if found:
+                    return found
+    # The "#!/bin/sh" polyglot pip/uv emits names the python in an exec line.
+    match = re.search(r"""exec['"]?\s+['"]([^'"]*python[^'"]*)['"]""", text)
+    if match and os.path.exists(match.group(1)):
+        return match.group(1)
+    return None
+
+
+def psycopg2_available():
+    """True when ``psycopg2`` can be imported in the environment oTree runs in.
+
+    Probes the oTree-runtime interpreter (``otree_runtime_python``) in a short
+    subprocess so the answer reflects where ``otree resetdb`` will actually try
+    to import the driver — not necessarily the launcher's own interpreter. Falls
+    back to the launcher's interpreter only when the oTree interpreter cannot be
+    located (best reasonable check; see POLISH note on the residual limitation).
+    """
+    interp = otree_runtime_python()
+    if interp:
+        try:
+            result = subprocess.run(
+                [interp, "-c", "import psycopg2"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=PREFLIGHT_PSYCOPG2_TIMEOUT)
+            return result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            pass   # fall through to the launcher's own interpreter
+    try:
+        import importlib.util
+        return importlib.util.find_spec("psycopg2") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def preflight_check_psycopg2(config):
+    """Check 5: psycopg2 is importable when a Postgres database is selected.
+
+    In SQLite / no-database mode this is skipped (reported ok, "n/a"). When the
+    config selects a Postgres database (lab or custom) but ``psycopg2`` cannot be
+    imported, ``otree resetdb`` would later die with a cryptic
+    ``ModuleNotFoundError: No module named 'psycopg2'``. Catch it here, up front,
+    with an actionable message instead. Only Postgres modes trigger it — SQLite /
+    no-database never does.
+    """
+    c = normalize_config(config)
+    if c["db_mode"] == DB_MODE_NONE:
+        return _preflight_result(
+            "psycopg2", True,
+            "No lab database (oTree SQLite) — psycopg2 is not needed.",
+            "db_mode is 'none', so no Postgres driver is required.")
+    if psycopg2_available():
+        return _preflight_result(
+            "psycopg2", True, "psycopg2 (the Postgres driver) is installed.", "")
+    return _preflight_result(
+        "psycopg2", False,
+        "Postgres is selected but psycopg2 is not installed — run: "
+        "pip install psycopg2-binary, or use the oTree default (SQLite).",
+        "Without psycopg2 'otree resetdb' fails with "
+        "ModuleNotFoundError: No module named 'psycopg2'.")
+
+
+def preflight(config, lab_info=None):
+    """Run the pre-launch checks and return their result dicts, in order.
+
+    Each entry is ``{check, ok, message, detail}``. This is FAIL-SOFT: it reports
+    problems, it never blocks — the caller lists any failures and offers a
+    "Launch anyway". ``lab_info`` is accepted for parity with the web app and
+    future checks; the checks read everything they need from ``config`` (in
+    lab-database mode ``normalize_config`` has already forced the lab Postgres
+    credentials into it, so ``build_database_url`` yields the real lab DSN).
+
+    The psycopg2 check runs first: when a Postgres database is chosen but the
+    driver is missing, its actionable "pip install psycopg2-binary" message is
+    the one the user most needs to see (the database connect check below then
+    reports the same absence as a soft "could not verify").
+    """
+    return [
+        preflight_check_psycopg2(config),
+        preflight_check_database(config),
+        preflight_check_port(config),
+        preflight_check_project(config),
+        preflight_check_otree(config),
+    ]
+
+
+def preflight_failures(results):
+    """Just the failed checks from a ``preflight()`` result list."""
+    return [r for r in results if not r.get("ok", False)]
+
+
+def issue_fix_for(failure):
+    """Inline-action metadata for a preflight failure on the pre-launch screen.
+
+    Every issue the "Before you launch" screen shows should be resolvable right
+    there (Julian: "get to a point where you can just click Launch"). This maps a
+    failed check to a UI-agnostic fix descriptor both launchers render:
+
+      psycopg2  -> change_to_sqlite  (switch to the oTree default database)
+      port      -> recheck           (re-run the checks after freeing the port)
+      project   -> pick_room         (choose one of the project's own rooms),
+                                      only for the room-not-in-ROOMS case, and it
+                                      carries the ``rooms`` list to pick from.
+
+    Anything else returns an empty dict (hint only, no inline action).
+    """
+    check = failure.get("check")
+    if check == "psycopg2":
+        return {"fix": "change_to_sqlite", "fix_label": "Change to SQLite"}
+    if check == "port":
+        return {"fix": "recheck", "fix_label": "Re-check"}
+    if check == "project" and failure.get("kind") == "room":
+        return {"fix": "pick_room", "fix_label": "Use this room",
+                "rooms": list(failure.get("rooms", []))}
+    return {}
 
 
 # ---------------------------------------------------------------------------

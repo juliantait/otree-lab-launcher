@@ -1,0 +1,24 @@
+# oTree Lab Launcher (web / pywebview) — pinned dependencies.
+#
+# These pins exist to dodge the Windows WebView2 / pythonnet crash that froze
+# the launcher on Browse: a UI-Automation / accessibility client probing
+# window.native triggered infinite attribute recursion in pywebview's pythonnet
+# proxy inside a COM callback (RecursionError -> E_NOINTERFACE / 0x80004002).
+# Full write-up and the version matrix: _ai/WEB_FREEZE_DIAGNOSIS.md
+#
+# ALSO REQUIRED on Windows (cannot be pinned here — set up on the machine):
+#   * Python 3.11 or 3.12   — NOT 3.13/3.14 (pythonnet crashes on 3.13+).
+#   * Edge WebView2 Evergreen runtime updated to the latest, then REBOOT.
+#   * Retest with any screen-reader / UIA tool (Narrator, NVDA, JAWS) and any
+#     RMM/AV/remote-desktop/screen-recording overlay temporarily disabled —
+#     that is the fastest way to confirm the accessibility trigger.
+
+pywebview==5.4
+
+# Windows GUI bridge. NEVER pythonnet 3.0.0 or 3.0.0.post1 (known-bad).
+# If 3.0.5 misbehaves, try 3.0.3.
+pythonnet==3.0.5 ; sys_platform == "win32"
+
+# macOS uses the Cocoa/WebKit bridge instead of pythonnet:
+pyobjc-framework-Cocoa ; sys_platform == "darwin"
+pyobjc-framework-WebKit ; sys_platform == "darwin"
