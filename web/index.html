@@ -6,7 +6,7 @@
 <title>oTree Lab Launcher</title>
 <style>
 /* ===========================================================================
-   oTree Lab Launcher — web re-skin (v2, rebuilt on the Tk layout)
+   oTree Lab Launcher: web re-skin (v2, rebuilt on the Tk layout)
    Information architecture mirrors the Tkinter desktop app:
      • left sidebar = saved configs (+ gear -> Lab settings)
      • main = "1. oTree project", "2. Database" cards (left col) + "3. Lab"
@@ -60,7 +60,7 @@ body{
     radial-gradient(120% 80% at 12% -6%, rgba(224,70,110,.05), transparent 55%),
     var(--bg);
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
-  /* The window itself never scrolls — each column owns its own scroll region, so
+  /* The window itself never scrolls: each column owns its own scroll region, so
      an aggressive swipe can't drag the whole page (overscroll bounce). */
   overflow:hidden;overscroll-behavior:none;
 }
@@ -204,15 +204,42 @@ body{
 
 /* generic label + control rows */
 .subhead{font-size:12px;font-weight:700;color:var(--text-strong);margin:0 0 8px}
-.adminrow{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px}
+/* oTree admin sentence: three parameters in ONE inline row, separated by
+   vertically-centred middle dots:
+       oTree admin [pen]  •  Authentication level: STUDY [chevron]  •  Auto login [x]
+   Each dot belongs to the segment it precedes and sits in that segment's left
+   padding. The row is pulled left by the same amount inside a clipping wrapper,
+   so whichever segment starts a line (first, or first after a wrap) has its dot
+   clipped away: a wrapped line never begins with a stray dot. */
+.adminwrap{position:relative}
+.adminclip{overflow:hidden;padding:4px 0;margin:-4px 0}
+.adminrow{display:flex;align-items:center;flex-wrap:wrap;row-gap:10px;margin-left:-30px}
+.adminrow .seg{position:relative;display:inline-flex;align-items:center;padding-left:30px;white-space:nowrap}
+.adminrow .seg::before{content:"\2022";position:absolute;left:0;width:30px;top:50%;transform:translateY(-50%);
+  text-align:center;font-size:21px;line-height:1;color:var(--muted);pointer-events:none}
 .adminrow .lead{font-size:12.5px;font-weight:700;color:var(--text-strong)}
-.adminrow .lbl{font-size:12px;color:var(--muted)}
-.adminrow .editlink{margin-left:auto;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;background:none;border:0;font-family:inherit}
-.adminrow .editlink:hover{color:var(--accent)}
+.adminrow .lbl{font-size:12.5px;color:var(--muted)}
+.adminrow .pen{margin-left:5px}
+/* "Authentication level: STUDY v" reads as one sentence: the value is the same
+   size as its label, bold white, tight to the colon, with a small chevron. */
+.authval{display:inline-flex;align-items:center;gap:5px;margin-left:5px;padding:2px 3px;background:none;border:0;
+  border-radius:5px;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--text-strong);cursor:pointer;line-height:1.2}
+.authval svg{flex:none;color:var(--muted);transition:color .12s}
+.authval:hover{background:var(--panel-2)}
+.authval:hover svg,.authval[aria-expanded=true] svg{color:var(--accent)}
+.db-menu button.on{color:var(--text-strong);font-weight:650}
+.db-menu button .tick{display:inline-block;width:16px;color:var(--accent)}
 .chk{display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
 .chk input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex:none}
-.creds{margin-top:12px;display:grid;grid-template-columns:118px 1fr;gap:9px 12px;align-items:center;max-width:520px}
+/* admin username + password live in a popover opened by the pen (the same
+   collapsed-detail pattern as the database selector). The inputs stay in the
+   DOM while it is closed, so the form still gathers them. */
+.creds{position:absolute;z-index:55;left:0;top:calc(100% + 8px);width:min(400px,100%);box-sizing:border-box;
+  background:#26262a;border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:13px 14px;
+  display:grid;grid-template-columns:112px 1fr;gap:9px 12px;align-items:center}
+.creds[hidden]{display:none}
 .creds > label{font-size:12.5px;color:var(--muted)}
+.creds .done{grid-column:1 / -1;justify-self:end;margin-top:2px}
 .study{margin-top:2px}
 
 /* selects + inputs */
@@ -266,14 +293,17 @@ input::placeholder{color:var(--faint)}
 #saveAsBtn.dirty:hover{background:linear-gradient(180deg,#f4d992,#ecc978);border-color:#7a672f}
 
 /* database summary + change section */
-.sumrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sumrow .k{font-size:12.5px;color:var(--muted)}
-.sumrow .v{font-size:13px;font-weight:600;color:var(--text-strong)}
-.sumrow .btn{margin-left:auto}
-/* pen/edit icon + always-visible reset on the database summary line */
-.db-edit{background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
+/* ONE row: [database name + pen] on the left, "Reset before start" on the
+   right. space-between (not margin-left:auto) is what keeps them together: when
+   the row is too narrow the reset wraps to the START of the next line, directly
+   under the name, instead of staying stranded on the right. */
+.sumrow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 18px}
+.sumrow .db-name{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.sumrow .v{font-size:13px;font-weight:700;color:var(--text-strong);min-width:0;overflow-wrap:anywhere}
+/* pen/edit icon (database card + oTree admin) */
+.db-edit{flex:none;background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
 .db-edit:hover{color:var(--accent-dim,var(--accent))}
-.db-reset{margin-left:auto;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
+.db-reset{flex:none;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:#26262a;border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -293,6 +323,20 @@ input::placeholder{color:var(--faint)}
 .preview .k{font-size:10px;letter-spacing:.08em;color:var(--faint);text-transform:uppercase}
 .preview .v{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all;margin-top:3px}
 .db-create{margin:12px 0 4px}
+/* global database picker (the pen on the Database card) */
+.db-pick-list{display:flex;flex-direction:column;gap:1px;margin:2px 0 0}
+.db-pick-row{display:flex;align-items:baseline;gap:4px;width:100%;text-align:left;background:transparent;
+  border:1px solid transparent;border-radius:var(--r-xs);padding:8px 10px;color:var(--text);
+  font-family:inherit;font-size:13px;cursor:pointer}
+.db-pick-row:hover{background:var(--panel-2)}
+.db-pick-row.sel{background:var(--panel-2);border-color:var(--line-soft)}
+.db-pick-dot{flex:none;width:16px;color:var(--accent);font-size:11px}
+.db-pick-row.sel .db-pick-title{font-weight:700;color:var(--text-strong)}
+.db-pick-by{color:var(--faint);font-size:12px}
+.db-pick-sep{height:1px;background:var(--line-soft);margin:10px 0 8px}
+.db-pick-add{background:none;border:0;color:var(--accent);font-family:inherit;font-size:13px;
+  font-weight:650;cursor:pointer;padding:2px 2px}
+.db-pick-add:hover{text-decoration:underline}
 
 /* lab tiles */
 .lab-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -312,16 +356,16 @@ input::placeholder{color:var(--faint)}
 .lab-tile.faded{opacity:.45}
 .single-lab{font-size:14px;font-weight:650;color:var(--text-strong);padding:2px 0 4px}
 .otherhost{margin-top:11px}
-/* host affordances rendered as two clear pill buttons: localhost on the LEFT,
-   Other host on the RIGHT (pushed over with margin-left:auto). */
-.host-pick{display:flex;align-items:center;gap:10px;margin-top:12px}
+/* host choice: "localhost" and "Other host..." are two adjacent, left-aligned
+   buttons in EVERY state. The chosen one carries the selected look (the same
+   accent treatment as the active lab tile), and both stay visible so you can
+   always switch between them. */
+.host-pick{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
 .host-pick .host-pill{flex:none}
-.host-pick .host-pill.other{margin-left:auto}
+.host-pick .host-pill.active,.host-pick .host-pill.active:hover{
+  background:radial-gradient(120% 140% at 50% 0%, rgba(224,70,110,.22), var(--accent-soft));
+  border-color:var(--accent);color:var(--accent);font-weight:650;box-shadow:0 2px 10px rgba(224,70,110,.24)}
 .custom-fields{margin-top:12px}
-/* localhost quick option, folded into the Other-host flow */
-.hostquick{display:flex;align-items:center;gap:10px}
-.hostquick input{flex:1;min-width:0}
-.localquick{white-space:nowrap;color:var(--accent);flex:none}
 
 /* room + participant rows */
 .labrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
@@ -505,7 +549,7 @@ input::placeholder{color:var(--faint)}
 
 /* consolidated "Before you launch" screen (one modal): the MUST-FIX cards, then
    the warning cards (no banner), then the minimal "What will launch" card, then a
-   sticky bottom bar — the ONLY place a launch / "Launch anyway" is offered.
+   sticky bottom bar, the ONLY place a launch / "Launch anyway" is offered.
    Presentation only; levels/fixes come from the backend. */
 .bl-ic{flex:none;width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;
   font-size:11px;font-weight:800;line-height:1;color:#1b1b1d}
@@ -621,7 +665,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
   <aside class="sidebar">
     <div class="side-brand">
       <span class="mark">oTree Lab Launcher</span>
-      <button class="gear" id="gearBtn" title="Settings, tools and advanced" onclick="openGearMenu(event)">&#9881;</button>
+      <button class="gear" id="gearBtn" title="Lab settings" onclick="openLabSettings()">&#9881;</button>
     </div>
     <div class="side-head">
       <span class="cap">Saved configs</span>
@@ -662,20 +706,34 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <div class="divider"></div>
 
           <!-- oTree admin -->
-          <div class="adminrow">
-            <span class="lead">oTree admin</span>
-            <span class="lbl">Authentication level</span>
-            <select id="auth_level" class="auto"><option>STUDY</option><option>DEMO</option><option>none</option></select>
-            <label class="chk"><input type="checkbox" id="auto_login" checked> Auto login</label>
-            <button class="editlink" id="adminEdit" onclick="toggleAdminEdit()">Edit</button>
-          </div>
-          <div class="creds" id="adminCreds" hidden>
-            <label for="admin_user">Admin username</label>
-            <input type="text" id="admin_user" value="admin">
-            <label for="admin_pw">Admin password</label>
-            <div class="pwrap">
-              <input type="password" id="admin_pw" value="" placeholder="admin password">
-              <button type="button" class="pw-toggle" data-target="admin_pw" onclick="togglePw(this)">Show</button>
+          <div class="adminwrap">
+            <div class="adminclip">
+              <div class="adminrow">
+                <span class="seg">
+                  <span class="lead">oTree admin</span>
+                  <button type="button" class="db-edit pen" id="adminEdit" title="Edit admin username and password"
+                    aria-label="Edit admin username and password" aria-expanded="false" onclick="toggleAdminEdit(event)">&#9998;</button>
+                </span>
+                <span class="seg">
+                  <span class="lbl">Authentication level:</span>
+                  <button type="button" class="authval" id="authBtn" title="Change authentication level"
+                    aria-haspopup="true" aria-expanded="false" onclick="openAuthMenu(event)"><span id="authVal">STUDY</span><svg width="9" height="6" viewBox="0 0 10 7" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <input type="hidden" id="auth_level" value="STUDY">
+                </span>
+                <span class="seg">
+                  <label class="chk"><input type="checkbox" id="auto_login" checked> Auto login</label>
+                </span>
+              </div>
+            </div>
+            <div class="creds" id="adminCreds" hidden>
+              <label for="admin_user">Admin username</label>
+              <input type="text" id="admin_user" value="admin">
+              <label for="admin_pw">Admin password</label>
+              <div class="pwrap">
+                <input type="password" id="admin_pw" value="" placeholder="admin password">
+                <button type="button" class="pw-toggle" data-target="admin_pw" onclick="togglePw(this)">Show</button>
+              </div>
+              <button type="button" class="btn tiny done" onclick="closeAdminEdit()">Done</button>
             </div>
           </div>
 
@@ -689,9 +747,10 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
         <section class="card">
           <h2 class="card-num"><span class="n">2</span> Database</h2>
           <div class="sumrow">
-            <span class="k">Database</span>
-            <span class="v" id="dbSummary">Lab shared database (Postgres)</span>
-            <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbMenu(event)">&#9998;</button>
+            <span class="db-name">
+              <span class="v" id="dbSummary">Lab shared database (Postgres)</span>
+              <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbPicker(event)">&#9998;</button>
+            </span>
             <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
           </div>
 
@@ -736,18 +795,13 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
             <div class="lab-tiles" id="labTiles"></div>
 
             <div class="host-pick" id="hostLinks">
-              <button class="btn tiny host-pill" id="localHostBtn" onclick="selectLocalHost()">localhost</button>
-              <button class="btn tiny host-pill other" id="otherHostLink" onclick="selectCustomHost()">Other host&hellip;</button>
+              <button type="button" class="btn tiny host-pill" id="localHostBtn" aria-pressed="false" onclick="selectLocalHost()">localhost</button>
+              <button type="button" class="btn tiny host-pill" id="otherHostLink" aria-pressed="false" onclick="selectCustomHost()">Other host&hellip;</button>
             </div>
             <button class="link otherhost" id="backToLabLink" onclick="backToLab()" hidden>&larr; Back to a lab</button>
 
             <div class="custom-fields" id="customFields" hidden>
-              <div class="field"><label>Host</label>
-                <div class="hostquick">
-                  <input type="text" id="custom_host" placeholder="host or IP">
-                  <button class="link localquick" onclick="selectLocalHost()">use this computer (localhost)</button>
-                </div>
-              </div>
+              <div class="field"><label>Host</label><input type="text" id="custom_host" placeholder="host or IP"></div>
               <div class="field"><label>Room name</label><input type="text" id="custom_room" value="study" oninput="syncCustomRoom()"></div>
             </div>
 
@@ -834,7 +888,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 
 <script>
 /* ======================================================================
-   oTree Lab Launcher — web front end.
+   oTree Lab Launcher: web front end.
    Hosted in pywebview (otree_launcher_web.py) the controls do real work
    through window.pywebview.api.*. In a plain browser the whole page still
    runs as a static preview with example data (lab_info.example + maps/).
@@ -847,6 +901,12 @@ var LABS=[], LAB_BY_ID={}, selectedLabId="";
 var LAB_PRESETS=[], PG_ADMIN={admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"};
 var PROJECT_ROOMS=null, roomSelIndex=0, labMarker="";
 var mapExpanded=true, prevDbMode="lab";
+/* Round 3: the global database registry (custom entries only), the shared
+   researcher roster, and which built-in a new config defaults to. Kept in sync
+   from the backend (initial state + create-database results). The two built-in
+   ids match otree_core (DB_BUILTIN_SQLITE / DB_BUILTIN_LAB). */
+var DB_SQLITE_ID="otree_default", DB_LAB_ID="lab_shared";
+var DATABASES=[], RESEARCHERS=[], defaultDatabase=DB_LAB_ID;
 
 /* ---------- static preview data (example labs/maps, no real hosts) ---------- */
 var PREVIEW_LABS=[
@@ -863,6 +923,16 @@ var PREVIEW_CONFIGS=[
   {name:"Auction study",builtin:false,lab:"small",folder:"C:\\experiments\\auction",author:"P. Andersson",when:"9 Aug 2026"}
 ];
 var PREVIEW_ROOMS=["study","pilot","bargaining","teaching_demo"];
+/* Fake custom databases + researcher roster for the static preview (no real
+   hosts, users or passwords). Mirrors what core.known_databases_from_store /
+   list_researchers would return in the app. */
+var PREVIEW_DATABASES=[
+  {id:"dictator_pilot",title:"Dictator pilot",researcher:"J. Tait",postgres_user:"otree",
+   builtin:false,db_mode:"custom",db_name:"dictator_pilot",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432"},
+  {id:"trust_wave_2",title:"Trust wave 2",researcher:"S. Vermeer",postgres_user:"otree",
+   builtin:false,db_mode:"custom",db_name:"trust_wave_2",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432"}
+];
+var PREVIEW_RESEARCHERS=["A. Kowalski","J. Tait","L. Rossi","M. Researcher","P. Andersson","S. Vermeer"];
 var PREVIEW_PROJECT={name:"dictator_game",level:"ok",
   message:"Looks like an oTree project: settings.py and 1 app package",apps:["dictator"]};
 var PREVIEW_PATH="C:\\experiments\\dictator_game";
@@ -872,6 +942,9 @@ function el(id){return document.getElementById(id);}
 function val(id){var e=el(id);return e?e.value:"";}
 function escapeHtml(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+/* A JS string literal (single-quoted, HTML-attribute safe) for an inline onclick. */
+function jsQuote(s){return "'"+String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'")
+  .replace(/&/g,"&amp;").replace(/"/g,"&quot;")+"'";}
 function togglePw(btn){var i=el(btn.dataset.target);
   if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
 function labById(id){return LAB_BY_ID[id]||null;}
@@ -903,11 +976,11 @@ window.pywOnProjectPicked=function(p){if(!p||!p.path)return;
   if(!el("infoModal").hidden&&el("blIssues")&&el("blActions"))blRecheck();};
 window.pywOnFilePicked=function(p){if(!p||!p.path)return;currentSeatFile=p.path;setSeatFilePath(p.path);};
 window.pywOnBatResult=function(r){if(!r)return;
-  if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this config.");
+  if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file.");
   else if(r.message)window.pywStatus("err",r.message);};
 
 /* ======================================================================
-   SIDEBAR — saved configs
+   SIDEBAR: saved configs
    ====================================================================== */
 function labSuffix(lab){var l=LAB_BY_ID[lab];return l?(" ("+l.name+")"):"";}
 function configDisplay(c){return c.name+(c.builtin?labSuffix(c.lab):"");}
@@ -955,7 +1028,7 @@ function selectConfig(name,row){
 function lastConfigDisplay(name){return name;}
 
 /* ======================================================================
-   CARD 1 — oTree project
+   CARD 1: oTree project
    ====================================================================== */
 function setPath(p){var i=el("projPathInput");if(i)i.value=p||"";updateDirtyState();}
 function applyProject(p){
@@ -971,38 +1044,128 @@ function applyProject(p){
   else bul.hidden=true;
 }
 function titlecase(s){return String(s).replace(/[_-]+/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});}
-function toggleAdminEdit(){var c=el("adminCreds"),b=el("adminEdit");
-  var open=c.hidden;c.hidden=!open;b.textContent=open?"Done":"Edit";b.style.color=open?"var(--accent)":"";}
+/* The pen beside "oTree admin" opens a popover holding the admin username +
+   password (same collapsed-detail pattern as the database pen). It closes on
+   Done, Escape, or a click anywhere outside it. */
+function toggleAdminEdit(ev){if(ev)ev.stopPropagation();if(el("adminCreds").hidden)openAdminEdit();else closeAdminEdit();}
+function openAdminEdit(){
+  closeAuthMenu();
+  el("adminCreds").hidden=false;el("adminEdit").setAttribute("aria-expanded","true");
+  var u=el("admin_user");if(u){u.focus();u.select();}
+}
+function closeAdminEdit(){var c=el("adminCreds");if(!c||c.hidden)return;c.hidden=true;el("adminEdit").setAttribute("aria-expanded","false");}
+document.addEventListener("click",function(e){
+  var c=el("adminCreds");if(!c||c.hidden)return;
+  if(c.contains(e.target)||el("adminEdit").contains(e.target))return;
+  closeAdminEdit();
+});
+/* "Authentication level: STUDY v": the bold value + chevron opens the list of
+   the existing auth levels; the choice is held in the hidden #auth_level input
+   that applyFields/gatherFields already read. */
+var AUTH_LEVELS=["STUDY","DEMO","none"];
+function setAuthLevel(v){if(AUTH_LEVELS.indexOf(v)<0)v="STUDY";el("auth_level").value=v;el("authVal").textContent=v;}
+function openAuthMenu(ev){
+  ev.stopPropagation();
+  if(el("authMenu")){closeAuthMenu();return;}
+  closeAdminEdit();
+  var cur=val("auth_level")||"STUDY";
+  var m=document.createElement("div");m.className="db-menu";m.id="authMenu";m.style.minWidth="130px";m.setAttribute("role","menu");
+  m.innerHTML=AUTH_LEVELS.map(function(v){
+    return '<button type="button" role="menuitemradio" aria-checked="'+(v===cur)+'"'+(v===cur?' class="on"':'')+
+      ' onclick="chooseAuthLevel(\''+v+'\')"><span class="tick">'+(v===cur?"&#10003;":"")+'</span>'+v+'</button>';}).join("");
+  document.body.appendChild(m);
+  var r=el("authBtn").getBoundingClientRect();
+  m.style.left=r.left+"px";m.style.top=(r.bottom+6)+"px";
+  el("authBtn").setAttribute("aria-expanded","true");
+}
+/* Any click that is not on the value button closes the list (the button toggles
+   it itself). A standing listener, so there is no window where a fast click is
+   missed. */
+document.addEventListener("click",function(e){var b=el("authBtn");if(el("authMenu")&&!(b&&b.contains(e.target)))closeAuthMenu();});
+function closeAuthMenu(){var m=el("authMenu");if(m)m.remove();var b=el("authBtn");if(b)b.setAttribute("aria-expanded","false");}
+function chooseAuthLevel(v){closeAuthMenu();setAuthLevel(v);updateDirtyState();}
+window.addEventListener("resize",closeAuthMenu);
+window.addEventListener("scroll",closeAuthMenu,true);
+document.addEventListener("keydown",function(e){if(e.key==="Escape"){closeAuthMenu();closeAdminEdit();}});
 
 /* ======================================================================
-   CARD 2 — Database
+   CARD 2: Database
    ====================================================================== */
-/* The pen icon opens a dropdown of databases; the connection fields show (and
-   are editable) only for a custom database. "Reset before start" is the
-   always-visible checkbox on the summary line. */
-function openDbMenu(ev){
-  ev.stopPropagation();closeDbMenu();
-  var m=document.createElement("div");m.className="db-menu";m.id="dbMenu";
-  var h='<button onclick="chooseDbMode(\'lab\')">Lab shared database (Postgres)</button>'+
-        '<button onclick="chooseDbMode(\'none\')">oTree default (SQLite)</button>';
-  var name=(val("db_name")||"").trim();
-  if(currentDbMode==="custom"||name){
-    h+='<button onclick="chooseDbMode(\'custom\')">'+escapeHtml(name||"custom database")+' (custom Postgres)</button>';
+/* The pen icon opens the GLOBAL database picker (Round 3, Task 1): the oTree
+   default (SQLite), the lab shared Postgres, and EVERY custom database in the
+   registry, each with its creator researcher in grey on the same line, plus an
+   "Add new database…" action. The list is core.list_databases so this picker
+   and the Tk one show the same databases. Selecting one applies
+   core.database_config_fields to the on-screen config. The connection fields
+   show (and are editable) only for a custom database. */
+function openDbPicker(ev){
+  if(ev)ev.stopPropagation();closeAuthMenu();closeAdminEdit();
+  if(NATIVE&&API){
+    API.list_databases(gatherFields()).then(function(r){
+      renderDbPicker((r&&r.databases)||[],(r&&r.current_id)||"");});
+  }else{
+    var list=[
+      {id:DB_SQLITE_ID,title:"oTree default (SQLite)",researcher:"",builtin:true,db_mode:"none"},
+      {id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:"",builtin:true,db_mode:"lab"}
+    ].concat(DATABASES.length?DATABASES:PREVIEW_DATABASES);
+    renderDbPicker(list,previewCurrentDbId(list));
   }
-  h+='<div class="sep"></div><button onclick="closeDbMenu();openCreateDb()">Add new database…</button>';
-  m.innerHTML=h;document.body.appendChild(m);
-  var r=el("dbEditBtn").getBoundingClientRect();
-  m.style.left=r.left+"px";m.style.top=(r.bottom+6)+"px";
-  setTimeout(function(){document.addEventListener("click",closeDbMenu,{once:true});},0);
 }
-function closeDbMenu(){var m=el("dbMenu");if(m)m.remove();}
-function chooseDbMode(mode){closeDbMenu();applyDbMode(mode);refreshDbSummary();updateDirtyState();}
+function previewCurrentDbId(list){
+  if(currentDbMode==="none")return DB_SQLITE_ID;
+  if(currentDbMode==="lab")return DB_LAB_ID;
+  var name=(val("db_name")||"").trim(),host=(val("db_host")||"").trim(),user=(val("db_user")||"").trim();
+  for(var i=0;i<list.length;i++){var e=list[i];
+    if(!e.builtin&&e.db_name===name&&e.db_host===host&&e.db_user===user)return e.id;}
+  return "";
+}
+function renderDbPicker(list,currentId){
+  var rows=(list||[]).map(function(e){
+    var sel=(e.id===currentId);
+    var grey=e.researcher?'<span class="db-pick-by">created by '+escapeHtml(e.researcher)+'</span>':'';
+    return '<button class="db-pick-row'+(sel?" sel":"")+'" onclick="pickDatabase(\''+escapeHtml(e.id)+'\')">'+
+      '<span class="db-pick-dot">'+(sel?"&#9679;":"")+'</span>'+
+      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+grey+'</button>';
+  }).join("");
+  openModal("Choose a database",
+    '<p class="modal-desc">Everyone shares this list. A grey name shows who created that database.</p>'+
+    '<div class="db-pick-list">'+rows+'</div>'+
+    '<div class="db-pick-sep"></div>'+
+    '<button class="db-pick-add" onclick="closeModal();openCreateDb()">+&nbsp; Add new database&hellip;</button>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button></div>');
+}
+/* Apply the picked entry. In the app the field overrides come from
+   core.database_config_fields; the static preview applies them locally. */
+function pickDatabase(id){
+  if(NATIVE&&API){
+    API.database_config_fields(id).then(function(r){
+      if(r&&r.ok){applyDbFields(r.fields);closeModal();
+        window.pywStatus("","Database set to "+((r.entry&&r.entry.title)||"the chosen database")+".");}
+    });
+    return;
+  }
+  var all=[
+    {id:DB_SQLITE_ID,db_mode:"none"},{id:DB_LAB_ID,db_mode:"lab"}
+  ].concat(DATABASES.length?DATABASES:PREVIEW_DATABASES);
+  var entry=all.filter(function(e){return e.id===id;})[0];if(!entry)return;
+  var fields={db_mode:entry.db_mode||"custom"};
+  if(!entry.builtin&&entry.db_name!==undefined){
+    fields.db_name=entry.db_name;fields.db_user=entry.db_user;fields.db_password=entry.db_password||"";
+    fields.db_host=entry.db_host;fields.db_port=entry.db_port;}
+  applyDbFields(fields);closeModal();
+}
+function applyDbFields(fields){
+  fields=fields||{};var mode=fields.db_mode||"lab";
+  if(fields.db_name!==undefined){
+    setDbVals(fields.db_name||"",fields.db_user||"",fields.db_password||"",fields.db_host||"localhost",fields.db_port||"5432");}
+  applyDbMode(mode);refreshDbSummary();updateDirtyState();
+}
 function applyDbMode(mode){
   currentDbMode=mode;
   var fields=["db_name","db_user","db_pw","db_host","db_port"];
   var section=el("dbSection");
   if(mode==="custom"){
-    /* Editable connection fields — this is what lets you edit the current
+    /* Editable connection fields: this is what lets you edit the current
        custom database (the gap the old "Change…" left). */
     fields.forEach(function(f){var e=el(f);e.readOnly=false;e.disabled=false;});
     section.hidden=false;refreshUrl();
@@ -1025,7 +1188,7 @@ function refreshDbSummary(){
 }
 
 /* ======================================================================
-   CARD 3 — Lab (tiles, room, participant list, seat map)
+   CARD 3: Lab (tiles, room, participant list, seat map)
    ====================================================================== */
 function setLabs(labs){
   LABS=(labs||[]).map(function(l){return {id:l.id,name:l.name||l.id,host:l.host||"localhost",
@@ -1052,15 +1215,22 @@ function selectLab(id){
   selectedLabId=id||"";
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){
     t.classList.toggle("active",t.dataset.lab===selectedLabId);t.classList.remove("faded");});
-  el("hostLinks").hidden=false;el("backToLabLink").hidden=true;
+  markHostPick("");el("backToLabLink").hidden=true;
   el("customFields").hidden=true;el("localNote").hidden=true;el("roomRow").hidden=false;
   try{localStorage.setItem("otreeLab",id);}catch(e){}
   updateSeats();updateDirtyState();
 }
+/* The two host buttons are ALWAYS shown, side by side; this only moves the
+   selected look ("local", "custom", or "" when a lab tile is the choice). */
+function markHostPick(which){
+  [["localHostBtn","local"],["otherHostLink","custom"]].forEach(function(p){
+    var b=el(p[0]);if(!b)return;var on=(which===p[1]);
+    b.classList.toggle("active",on);b.setAttribute("aria-pressed",on?"true":"false");});
+}
 function selectCustomHost(){
   selectedLabId="custom";
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
-  el("hostLinks").hidden=true;el("backToLabLink").hidden=false;
+  markHostPick("custom");el("backToLabLink").hidden=false;
   el("customFields").hidden=false;el("localNote").hidden=true;el("roomRow").hidden=true;el("mapRow").hidden=true;
   updateDirtyState();
 }
@@ -1070,7 +1240,7 @@ function selectCustomHost(){
 function selectLocalHost(){
   selectedLabId="local";
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
-  el("hostLinks").hidden=true;el("backToLabLink").hidden=false;
+  markHostPick("local");el("backToLabLink").hidden=false;
   el("customFields").hidden=true;el("localNote").hidden=false;el("roomRow").hidden=false;el("mapRow").hidden=true;
   updateDirtyState();
 }
@@ -1135,7 +1305,7 @@ function applyFields(f){
   currentSeatFile=f.seat_file||"";setSeatFilePath(currentSeatFile);
   el("admin_user").value=f.admin_username||"admin";
   el("admin_pw").value=f.admin_password||"";
-  el("auth_level").value=f.auth_level||"STUDY";
+  setAuthLevel(f.auth_level||"STUDY");
   el("production").checked=!!f.production;
   el("auto_login").checked=(f.auto_login!==false);
   var lab=f.lab||currentLab();
@@ -1160,9 +1330,10 @@ function gatherFields(){
     db_host:val("db_host"),db_port:val("db_port"),
     admin_username:val("admin_user"),admin_password:val("admin_pw"),
     production:el("production").checked,auth_level:val("auth_level"),
+    auto_login:el("auto_login").checked,
     lab:pseudo?lab:currentLab(),custom_host:val("custom_host"),
     port:"8000",page:"/rooms",
-    resetdb:el("resetdb").checked,open_browser:true,wait_seconds:5,
+    resetdb:el("resetdb").checked,open_browser:true,
     room_name:custom?val("custom_room"):el("roomVal").textContent,
     seat_mode:val("seat_mode"),seat_excluded:[],seat_file:currentSeatFile
   };
@@ -1188,7 +1359,7 @@ function applySettings(s){
 }
 
 /* ======================================================================
-   BUTTON HANDLERS — project / file / path
+   BUTTON HANDLERS: project / file / path
    ====================================================================== */
 function onBrowseProject(){if(NATIVE&&API)API.pick_project_folder();}
 function onBrowseFile(){if(NATIVE&&API)API.pick_participant_file();}
@@ -1224,11 +1395,26 @@ document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!el("infoMo
 
 /* ---------------------------- Save as ---------------------------- */
 function onSaveAs(){
+  /* The Researcher/author field is a SELECT-OR-TYPE control (datalist), the same
+     shared roster the create-database dialog uses (core.list_researchers), so
+     one canonical spelling per person and no near-duplicate misspellings. A name
+     typed here is added to the roster when the config is saved. */
+  if(NATIVE&&API){
+    API.list_researchers().then(function(r){
+      renderSaveAs((r&&r.researchers)||[],(r&&r.suggested)||defaultAuthor||"");});
+  }else{
+    renderSaveAs((RESEARCHERS.length?RESEARCHERS:PREVIEW_RESEARCHERS),defaultAuthor||"");
+  }
+}
+function renderSaveAs(roster,suggestedAuthor){
   var suggested=currentConfigName?currentConfigName+" copy":"";
+  var opts=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
   openModal("Save as new config",
     '<p class="modal-desc">Saved configs are never changed. This adds a new one and leaves every existing config exactly as it is.</p>'+
     '<div class="mfield"><label for="saveAsName">Config name</label><input id="saveAsName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
-    '<div class="mfield"><label for="saveAsAuthor">Researcher</label><input id="saveAsAuthor" type="text" value="'+escapeHtml(defaultAuthor)+'"></div>'+
+    '<div class="mfield"><label for="saveAsAuthor">Researcher</label>'+
+      '<input id="saveAsAuthor" type="text" list="saveAsRosterList" autocomplete="off" value="'+escapeHtml(suggestedAuthor||"")+'">'+
+      '<datalist id="saveAsRosterList">'+opts+'</datalist></div>'+
     '<div class="modal-err" id="saveAsErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
     '<button class="btn accent" onclick="doSaveAs()">Save</button></div>');
@@ -1239,7 +1425,9 @@ function doSaveAs(){
   var name=(val("saveAsName")||"").trim();if(!name)return;var author=(val("saveAsAuthor")||"").trim();
   if(!NATIVE){closeModal();window.pywStatus("","Saved (preview only).");return;}
   API.save_config_as(name,gatherFields(),author).then(function(r){applyLog(r);
-    if(r&&r.ok){closeModal();if(author)defaultAuthor=author;renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
+    if(r&&r.ok){closeModal();if(author){defaultAuthor=author;
+        if(RESEARCHERS.indexOf(author)<0)RESEARCHERS.push(author);}
+      renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
       markFormClean();window.pywStatus("ok","Saved “"+r.selected+"”.");}
     else{var e=el("saveAsErr");if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not save.";}}});
 }
@@ -1312,11 +1500,27 @@ function useTypedRoom(){var n=(val("roomTypeName")||"").trim();if(n){setRoom(n);
    CREATE DATABASE dialog
    ====================================================================== */
 function openCreateDb(){
+  /* The roster (dropdown + free text) is the SAME shared list Save-as-new uses.
+     Fetch it fresh in the app; use the fake preview roster otherwise. */
+  if(NATIVE&&API){
+    API.list_researchers().then(function(r){
+      renderCreateDb((r&&r.researchers)||[],(r&&r.suggested)||defaultAuthor||"");});
+  }else{
+    renderCreateDb(PREVIEW_RESEARCHERS,"J. Tait");
+  }
+}
+function renderCreateDb(roster,suggestedResearcher){
   var suggested=(PREVIEW_PROJECT.name)||"otree";
   if(NATIVE){var base=currentProjectPath.replace(/[\\/]+$/,"").split(/[\\/]/).pop();if(base)suggested=base;}
-  openModal("Create a new database",
+  var opts=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+  openModal("Create a new Postgres database",
     '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
     '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
+    /* Researcher (required): type a new name or pick from the shared roster. A
+       datalist gives the combobox behaviour (dropdown + free text). */
+    '<div class="mfield"><label>Researcher (required)</label>'+
+      '<input id="cdbResearcher" type="text" list="cdbRosterList" autocomplete="off" value="'+escapeHtml(suggestedResearcher||"")+'">'+
+      '<datalist id="cdbRosterList">'+opts+'</datalist></div>'+
     '<div class="mfield"><label>New user (optional)</label><input id="cdbUser" type="text"></div>'+
     '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
     '<div class="modal-err" id="cdbErr"></div>'+
@@ -1324,21 +1528,41 @@ function openCreateDb(){
     '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">Create</button></div>');
 }
 function doCreateDb(){
-  var name=(val("cdbName")||"").trim(),user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
-  if(!name){var e=el("cdbErr");e.style.display="block";e.textContent="Enter a database name.";return;}
+  var name=(val("cdbName")||"").trim(),researcher=(val("cdbResearcher")||"").trim();
+  var user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
+  var e=el("cdbErr");
+  if(!name){e.style.display="block";e.textContent="Enter a database name.";return;}
+  if(!researcher){e.style.display="block";e.textContent="Enter or pick a researcher: whose database this is.";return;}
   if(!NATIVE||!API){closeModal();window.pywStatus("","Create database works in the app, not the static preview.");return;}
   el("cdbCreate").textContent="Creating…";
-  API.create_database(name,user,pw).then(function(r){
+  API.create_database(name,user,pw,researcher).then(function(r){
     if(r&&r.ok){closeModal();applyDbMode("custom");
       if(r.fields)setDbVals(r.fields.db_name,r.fields.db_user,r.fields.db_password,r.fields.db_host,r.fields.db_port);
-      refreshUrl();refreshDbSummary();window.pywStatus("ok",r.message||"Database created.");}
-    else{var e=el("cdbErr");if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent="Create";}
+      /* keep the local registry + roster in sync with what the backend saved */
+      if(r.databases)DATABASES=r.databases;if(r.researchers)RESEARCHERS=r.researchers;
+      applyDbFields(r.fields||{db_mode:"custom"});
+      window.pywStatus("ok",r.message||"Database created.");}
+    else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent="Create";}
   });
 }
 
 /* ======================================================================
    LAB SETTINGS dialog (gear -> Lab settings)
    ====================================================================== */
+/* The custom-database registry rows for Lab Settings: title + grey creator, or
+   an empty note. Same source (core.known_databases_from_store) as the picker. */
+function lsCustomDbRows(){
+  var list=(NATIVE?DATABASES:(DATABASES.length?DATABASES:PREVIEW_DATABASES));
+  if(!list||!list.length)return '<p class="d" style="margin:0">No custom databases yet.</p>';
+  return list.map(function(e){
+    var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
+    return '<div style="padding:3px 0">'+escapeHtml(e.title)+grey+'</div>';
+  }).join("");
+}
+function saveDefaultDb(id){
+  defaultDatabase=id;
+  if(NATIVE&&API&&API.save_default_db)API.save_default_db(id);
+}
 function openLabSettings(){
   var marker=labMarker,markerName=(LAB_BY_ID[marker]||{}).name||marker;
   var opts=LAB_PRESETS.map(function(p){return '<option value="'+escapeHtml(p.id)+'"'+(p.id===marker?" selected":"")+'>'+escapeHtml(p.name)+'</option>';}).join("");
@@ -1362,6 +1586,21 @@ function openLabSettings(){
       '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
       '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
       '<div class="ls-status" id="pgStatus">Saved automatically.</div></div>'+
+    /* Database section, part 2: the whole global registry of custom databases,
+       each with its creator researcher (grey). Add here; edit/remove is a
+       future idea (append-only). Mirror of the Tk _build_custom_db_card. */
+    '<div class="ls-card"><h4>Custom databases</h4>'+
+      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. You can add databases here; editing and removing come later.</p>'+
+      '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
+      '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
+    /* Database section, part 3: which built-in database a brand-new config
+       starts on, plus the "View settings.py block…" tool. Mirror of the Tk
+       _build_default_db_card. */
+    '<div class="ls-card"><h4>Default database</h4>'+
+      '<p class="d">Which built-in database a brand-new config starts on.</p>'+
+      '<label class="chk" style="display:flex;margin:4px 0"><input type="radio" name="lsDefaultDb" value="'+DB_SQLITE_ID+'"'+(defaultDatabase===DB_SQLITE_ID?" checked":"")+' onchange="saveDefaultDb(\''+DB_SQLITE_ID+'\')" style="width:15px;height:15px;accent-color:var(--accent);margin-right:8px"> oTree default (SQLite)</label>'+
+      '<label class="chk" style="display:flex;margin:4px 0"><input type="radio" name="lsDefaultDb" value="'+DB_LAB_ID+'"'+(defaultDatabase===DB_LAB_ID?" checked":"")+' onchange="saveDefaultDb(\''+DB_LAB_ID+'\')" style="width:15px;height:15px;accent-color:var(--accent);margin-right:8px"> Lab shared database (Postgres)</label>'+
+      '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
     '<div class="ls-card"><h4>Lab presets</h4>'+
       '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Small lab and Large lab are seeded from the lab constants.</p>'+
       '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
@@ -1522,7 +1761,7 @@ function briefingSummaryHtml(b){
   }else{
     /* Non-study room: no shortcut exists, so the link IS shown. State the room,
        give the one-per-seat link to open on each computer, and note the
-       study-room alternative (the link still works — do NOT say the shortcuts
+       study-room alternative (the link still works; do NOT say the shortcuts
        "will not match"). */
     html+='<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
     html+=linkRow(linkLabel,link);
@@ -1593,6 +1832,13 @@ function renderBlIssues(issues){
               '<select class="bl-roomsel" id="blRoomSel'+idx+'">'+opts+'</select>'+
               '<button class="btn accent tiny" onclick="blPickRoom('+idx+')">'+escapeHtml(it.fix_label||"Use this room")+'</button>';
       }
+      /* Round 3, Task 5: also offer to DEFINE the chosen room in the project via
+         the SAME safe settings.py append path (timestamped .bak, marker-guarded,
+         refuse-if-present, revertible). The backend attaches add_room only when
+         seats are used and the block is not there yet. */
+      if(it.add_room){
+        acts+='<button class="btn accent tiny" onclick="blAddRoom('+jsQuote(it.add_room)+')">Add '+escapeHtml(it.add_room)+' room</button>';
+      }
     }
     if(it.info==="block")acts+='<button class="link bl-viewblock" onclick="viewBlock()">More information</button>';
     if(acts)r+='<div class="bl-acts">'+acts+'</div>';
@@ -1613,8 +1859,10 @@ function blChooseFolder(){
 }
 function blChangeToSqlite(){
   /* Switch to the oTree default database (SQLite); Postgres/psycopg2 no longer
-     needed. Updates the real form field so the re-check and the launch agree. */
-  applyDbMode("none");refreshDbSummary();
+     needed. Writes back to the on-screen config for real (Round 3, Task 4): the
+     main Database card, the re-check and the launch all agree, and it saves with
+     the config like any other edit. */
+  applyDbMode("none");refreshDbSummary();updateDirtyState();
   window.pywStatus&&window.pywStatus("ok","Switched to the oTree default database (SQLite).");
   blRecheck();
 }
@@ -1625,11 +1873,25 @@ function blPickRoom(idx){
   window.pywStatus&&window.pywStatus("ok","Room set to "+room+" for this launch.");
   blRecheck();
 }
+/* Define the chosen room in the project by appending the lab support block (the
+   SAME safe writer as "Add block to settings.py": timestamped .bak, refuse if
+   present, revertible, explicit click). At launch the block's ROOMS clause
+   defines the room, so the blocker clears on the re-check. */
+function blAddRoom(room){
+  if(!NATIVE||!API){window.pywStatus&&window.pywStatus("","Add room works in the app, not the static preview.");return;}
+  if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
+  API.append_settings_block(currentProjectPath).then(function(r){
+    if(r){applyLog(r);if(r.settings)applySettings(r.settings);
+      if(r.ok)window.pywStatus("ok","Added the "+room+" room via the lab support block. Backup: "+r.backup);
+      else window.pywStatus(r.already?"":"err",r.message||"Could not add the room.");}
+    blRecheck();
+  });
+}
 function renderBlActions(issues){
   var box=el("blActions");if(!box)return;issues=issues||[];
   var nBlock=issues.filter(function(i){return i.level==="block";}).length;
   var nWarn=issues.filter(function(i){return i.level==="warn";}).length;
-  /* The state-dependent bottom bar — the ONLY place a launch is offered:
+  /* The state-dependent bottom bar, the ONLY place a launch is offered:
        all clear      [Cancel]             ✓ Ready to launch  [Launch]
        warnings only  [Cancel] [Re-check]  ( ⚠ N warnings  [Launch anyway] )
        must-fix       [Cancel] [Re-check]  Fix the must-fix item above…  [Launch] (disabled) */
@@ -1675,7 +1937,7 @@ function blProceed(){
     var is0=el("blIssues");if(is0)is0.innerHTML="";
     var act0=el("blActions");if(act0)act0.outerHTML='<p class="handoff-note" id="takeoverStatus">Launching… (preview: no real process)</p>';
     el("modalTitle").textContent="Session running";
-    window.pywStatus("ok","Launching — opening the oTree dashboard. (preview: no real process)");return;
+    window.pywStatus("ok","Launching: opening the oTree dashboard. (preview: no real process)");return;
   }
   /* All issues were already surfaced here, so proceed straight to the launch
      (force=true skips the redundant backend preflight). The modal turns into
@@ -1691,7 +1953,7 @@ function togglePw2(id,btn){var i=el(id);if(i.type==="password"){i.type="text";bt
 var launchDashboardUrl="";
 /* Run the launch. force=true skips the backend preflight gate (the consolidated
    screen already surfaced everything). The handoff banner is NOT set to success
-   here — it stays "launching" until the real result arrives via pywOnLaunchResult. */
+   here: it stays "launching" until the real result arrives via pywOnLaunchResult. */
 function doLaunch(force){
   if(!NATIVE||!API)return;
   API.launch(gatherFields(),!!force).then(handleLaunchResponse);
@@ -1711,44 +1973,44 @@ function enterLaunchingState(){
    success shows "dashboard opening" + a working link; a failure shows a clear
    failure state and no dead "Click here". */
 window.pywOnLaunchResult=function(res){
-  if(res&&res.ok){showHandoffSuccess(res.url||"");}
-  else{showHandoffFailure((res&&res.message)||"Launch failed — see the activity log.");}
+  if(res&&res.ok){showHandoffSuccess(res.url||"",res.method||"manual");}
+  else{showHandoffFailure((res&&res.message)||"Launch failed. See the activity log.");}
 };
-function showHandoffSuccess(url){
+function showHandoffSuccess(url,method){
   launchDashboardUrl=url||"";
   if(el("infoModal").hidden)return;
   el("modalTitle").textContent="Session running";
   var t=el("takeoverStatus");
-  if(t){t.className="handoff-note";
-    t.innerHTML='Experiment launched, dashboard opening. No dashboard? <a onclick="openDashboard()">Click here</a>';}
+  if(!t)return;
+  t.className="handoff-note";
+  /* Report HONESTLY which path happened: cookie = opened already logged in;
+     manual = opened at the login page, log in with the username/password above. */
+  var lead=(method==="cookie")
+    ? 'Experiment launched. The dashboard opened already logged in. No dashboard? '
+    : 'Experiment launched. The dashboard opened at the login page; log in with the username and password above. Not opened? ';
+  t.innerHTML=lead+'<a onclick="openDashboard()">Click here</a>';
 }
 function showHandoffFailure(msg){
   if(el("infoModal").hidden){window.pywStatus("err",msg);return;}
   el("modalTitle").textContent="Launch failed";
   var t=el("takeoverStatus");
   if(t){t.className="handoff-note err";
-    t.innerHTML='<strong>Launch failed — see the activity log.</strong><br>'+escapeHtml(msg||"");}
+    t.innerHTML='<strong>Launch failed. See the activity log.</strong><br>'+escapeHtml(msg||"");}
 }
 function openDashboard(){
-  if(NATIVE&&API&&API.open_url&&launchDashboardUrl)API.open_url(launchDashboardUrl);
+  /* Re-run the real authenticated open (fresh form-login + one-shot cookie
+     relay); the backend holds the last launch's params. */
+  if(NATIVE&&API&&API.reopen_dashboard)API.reopen_dashboard();
 }
 
 /* ======================================================================
-   GEAR MENU
+   settings.py block viewer (opened from Lab Settings > Default database, and
+   from the "More information" link on the pre-launch screen). The gear itself
+   now opens Lab Settings directly (Round 3, Task 3).
    ====================================================================== */
-function openGearMenu(ev){
-  ev.stopPropagation();closeGearMenu();
-  var m=document.createElement("div");m.className="gearmenu";m.id="gearMenu";
-  m.innerHTML='<button onclick="closeGearMenu();openLabSettings()">Lab settings...</button>'+
-    '<button onclick="closeGearMenu();viewBlock()">View settings.py block...</button>';
-  document.body.appendChild(m);
-  var r=el("gearBtn").getBoundingClientRect();m.style.left=r.left+"px";m.style.top=(r.bottom+6)+"px";
-  setTimeout(function(){document.addEventListener("click",closeGearMenu,{once:true});},0);
-}
-function closeGearMenu(){var m=el("gearMenu");if(m)m.remove();}
 function viewBlock(){
   if(NATIVE&&API)API.settings_block_text().then(function(t){showBlock(t);});
-  else showBlock("# === oTree lab support (paste at the END of settings.py) ===\n# OTREE LAB SUPPORT — appended by the oTree lab launcher.\n# TO REMOVE: delete everything from this banner line to the END of the file.\n# Does NOTHING unless the launcher sets its variables at launch.\nimport os as _os\n…\n# === end oTree lab support ===");
+  else showBlock("# === oTree lab support (paste at the END of settings.py) ===\n# OTREE LAB SUPPORT: appended by the oTree lab launcher.\n# TO REMOVE: delete everything from this banner line to the END of the file.\n# Does NOTHING unless the launcher sets its variables at launch.\nimport os as _os\n…\n# === end oTree lab support ===");
 }
 function showBlock(text){
   openModal("oTree lab support block",
@@ -1762,11 +2024,16 @@ function showBlock(text){
 function copyBlockText(){try{navigator.clipboard.writeText(window._blockText||"");}catch(e){}}
 function onExport(){
   if(!NATIVE){window.pywStatus("","Save one-click shortcut is a placeholder in the preview.");return;}
-  API.export_bat(currentConfigName||"config",gatherFields());
+  /* The shortcut runs a SAVED config by name (so no password lands in the file),
+     so it needs a saved, unmodified config. Python is the source of truth and
+     refuses otherwise with needs_save; surface that message as a hint. */
+  API.save_shortcut(currentConfigName||"",gatherFields()).then(function(r){
+    if(r&&r.needs_save)window.pywStatus("warn",r.message||"Save these settings as a named config first, then create the one-click shortcut.");
+  });
 }
 
 /* ======================================================================
-   BOOTSTRAP — native vs static preview
+   BOOTSTRAP: native vs static preview
    ====================================================================== */
 function initNative(state){
   NATIVE=true;el("logBody").innerHTML="";
@@ -1775,6 +2042,8 @@ function initNative(state){
   setLabs(haveLab?(state.labs||[]):[]);
   LAB_PRESETS=state.lab_presets||state.labs||[];
   if(state.pg_admin)PG_ADMIN=state.pg_admin;
+  DATABASES=state.databases||[];RESEARCHERS=state.researchers||[];
+  if(state.default_database)defaultDatabase=state.default_database;
   if(!haveLab){el("labNotice").hidden=false;el("labBody").hidden=true;}
   renderConfigList(state.configs,state.selected);currentConfigName=state.selected;
   applyFields(state.fields);applyProject(state.project);applySettings(state.settings);
@@ -1793,6 +2062,7 @@ function bootPreview(){
   setLabs(PREVIEW_LABS);
   LAB_PRESETS=PREVIEW_LABS.map(function(l){return {id:l.id,name:l.name,ip:l.host,seats:l.seats,display:true};});
   PG_ADMIN={admin_username:"postgres",admin_password:"postgres",admin_host:"localhost",admin_port:"5432"};
+  DATABASES=PREVIEW_DATABASES.slice();RESEARCHERS=PREVIEW_RESEARCHERS.slice();defaultDatabase=DB_LAB_ID;
   labMarker="large";
   renderConfigList(PREVIEW_CONFIGS,"Dictator study");
   currentConfigName="Dictator study";

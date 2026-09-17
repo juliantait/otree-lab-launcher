@@ -16,3 +16,6 @@ config/
 lab.local
 seats/
 *.bak
+
+# Consolidated local data + runtime state (all read/write files live here)
+data/

@@ -1,4 +1,4 @@
-# oTree Lab Launcher — web-tech front end
+# oTree Lab Launcher: web-tech front end
 
 The re-skin of the Tkinter `otree_lab_launcher.py`. Same job, same powers, a
 prettier native window. Web tech for the looks; a native Python process for the
@@ -11,7 +11,7 @@ powers (full filesystem, real subprocesses).
 private virtualenv in your home folder (`~/.otree-lab-launcher-venv`) and
 install pywebview into it, then launch. Nothing touches the system Python.
 
-**Manual:** don't `pip install` into a Homebrew/system Python — modern Pythons
+**Manual:** don't `pip install` into a Homebrew/system Python: modern Pythons
 refuse it (PEP 668, "externally-managed-environment"). Use a venv:
 
 ```
@@ -27,12 +27,12 @@ extra.
 
 ## What's here
 
-- **`../otree_core.py`** — the pure logic (config model, `DATABASE_URL`, seat
+- **`../otree_core.py`**: the pure logic (config model, `DATABASE_URL`, seat
   files, resetdb/prodserver commands, the `settings.py` block, `presets.json`
   storage, project validation). No tkinter, so it imports anywhere.
-- **`../otree_launcher_web.py`** — the pywebview host + the `Api` bridge class.
+- **`../otree_launcher_web.py`**: the pywebview host + the `Api` bridge class.
   Every method is callable from the page as `window.pywebview.api.<name>`.
-- **`index.html`** — the UI. It calls `window.pywebview.api.*` for real actions
+- **`index.html`**: the UI. It calls `window.pywebview.api.*` for real actions
   and, opened in a plain browser with no backend, still runs as the static
   visual preview (feature-detected).
 

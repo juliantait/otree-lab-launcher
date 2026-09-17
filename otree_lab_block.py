@@ -1,13 +1,13 @@
 # === oTree lab support (paste at the END of settings.py) ===
 # ---------------------------------------------------------------------------
-# OTREE LAB SUPPORT — appended by the oTree lab launcher.
+# OTREE LAB SUPPORT: appended by the oTree lab launcher.
 # TO REMOVE: delete everything from this banner line to the END of the file.
 # Safe to leave in permanently: it does NOTHING unless the launcher sets
 # its environment variables at launch. With no lab environment set, every
 # override below is skipped and your settings.py behaves exactly as before.
 #
 # Because Python binds names last, these assignments live at the END of the
-# file, so they win over anything the project hardcoded higher up — but only
+# file, so they win over anything the project hardcoded higher up, but only
 # while the launcher's variables are present. Each override is guarded by the
 # variable it needs, and its comment says in plain language what it redirects
 # and why. Everything here only redirects WHERE your program runs (the lab
@@ -64,7 +64,7 @@ if _os.environ.get("DB_NAME"):
 # (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
 #     hardcodes the admin username, so without this line the launcher's admin
 #     username box would do nothing. With no variable set this keeps whatever
-#     the project already had, or "admin" if it had none — so off the lab it
+#     the project already had, or "admin" if it had none, so off the lab it
 #     changes nothing.
 try:
     _lab_admin_default = ADMIN_USERNAME

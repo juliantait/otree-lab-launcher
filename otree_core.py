@@ -29,6 +29,31 @@ import threading
 import time
 import webbrowser
 
+# ---------------------------------------------------------------------------
+# PUBLIC API INDEX for the two UIs (Tk + web). The database registry and the
+# researcher roster (Round 3) are global, passive collections stored in the
+# store's `extra` dict alongside lab_presets/pg_admin. Both UIs call the SAME
+# functions below; the full signatures live in _ai/CORE_DB_API.md.
+#
+#   Databases (registry):
+#     list_databases(extra)            -> [sqlite builtin, lab builtin, *customs]
+#     known_databases_from_store(extra)-> just the custom entries (registry)
+#     builtin_databases()              -> the two always-present built-ins
+#     find_database(extra, db_id)      -> one entry (builtin or custom) or None
+#     database_config_fields(entry)    -> the db_* config overrides to apply
+#     register_database(extra, title, researcher, connection=..., ...)
+#                                      -> append a custom DB + record researcher
+#     normalize_database_entry(raw)    -> one normalized custom entry
+#
+#   Researchers (roster):
+#     list_researchers(extra, presets=None) -> the deduped shared roster
+#     researchers_from_store(extra)    -> only the explicitly-saved names
+#     add_researcher(extra, name)      -> append one name (dedupe)
+#
+# The registry NEVER connects to Postgres; only create_database() does, and its
+# caller then calls register_database() with the confirmed result's `fields`.
+# ---------------------------------------------------------------------------
+
 APP_NAME = "oTree Lab Launcher"
 APP_DIR_NAME = "oTreeLabLauncher"
 PRESETS_FILENAME = "presets.json"
@@ -50,12 +75,35 @@ LAB_INFO_FILENAME = "lab_info.json"
 LAB_INFO_EXAMPLE_FILENAME = "lab_info.example.json"
 
 
+# ---------------------------------------------------------------------------
+# One folder for everything the launcher reads and writes. `data/` sits beside
+# the app files (lab.local, lab_info.json, presets.json, seats/, app-written
+# logs, the corrupt-store rescue copy all live under it), so updating is "copy
+# the new version over the top, keep your data/ folder". Only the DEFAULT base
+# lives here; the env overrides (OTREE_LAB_INFO, OTREE_LAB_MARKER,
+# OTREE_LAB_LAUNCHER_PRESETS) still win when set. Shipped assets
+# (lab_info.example.json, maps/) stay in the app dir, NOT under data/.
+# ---------------------------------------------------------------------------
+
+DATA_DIRNAME = "data"
+
+
+def app_dir():
+    """The folder holding the app files (data/ sits beside them)."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def data_dir():
+    """The single folder holding everything the launcher reads and writes."""
+    return os.path.join(app_dir(), DATA_DIRNAME)
+
+
 def lab_info_path():
     """Where lab_info.json lives. OTREE_LAB_INFO overrides it (used by tests)."""
     override = os.environ.get("OTREE_LAB_INFO")
     if override:
         return override
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), LAB_INFO_FILENAME)
+    return os.path.join(data_dir(), LAB_INFO_FILENAME)
 
 
 def load_lab_info(path=None):
@@ -82,6 +130,8 @@ def lab_info_present(path=None):
 def save_lab_info(data, path=None):
     """Write a lab_info dict to lab_info.json (pretty-printed). Returns the path."""
     path = path or lab_info_path()
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
         handle.write("\n")
@@ -647,7 +697,7 @@ def effective_seat_mode(cfg, lab_presets=None):
     Seats are never a hard block (Julian): an absent seat file, a file that
     cannot be read or is empty, or a lab-default/edit selection that resolves to
     no seats (e.g. a custom host with no known seat list, or every seat unticked)
-    all fall back to SEAT_NONE — a perfectly valid open-room launch with no seat
+    all fall back to SEAT_NONE, a perfectly valid open-room launch with no seat
     board. A chosen file that DOES have labels stays SEAT_FILE (so its labels can
     still be validated), and a lab default with seats stays as chosen.
     """
@@ -736,7 +786,7 @@ def seat_summary(cfg, resolved=None, lab_presets=None):
     labels = resolve_seats(c, lab_presets) if resolved is None else resolved
     if not labels:
         # No seats is not an error: it simply becomes the open (none) room.
-        return "No seats — the room opens with no seat board (none)."
+        return "No seats: the room opens with no seat board (none)."
     return "%d seats" % len(labels)
 
 
@@ -782,14 +832,14 @@ BLOCK_END_MARKER = "=== end oTree lab support ==="
 # text; test_block_file_matches_the_constant proves they have not drifted.
 LAB_BLOCK = '''# === oTree lab support (paste at the END of settings.py) ===
 # ---------------------------------------------------------------------------
-# OTREE LAB SUPPORT — appended by the oTree lab launcher.
+# OTREE LAB SUPPORT: appended by the oTree lab launcher.
 # TO REMOVE: delete everything from this banner line to the END of the file.
 # Safe to leave in permanently: it does NOTHING unless the launcher sets
 # its environment variables at launch. With no lab environment set, every
 # override below is skipped and your settings.py behaves exactly as before.
 #
 # Because Python binds names last, these assignments live at the END of the
-# file, so they win over anything the project hardcoded higher up — but only
+# file, so they win over anything the project hardcoded higher up, but only
 # while the launcher's variables are present. Each override is guarded by the
 # variable it needs, and its comment says in plain language what it redirects
 # and why. Everything here only redirects WHERE your program runs (the lab
@@ -846,7 +896,7 @@ if _os.environ.get("DB_NAME"):
 # (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
 #     hardcodes the admin username, so without this line the launcher's admin
 #     username box would do nothing. With no variable set this keeps whatever
-#     the project already had, or "admin" if it had none — so off the lab it
+#     the project already had, or "admin" if it had none, so off the lab it
 #     changes nothing.
 try:
     _lab_admin_default = ADMIN_USERNAME
@@ -1016,7 +1066,13 @@ def find_app_packages(path):
 
 
 def config_dir():
-    """The per-user directory where presets.json lives."""
+    """The directory where presets.json and seats/ live: the app's data/ folder."""
+    return data_dir()
+
+
+def _legacy_config_dir():
+    """The pre-data/ OS per-user config dir. Kept ONLY for the one-time copy
+    migration of an existing install's presets.json + seats/ into data/."""
     if sys.platform.startswith("win"):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(base, APP_DIR_NAME)
@@ -1033,6 +1089,63 @@ def presets_path():
     return os.path.join(config_dir(), PRESETS_FILENAME)
 
 
+def _copy_file_if_missing(src, dest):
+    """Copy src -> dest only when dest is absent and src is a readable file.
+
+    The original is left in place (copy, not move), so migration is harmless and
+    a second run is a no-op. Same-path copies are skipped."""
+    if not src or not os.path.isfile(src):
+        return False
+    if os.path.abspath(src) == os.path.abspath(dest) or os.path.exists(dest):
+        return False
+    folder = os.path.dirname(dest) or "."
+    os.makedirs(folder, exist_ok=True)
+    shutil.copy2(src, dest)
+    return True
+
+
+def _copy_dir_files_if_missing(src_dir, dest_dir):
+    """Copy each file in src_dir into dest_dir when the destination is absent."""
+    if not os.path.isdir(src_dir) or os.path.abspath(src_dir) == os.path.abspath(dest_dir):
+        return
+    for name in os.listdir(src_dir):
+        src = os.path.join(src_dir, name)
+        if os.path.isfile(src):
+            _copy_file_if_missing(src, os.path.join(dest_dir, name))
+
+
+def migrate_legacy_data():
+    """Best-effort, one-time COPY of pre-data/ files into data/.
+
+    If data/ is missing a file that exists in its OLD location, copy it in
+    (leaving the original untouched). This lets an existing install keep its
+    configs, database registry, researchers and lab identity after the switch to
+    data/, with no manual moves. An env override that redirects a file elsewhere
+    is respected (that file is not migrated into data/). Never raises: any hiccup
+    is swallowed so it can never block startup.
+    """
+    try:
+        old_app = app_dir()
+        # <app dir>/lab.local  ->  data/lab.local
+        if not os.environ.get("OTREE_LAB_MARKER"):
+            _copy_file_if_missing(
+                os.path.join(old_app, LAB_MARKER_FILENAME), lab_marker_path())
+        # <app dir>/lab_info.json  ->  data/lab_info.json
+        if not os.environ.get("OTREE_LAB_INFO"):
+            _copy_file_if_missing(
+                os.path.join(old_app, LAB_INFO_FILENAME), lab_info_path())
+        # OS per-user config dir presets.json  ->  data/presets.json
+        legacy = _legacy_config_dir()
+        if not os.environ.get("OTREE_LAB_LAUNCHER_PRESETS"):
+            _copy_file_if_missing(
+                os.path.join(legacy, PRESETS_FILENAME), presets_path())
+        # OS per-user config dir seats/  ->  data/seats/
+        _copy_dir_files_if_missing(os.path.join(legacy, "seats"), seats_dir())
+    except Exception:
+        # Migration is a convenience, never a gate: swallow anything.
+        pass
+
+
 # --- Per-machine lab identity (lab.local) ----------------------------------
 # Each lab PC carries a gitignored one-word marker file, `lab.local`, next to
 # the launcher, saying which lab it is ("large" or "small"). The launcher reads
@@ -1046,7 +1159,7 @@ def lab_marker_path():
     override = os.environ.get("OTREE_LAB_MARKER")
     if override:
         return override
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), LAB_MARKER_FILENAME)
+    return os.path.join(data_dir(), LAB_MARKER_FILENAME)
 
 
 def read_lab_marker(path=None):
@@ -1056,7 +1169,7 @@ def read_lab_marker(path=None):
     preset id (a lowercase slug), so a machine can be identified as a lab the
     operator added on the Lab Settings page. The stored word is returned as-is
     (stripped, lower-cased), so "large"/"small" still resolve to the two
-    built-in labs. An empty or missing file means "unset" — first launch, where
+    built-in labs. An empty or missing file means "unset", first launch, where
     the operator is asked to choose.
     """
     path = path or lab_marker_path()
@@ -1505,6 +1618,89 @@ def export_bat_text(cfg, name="config"):
     return "\r\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Live one-click shortcut (launcher-invoked headless run)
+# ---------------------------------------------------------------------------
+
+
+def sanitize_shortcut_name(name):
+    """A filesystem-safe base name for a one-click shortcut file.
+
+    Keeps spaces so "Dictator study" stays readable; only strips characters a
+    file name cannot carry. Never empty.
+    """
+    safe = re.sub(r"[^A-Za-z0-9 _.-]", "_", str(name or "")).strip()
+    return safe or "config"
+
+
+def headless_shortcut(config_name, launcher_path, platform_name=None):
+    """A one-click shortcut that launches a SAVED config with no UI.
+
+    Unlike :func:`export_bat_text` (a frozen snapshot that bakes the DB password
+    into a loose file), this shortcut calls the launcher HEADLESSLY
+    (``otree_lab_launcher.py --run "<name>"``). The launcher reads the named
+    config from ``presets.json`` at click time, so the secret stays in
+    ``presets.json`` and never lands in this file, and the shortcut always
+    reflects the latest saved settings.
+
+    Returns ``{"ext", "filename", "content"}``:
+      - Windows: a ``.vbs`` that runs the launcher under ``pythonw`` with NO
+        console window (the same zero-window trick as ``Start ... .vbs``),
+        invoked by absolute path.
+      - macOS / other: a ``.command`` shell script that runs it with ``python3``
+        (a Terminal window is fine on the Mac, matching the mac launcher).
+
+    The config name and launcher path are the only things written; no database
+    password, DATABASE_URL, or admin password is ever put in the file.
+    """
+    platform_name = platform_name or sys.platform
+    name = str(config_name or "").strip()
+    launcher_path = os.path.abspath(launcher_path)
+    launcher_dir = os.path.dirname(launcher_path)
+    base = sanitize_shortcut_name(name)
+    stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if platform_name.startswith("win"):
+        # In a VBScript "..." literal a double quote is written by doubling it;
+        # the real command-line quotes come from Chr(34), so the two never clash.
+        v_name = name.replace('"', '""')
+        v_path = launcher_path.replace('"', '""')
+        content = "\r\n".join([
+            "' oTree Lab Launcher one-click shortcut.",
+            "' Runs the SAVED config \"%s\" headlessly, with no window." % v_name,
+            "' It calls the launcher under pythonw (no console); the config is read",
+            "' from presets.json at click time, so the DB password is NOT in this file.",
+            "' Generated by %s on %s." % (APP_NAME, stamp),
+            "Option Explicit",
+            "Dim sh",
+            'Set sh = CreateObject("WScript.Shell")',
+            ('sh.Run "pythonw " & Chr(34) & "%s" & Chr(34) & " --run " '
+             '& Chr(34) & "%s" & Chr(34), 0, False') % (v_path, v_name),
+            "",
+        ])
+        return {"ext": ".vbs", "filename": base + ".vbs", "content": content}
+
+    # macOS and Linux: a double-clickable .command that finds python3 itself.
+    content = "\n".join([
+        "#!/bin/bash",
+        "# oTree Lab Launcher one-click shortcut.",
+        "# Runs the SAVED config %s headlessly (no launcher UI is built)." % shlex.quote(name),
+        "# The config is read from presets.json at click time, so the DB password",
+        "# is NOT stored in this file.",
+        "# Generated by %s on %s." % (APP_NAME, stamp),
+        "cd %s || exit 1" % shlex.quote(launcher_dir),
+        'for PY in python3 python; do',
+        '  if command -v "$PY" >/dev/null 2>&1; then',
+        '    exec "$PY" %s --run %s' % (shlex.quote(launcher_path), shlex.quote(name)),
+        "  fi",
+        "done",
+        'echo "Could not find python3 on this machine."',
+        'read -r -p "Press return to close this window. "',
+        "",
+    ])
+    return {"ext": ".command", "filename": base + ".command", "content": content}
+
+
 
 def find_candidate_label_files(project_path, limit=60):
     """Text files in a project that could be a participant label file.
@@ -1577,7 +1773,7 @@ LAB_GEOMETRIES = (LAB_GEO_SMALL, LAB_GEO_LARGE, LAB_GEO_GRID)
 # --- Lab MAPS (spatial room layouts) ---------------------------------------
 # A map is a small JSON file of pure geometry: grid size and a list of cells,
 # each {r, c, kind} where kind is "seat", "exp" (experimenter desk) or "wall".
-# Seat cells carry NO label — labels come from the lab's own seat list, filled
+# Seat cells carry NO label, labels come from the lab's own seat list, filled
 # in the order the seat cells appear (see build_seatmap_from_map). Maps live as
 # their own files in the committed maps/ folder (maps/<name>.json). A lab
 # references one with "map": "<name>"; a full inline map object is also accepted
@@ -1615,7 +1811,7 @@ def load_map_file(name):
 def resolve_lab_map(map_field, maps_table=None):
     """A lab's spatial map object, or None.
 
-    ``map_field`` is either a full map dict (inline in the lab's entry — the
+    ``map_field`` is either a full map dict (inline in the lab's entry, the
     optional fallback) or a string naming a map. A named map resolves against an
     optional inline ``maps`` table first (if the file supplies one) and then
     against the maps/ folder as maps/<name>.json (the primary, documented path),
@@ -1634,7 +1830,7 @@ def resolve_lab_map(map_field, maps_table=None):
 def default_lab_presets():
     """The built-in labs, seeded from lab_info.json.
 
-    Empty when lab_info.json is absent (first run) — the launcher runs its setup
+    Empty when lab_info.json is absent (first run), the launcher runs its setup
     wizard in that case. Each lab's map is resolved here (a maps/<name>.json
     reference, or an inline object) so callers just read preset["map"].
     """
@@ -1979,7 +2175,7 @@ def delete_lab_preset(lab_presets, lab_id, selected_lab=None):
 
 
 # ---------------------------------------------------------------------------
-# Postgres admin config (Feature 2/4) — used ONLY to create databases, never as
+# Postgres admin config (Feature 2/4), used ONLY to create databases, never as
 # launch environment variables. Stored, like lab presets, in the store's extra.
 # ---------------------------------------------------------------------------
 
@@ -2010,7 +2206,621 @@ def pg_admin_ready(admin):
 
 
 # ---------------------------------------------------------------------------
-# Launch briefing (Feature 1 caution flag lives here) — the whole host/room
+# Known-databases registry + researcher roster (Round 3). Both are GLOBAL,
+# passive collections stored in the store's `extra` dict next to lab_presets /
+# pg_admin, so every config sees them (exactly like lab presets). The registry
+# NEVER connects to Postgres by itself: only create_database() does, and its
+# caller then calls register_database() with the confirmed result. See the API
+# index at the top of this module and _ai/CORE_DB_API.md.
+# ---------------------------------------------------------------------------
+
+# Stable ids of the two always-present built-in databases.
+DB_BUILTIN_SQLITE = "otree_default"
+DB_BUILTIN_LAB = "lab_shared"
+
+DB_BUILTIN_SQLITE_TITLE = "oTree default (SQLite)"
+DB_BUILTIN_LAB_TITLE = "Lab shared database (Postgres)"
+
+# The connection fields a custom entry carries (kept separate from the person).
+DATABASE_CONN_KEYS = ("db_name", "db_user", "db_password", "db_host", "db_port")
+
+
+def _slugify_db_id(title):
+    slug = re.sub(r"[^a-z0-9]+", "_", str(title or "").lower()).strip("_")
+    return slug or "db"
+
+
+def _unique_db_id(title, existing_ids):
+    """A registry id derived from the title, unique among existing ids and never
+    colliding with the two reserved built-in ids."""
+    base = _slugify_db_id(title)
+    reserved = set(existing_ids) | {DB_BUILTIN_SQLITE, DB_BUILTIN_LAB}
+    candidate = base
+    suffix = 2
+    while candidate in reserved:
+        candidate = "%s_%d" % (base, suffix)
+        suffix += 1
+    return candidate
+
+
+def normalize_database_entry(raw):
+    """One custom registry entry as a normalized dict.
+
+    Every field is a string; the connection keys are always present; the
+    creator ``researcher`` (a person) is kept distinct from ``postgres_user``
+    (the database credential). ``db_mode`` is always ``custom`` for a registry
+    entry (the two built-ins are synthesized by ``builtin_databases``).
+    """
+    raw = raw or {}
+    entry = {
+        "id": str(raw.get("id", "")).strip(),
+        "title": str(raw.get("title", "")).strip(),
+        "researcher": str(raw.get("researcher", "")).strip(),
+        "postgres_user": str(raw.get("postgres_user", "") or raw.get("db_user", "")).strip(),
+        "database_url": str(raw.get("database_url", "") or ""),
+        "created": str(raw.get("created", "") or ""),
+        "builtin": False,
+        "db_mode": DB_MODE_CUSTOM,
+    }
+    for key in DATABASE_CONN_KEYS:
+        entry[key] = str(raw.get(key, "") or "")
+    if not entry["title"]:
+        entry["title"] = entry["db_name"] or "custom database"
+    return entry
+
+
+def known_databases_from_store(extra):
+    """The custom databases saved in the store (the append-only registry),
+    normalized and in registry (insertion) order. Never includes the built-ins.
+    """
+    raw = (extra or {}).get("databases")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if isinstance(item, dict):
+            entry = normalize_database_entry(item)
+            if entry["id"]:
+                out.append(entry)
+    return out
+
+
+def builtin_databases():
+    """The two always-present built-in database entries: the oTree default
+    (SQLite) and the lab shared database (Postgres). Synthesized, never stored.
+    The lab entry reflects the live LAB_DB credentials."""
+    sqlite = {"id": DB_BUILTIN_SQLITE, "title": DB_BUILTIN_SQLITE_TITLE,
+              "researcher": "", "postgres_user": "", "database_url": "",
+              "created": "", "builtin": True, "db_mode": DB_MODE_NONE}
+    lab = {"id": DB_BUILTIN_LAB, "title": DB_BUILTIN_LAB_TITLE,
+           "researcher": "", "postgres_user": str(LAB_DB.get("db_user", "")),
+           "database_url": "", "created": "", "builtin": True, "db_mode": DB_MODE_LAB}
+    for key in DATABASE_CONN_KEYS:
+        sqlite[key] = ""
+        lab[key] = str(LAB_DB.get(key, ""))
+    return [sqlite, lab]
+
+
+def list_databases(extra):
+    """The full database picker list, in order: the SQLite built-in, the lab
+    shared built-in, then every custom database in the registry. Every UI shows
+    the SAME global list (anybody may use anybody else's database)."""
+    return builtin_databases() + known_databases_from_store(extra)
+
+
+def find_database(extra, db_id):
+    """A database entry by id, across built-ins + the registry, or None."""
+    db_id = str(db_id or "").strip()
+    if not db_id:
+        return None
+    for entry in list_databases(extra):
+        if entry["id"] == db_id:
+            return entry
+    return None
+
+
+def database_config_fields(entry):
+    """The config field overrides that selecting this database applies: always
+    ``db_mode``, plus the live lab credentials for the lab built-in, or the
+    stored connection fields for a custom database. Selecting the SQLite
+    built-in only sets ``db_mode`` to none."""
+    entry = entry or {}
+    mode = entry.get("db_mode", DB_MODE_CUSTOM)
+    if mode == DB_MODE_NONE:
+        return {"db_mode": DB_MODE_NONE}
+    if mode == DB_MODE_LAB:
+        fields = {"db_mode": DB_MODE_LAB}
+        fields.update(LAB_DB)
+        return fields
+    fields = {"db_mode": DB_MODE_CUSTOM}
+    for key in DATABASE_CONN_KEYS:
+        fields[key] = str(entry.get(key, "") or "")
+    return fields
+
+
+def register_database(extra, title, researcher, connection=None,
+                      postgres_user="", database_url="", created=None):
+    """Append a custom database to the registry (append-only) and record its
+    creator in the researcher roster.
+
+    Mutates ``extra`` in place and returns the new, normalized entry.
+    ``connection`` is a dict of the ``db_*`` connection keys, so a
+    ``create_database`` result's ``fields`` dict can be passed straight in. The
+    Postgres ``user`` (a credential) is kept distinct from ``researcher`` (the
+    person); when ``postgres_user`` is omitted it defaults to the connection's
+    ``db_user``.
+    """
+    if extra is None:
+        raise ValueError("register_database needs a store `extra` dict to write into")
+    connection = dict(connection or {})
+    raw = {
+        "title": str(title or "").strip(),
+        "researcher": str(researcher or "").strip(),
+        "postgres_user": str(postgres_user or connection.get("db_user", "")).strip(),
+        "database_url": str(database_url or ""),
+        "created": created or now_iso(),
+    }
+    for key in DATABASE_CONN_KEYS:
+        raw[key] = str(connection.get(key, "") or "")
+    existing = known_databases_from_store(extra)
+    raw["id"] = _unique_db_id(raw["title"] or raw["db_name"], [e["id"] for e in existing])
+    entry = normalize_database_entry(raw)
+    stored = extra.get("databases")
+    if not isinstance(stored, list):
+        stored = []
+    stored.append(entry)
+    extra["databases"] = stored
+    if entry["researcher"]:
+        add_researcher(extra, entry["researcher"])
+    return entry
+
+
+# -- Researcher roster ------------------------------------------------------
+
+def _dedupe_names(names):
+    """Case-insensitive dedupe keeping first-seen casing, sorted case-insensitively."""
+    seen = {}
+    for name in names:
+        name = str(name or "").strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key not in seen:
+            seen[key] = name
+    return sorted(seen.values(), key=lambda s: s.casefold())
+
+
+def researchers_from_store(extra):
+    """Only the researcher names saved explicitly in the store (not derived)."""
+    raw = (extra or {}).get("researchers")
+    if not isinstance(raw, list):
+        return []
+    return _dedupe_names(raw)
+
+
+def list_researchers(extra, presets=None):
+    """The shared researcher roster, deduped case-insensitively and sorted.
+
+    Combines three sources so one roster feeds the Save-as-new config author
+    field AND the create-database Researcher field: the names saved explicitly
+    in the store, every config ``author`` (pass ``presets`` to include them,
+    the built-in "builtin" author is skipped), and every database creator.
+    """
+    names = list(researchers_from_store(extra))
+    for preset in (presets or []):
+        author = str((preset or {}).get("author", "")).strip()
+        if author and author.casefold() != "builtin":
+            names.append(author)
+    for entry in known_databases_from_store(extra):
+        if entry["researcher"]:
+            names.append(entry["researcher"])
+    return _dedupe_names(names)
+
+
+def add_researcher(extra, name):
+    """Add one researcher name to the saved roster (append-only, case-insensitive
+    dedupe). Mutates ``extra`` in place and returns the saved-names list."""
+    if extra is None:
+        raise ValueError("add_researcher needs a store `extra` dict to write into")
+    name = str(name or "").strip()
+    stored = extra.get("researchers")
+    if not isinstance(stored, list):
+        stored = []
+    if name and not any(str(n).strip().casefold() == name.casefold() for n in stored):
+        stored.append(name)
+    extra["researchers"] = stored
+    return researchers_from_store(extra)
+
+
+# ---------------------------------------------------------------------------
+# Opening the dashboard (Round 3), a SHARED helper for both launchers. A
+# pre-authenticated dashboard URL embeds the admin credentials
+# (http://user:pass@host/...). Chrome, Edge, Chromium, Brave and Firefox honor
+# an embedded userinfo; Safari STRIPS it, so for a credentialed URL we prefer a
+# known-good browser and only fall back to the system default browser
+# (webbrowser.open) when none is found. A plain URL always uses the default
+# browser. The caller keeps showing the admin username + password so a fallback
+# to Safari (or any browser that ignores the creds) still lets the user type
+# them.
+# ---------------------------------------------------------------------------
+
+# Preference order for a credentialed URL. Each entry carries the macOS .app
+# name, the Windows install sub-paths and the executable names to look up on
+# PATH (Linux and a Windows PATH fallback).
+_PREFERRED_BROWSERS = (
+    {"name": "Chrome", "mac_app": "Google Chrome",
+     "win": (r"Google\Chrome\Application\chrome.exe",),
+     "exe": ("google-chrome", "google-chrome-stable", "chrome")},
+    {"name": "Edge", "mac_app": "Microsoft Edge",
+     "win": (r"Microsoft\Edge\Application\msedge.exe",),
+     "exe": ("microsoft-edge", "microsoft-edge-stable", "msedge")},
+    {"name": "Chromium", "mac_app": "Chromium",
+     "win": (r"Chromium\Application\chrome.exe",),
+     "exe": ("chromium", "chromium-browser")},
+    {"name": "Brave", "mac_app": "Brave Browser",
+     "win": (r"BraveSoftware\Brave-Browser\Application\brave.exe",),
+     "exe": ("brave-browser", "brave")},
+    {"name": "Firefox", "mac_app": "Firefox",
+     "win": (r"Mozilla Firefox\firefox.exe",),
+     "exe": ("firefox",)},
+)
+
+
+def url_has_credentials(url):
+    """True when the URL embeds a userinfo component (``scheme://user:pass@host``)."""
+    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://[^/@\s]+@", str(url or "")))
+
+
+def _browser_opener_for(spec):
+    """An opener callable ``open(url)`` for this browser on the current platform,
+    or None when it is not installed. Kept small so tests can monkeypatch the
+    platform lookups."""
+    plat = sys.platform
+    if plat == "darwin":
+        app = spec["mac_app"]
+        for base in ("/Applications", os.path.expanduser("~/Applications")):
+            if os.path.isdir(os.path.join(base, app + ".app")):
+                return lambda url, a=app: subprocess.Popen(["open", "-a", a, url])
+        return None
+    if plat.startswith("win"):
+        roots = [os.environ.get(var, "") for var in
+                 ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+        for root in roots:
+            if not root:
+                continue
+            for sub in spec.get("win", ()):
+                exe = os.path.join(root, sub)
+                if os.path.isfile(exe):
+                    return lambda url, e=exe: subprocess.Popen([e, url])
+        for name in spec.get("exe", ()):
+            found = shutil.which(name) or shutil.which(name + ".exe")
+            if found:
+                return lambda url, e=found: subprocess.Popen([e, url])
+        return None
+    for name in spec.get("exe", ()):
+        found = shutil.which(name)
+        if found:
+            return lambda url, e=found: subprocess.Popen([e, url])
+    return None
+
+
+def find_preferred_browser():
+    """The first installed credential-honoring browser as ``(name, opener)``, or
+    None. Preference order: Chrome, Edge, Chromium, Brave, Firefox. Safari is
+    never a candidate because it strips embedded URL credentials."""
+    for spec in _PREFERRED_BROWSERS:
+        opener = _browser_opener_for(spec)
+        if opener is not None:
+            return spec["name"], opener
+    return None
+
+
+def open_dashboard(url):
+    """Open the dashboard URL, preferring a credential-honoring browser when the
+    URL is pre-authenticated.
+
+    Returns a result dict::
+
+        {"ok": bool,            # something was opened
+         "browser": str,        # "Chrome"/"Edge"/... or "default"
+         "used_preferred": bool,# a preferred browser was used (not the default)
+         "credentialed": bool}  # the URL embedded user:pass@
+
+    For a plain URL (no embedded credentials) the system default browser is used
+    directly. For a credentialed URL a preferred browser is tried first and the
+    default browser is the fallback. Never raises: a failure returns ok False.
+    """
+    url = str(url or "")
+    result = {"ok": False, "browser": "", "used_preferred": False,
+              "credentialed": url_has_credentials(url)}
+    if not url:
+        return result
+    if result["credentialed"]:
+        found = find_preferred_browser()
+        if found is not None:
+            name, opener = found
+            try:
+                opener(url)
+                result.update(ok=True, browser=name, used_preferred=True)
+                return result
+            except Exception:
+                pass   # fall through to the system default browser
+    try:
+        opened = webbrowser.open(url)
+    except Exception:
+        opened = False
+    result.update(ok=bool(opened), browser="default", used_preferred=False)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Real auto-login (Option A from _ai/AUTOLOGIN_INVESTIGATION.md).
+#
+# oTree ignores HTTP Basic Auth, so the `http://user:pass@host/` URL trick is
+# DEAD: it 302-redirects to /login (proven with curl against otree==6.0.15). The
+# ONLY way to reach the admin room monitor without a manual login is a valid
+# oTree *session cookie* obtained by a real form-login. So we:
+#   1. form-login with urllib against the running server (GET /login for the
+#      csrftoken + session cookie, POST username/password/csrftoken back with the
+#      same jar), capturing the raw `session=...` cookie the server hands back on
+#      the 302 -> /demo success;
+#   2. stand up a one-shot localhost HTTP responder that answers the browser's
+#      first GET with `302 Location: <monitor>` AND
+#      `Set-Cookie: session=<value>`, planting the logged-in cookie (it is
+#      HttpOnly, so JavaScript cannot set it) and, because oTree's cookie is
+#      host-scoped and NOT isolated by port, it rides along to the server;
+#   3. open that relay URL in the SYSTEM DEFAULT BROWSER.
+# On any failure (wrong password, AUTH_LEVEL unset, server still booting, relay
+# error) we fall back to opening the plain monitor URL and the operator logs in
+# once (Option D). This is the ONLY dashboard-open path the apps use now; the
+# prefer-Chrome open_dashboard/credentialed_url path above is retired (kept only
+# so its unit tests stay green).
+# ---------------------------------------------------------------------------
+
+# The oTree session cookie is host-scoped (no Domain) and not isolated by port,
+# so a cookie set from localhost:<relay port> is sent to localhost:<server port>.
+# Pick ONE host string and use it for the form-login target, the Set-Cookie host
+# (the relay URL the browser opens) and the redirect target, so the cookie scope
+# lines up. The auto-open is on the operator's OWN machine, so localhost is right;
+# the participant per-seat links keep the configured lab host, unchanged.
+AUTOLOGIN_HOST = LOCAL_HOST  # "localhost"
+
+_LOGIN_PATH = "/login"
+_DEMO_PATH = "/demo"
+# The hidden CSRF field oTree embeds in the /login form (see the investigation).
+_CSRF_INPUT_RE = re.compile(
+    r'name=["\']csrftoken["\']\s+value=["\']([^"\']+)["\']')
+
+
+def otree_form_login(host, port, username, password, timeout=4.0,
+                     attempts=6, backoff=0.5):
+    """Real oTree admin form-login; return the raw ``session`` cookie value that
+    authenticates the monitor, or ``None`` on any failure.
+
+    Sequence (verified against otree==6.0.15, see _ai/AUTOLOGIN_INVESTIGATION.md):
+    GET /login with a cookie jar (the server sets a `session` cookie carrying a
+    csrftoken and embeds the SAME token in a hidden field), scrape that hidden
+    csrftoken, POST username/password/csrftoken back (urlencoded) with the same
+    jar. On success oTree 302-redirects to /demo and the jar now holds the
+    logged-in `session` cookie; on a wrong password it re-renders /login (200) and
+    no auth cookie is set.
+
+    Connection errors are retried a few times with a short backoff, because the
+    launch flow opens the dashboard ~2s after starting prodserver and the server
+    may still be booting. A wrong password (a real, answered rejection) is NOT
+    retried. Never raises: returns None on anything unexpected.
+    """
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+    import http.cookiejar
+
+    base = "http://%s:%s" % (host, port)
+    for _attempt in range(max(1, int(attempts))):
+        try:
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(jar))
+            with opener.open(base + _LOGIN_PATH, timeout=timeout) as resp:
+                html = resp.read().decode("utf-8", "replace")
+            match = _CSRF_INPUT_RE.search(html)
+            if match is None:
+                # No login form at all (e.g. AUTH_LEVEL unset): nothing to log in
+                # to. Let the caller just open the monitor directly.
+                return None
+            data = urllib.parse.urlencode({
+                "username": username or "",
+                "password": password or "",
+                "csrftoken": match.group(1),
+            }).encode("ascii")
+            request = urllib.request.Request(
+                base + _LOGIN_PATH, data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with opener.open(request, timeout=timeout) as resp:
+                # urllib follows the 302 automatically; a success lands on /demo,
+                # a wrong password stays on /login.
+                final_path = urllib.parse.urlsplit(resp.geturl()).path
+                resp.read()
+            if _DEMO_PATH in final_path:
+                for cookie in jar:
+                    if cookie.name == "session":
+                        return cookie.value
+            # Reached the server and got a definite answer: bad credentials.
+            return None
+        except (urllib.error.URLError, OSError):
+            # Server not up yet (or a transient network error): wait and retry.
+            time.sleep(backoff)
+    return None
+
+
+def start_cookie_relay(cookie_value, monitor_url, host=AUTOLOGIN_HOST,
+                       idle_timeout=30.0):
+    """Start a one-shot localhost cookie-relay responder; return its URL.
+
+    The first GET it receives is answered with ``302 Location: monitor_url`` plus
+    ``Set-Cookie: session=<cookie_value>; Path=/; SameSite=Lax``, planting the
+    logged-in oTree session cookie (which is host-scoped and not port-isolated, so
+    it then rides to the monitor's server) and immediately shutting the responder
+    down. If the browser never arrives it self-destructs after ``idle_timeout``
+    seconds so nothing lingers. Bound to the 127.0.0.1 loopback only, on a free
+    OS-chosen port, in a background daemon thread. Returns the relay URL to open.
+    """
+    import http.server
+
+    class _Relay(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler API)
+            self.send_response(302)
+            self.send_header("Location", monitor_url)
+            self.send_header(
+                "Set-Cookie",
+                "session=%s; Path=/; SameSite=Lax" % cookie_value)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            # shutdown() must run off the serving thread, so hand it to another.
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        def log_message(self, *args):  # silence the default stderr logging
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Relay)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # Safety net: tear the responder down if the browser never hits it.
+    timer = threading.Timer(idle_timeout, server.shutdown)
+    timer.daemon = True
+    timer.start()
+    return "http://%s:%s/" % (host, port)
+
+
+def wait_for_server(host, port, timeout=8.0, interval=0.25):
+    """Poll the oTree server until it answers an HTTP request, or ``timeout``.
+
+    Returns ``True`` as soon as a GET to ``/login`` (falling back to ``/``) gets
+    any HTTP response at all -- a 200, a 302 redirect, even a 404 all mean the
+    server socket is up and handling requests, which is exactly the readiness we
+    need before opening the dashboard. Returns ``False`` if the deadline passes
+    with no response. Stdlib only; never raises.
+
+    This replaces the old blind ``time.sleep`` both launchers did before opening
+    the dashboard: instead of waiting a fixed guess, we open the instant the
+    server responds.
+    """
+    import urllib.request
+    import urllib.error
+
+    base = "http://%s:%s" % (host, port)
+    deadline = time.time() + max(0.0, float(timeout))
+    step = max(0.01, float(interval))
+    while True:
+        for path in (_LOGIN_PATH, "/"):
+            try:
+                with urllib.request.urlopen(base + path, timeout=step * 4):
+                    return True
+            except urllib.error.HTTPError:
+                # A real HTTP status came back (404/403/etc): the server is up.
+                return True
+            except (urllib.error.URLError, OSError):
+                # Not listening yet (or a transient socket error): keep waiting.
+                pass
+        if time.time() >= deadline:
+            return False
+        time.sleep(step)
+
+
+def open_dashboard_authenticated(host, port, room, username, password,
+                                 auto_login=True, open_url=None,
+                                 login=None, start_relay=None,
+                                 wait=None, ready_timeout=8.0):
+    """The single dashboard-open entry point both launchers call.
+
+    Opens the admin room monitor for ``room`` in the SYSTEM DEFAULT BROWSER. When
+    ``auto_login`` is on it first does a real oTree form-login and, on success,
+    relays the resulting session cookie through a one-shot localhost redirect so
+    the browser lands already authenticated (``method == "cookie"``). If
+    auto-login is off, or the login fails for any reason, it opens the plain
+    monitor URL and the operator logs in once (``method == "manual"``).
+
+    The monitor host is always localhost (``AUTOLOGIN_HOST``): the auto-open is on
+    the operator's own machine. The participant per-seat links keep the configured
+    lab host and are unchanged by this function.
+
+    Returns a dict::
+
+        {"ok": bool,            # a page was opened (True even for manual)
+         "method": "cookie"|"manual",
+         "reason": str,         # plain-language what-happened, for the log/popup
+         "monitor_url": str,    # the plain monitor URL (manual login lands here)
+         "opened_url": str}     # the URL actually handed to the browser
+
+    ``ok`` is True whenever a page opened, because the manual fallback still lets
+    the operator finish by hand. ``open_url``/``login``/``start_relay``/``wait``
+    are injection points for tests; by default they are the real
+    browser/login/relay and ``wait_for_server``. ``ready_timeout`` caps the
+    readiness poll. Never raises.
+
+    Before doing anything else it polls the server for readiness (``wait``, the
+    real :func:`wait_for_server`) so the dashboard opens the instant the server
+    responds -- both the cookie path and the manual/auto-login-off path go
+    through this, so neither launcher needs a blind pre-open ``time.sleep`` any
+    more.
+    """
+    open_url = open_url or webbrowser.open
+    login = login or otree_form_login
+    start_relay = start_relay or start_cookie_relay
+    wait = wait or wait_for_server
+
+    # Readiness gate: wait (only) as long as the server actually needs to boot,
+    # then continue immediately. Replaces the old fixed pre-open sleep.
+    try:
+        wait(host, port, timeout=ready_timeout)
+    except Exception:
+        pass
+
+    monitor_url = "http://%s:%s%s" % (host, port, room_monitor_path(room))
+    result = {"ok": False, "method": "manual", "reason": "",
+              "monitor_url": monitor_url, "opened_url": monitor_url}
+
+    def _open(url):
+        try:
+            opened = open_url(url)
+        except Exception:
+            return False
+        # webbrowser.open returns a bool; a custom opener may return None on ok.
+        return opened is None or bool(opened)
+
+    if auto_login:
+        cookie = None
+        try:
+            cookie = login(host, port, username, password)
+        except Exception:
+            cookie = None
+        if cookie:
+            try:
+                relay_url = start_relay(cookie, monitor_url, host=host)
+            except Exception as error:
+                result["reason"] = ("auto-login worked but the cookie relay "
+                                    "could not start (%s); opened the login page"
+                                    % type(error).__name__)
+            else:
+                if _open(relay_url):
+                    result.update(ok=True, method="cookie", opened_url=relay_url,
+                                  reason="logged in automatically (form-login + "
+                                         "cookie relay)")
+                    return result
+                result["reason"] = ("auto-login worked but the browser could not "
+                                    "be opened; opened the login page")
+        else:
+            result["reason"] = ("auto-login could not log in (wrong password, or "
+                                "the server was not ready); opened the login page")
+    else:
+        result["reason"] = "auto-login is off; opened the login page"
+
+    result.update(ok=_open(monitor_url), method="manual", opened_url=monitor_url)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Launch briefing (Feature 1 caution flag lives here), the whole host/room
 # decision stays in Python; both launchers only render this dict.
 # ---------------------------------------------------------------------------
 
@@ -2114,7 +2924,7 @@ def launch_briefing(cfg, lab_presets=None):
 
 
 # ---------------------------------------------------------------------------
-# Room enumeration (Feature 3) — read the project's own ROOMS by importing its
+# Room enumeration (Feature 3), read the project's own ROOMS by importing its
 # settings in a throwaway subprocess with NO lab environment set. A static
 # regex parse breaks on ROOMS built at runtime; importing and reading the
 # resolved list is reliable, and the subprocess isolation means a slow,
@@ -2228,6 +3038,12 @@ PREFLIGHT_DB_TIMEOUT = 4          # seconds for the psycopg2 connect probe
 PREFLIGHT_ROOMS_TIMEOUT = 6.0     # seconds for the ROOMS subprocess import
 
 
+# Field tags for pre-launch issues (the ``field`` key). An issue carries one when
+# it is about a single form field, so two issues about the SAME field can be
+# recognised as such whatever their wording.
+FIELD_PROJECT_PATH = "project_path"
+
+
 def _preflight_result(check, ok, message, detail=""):
     return {"check": check, "ok": bool(ok), "message": message, "detail": detail}
 
@@ -2245,7 +3061,7 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
     if c["db_mode"] == DB_MODE_NONE:
         return _preflight_result(
             "database", True,
-            "No lab database (oTree SQLite) — nothing to check.",
+            "No lab database (oTree SQLite): nothing to check.",
             "db_mode is 'none', so no Postgres connection is attempted.")
 
     host = c["db_host"]
@@ -2257,7 +3073,7 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
     except ImportError:
         return _preflight_result(
             "database", True,
-            "Could not verify the lab database — psycopg2 is not installed in "
+            "Could not verify the lab database: psycopg2 is not installed in "
             "the launcher's Python.",
             "Install psycopg2-binary to have the launcher pre-check the database.")
 
@@ -2268,7 +3084,7 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
         # other psycopg2 or DSN problem is treated the same way (fail-soft).
         return _preflight_result(
             "database", False,
-            "Could not connect to the lab database at %s:%s — %s"
+            "Could not connect to the lab database at %s:%s: %s"
             % (host, port, _pg_error(error)),
             mask_database_url(url))
     try:
@@ -2298,7 +3114,7 @@ def preflight_check_port(config):
     except (TypeError, ValueError):
         return _preflight_result(
             "port", True,
-            "No numeric launch port set — skipping the port check.",
+            "No numeric launch port set, skipping the port check.",
             "port=%r" % raw)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2308,12 +3124,12 @@ def preflight_check_port(config):
         if error.errno in (errno.EADDRINUSE, errno.EACCES):
             return _preflight_result(
                 "port", False,
-                "Port %d is already in use — another server may still be running."
+                "Port %d is already in use: another server may still be running."
                 % port,
                 str(error))
         return _preflight_result(
             "port", True,
-            "Could not test port %d (%s) — continuing." % (port, error),
+            "Could not test port %d (%s), continuing." % (port, error),
             str(error))
     finally:
         try:
@@ -2336,14 +3152,19 @@ def preflight_check_project(config, timeout=PREFLIGHT_ROOMS_TIMEOUT):
     path = c["project_path"].strip()
     room = c["room_name"].strip()
     if not path or not os.path.isdir(path):
-        return _preflight_result(
+        out = _preflight_result(
             "project", False,
             "Project folder not found: %s" % (path or "(none chosen)"),
             "Pick the folder that holds settings.py.")
+        # Which form field this is about, so the pre-launch screen can drop this
+        # soft warning when a hard blocker already covers the same field (see
+        # suppress_shadowed_warnings).
+        out["field"] = FIELD_PROJECT_PATH
+        return out
     if not os.path.isfile(settings_path_for(path)):
         return _preflight_result(
             "project", False,
-            "No settings.py found in %s — is this an oTree project?" % path,
+            "No settings.py found in %s. Is this an oTree project?" % path,
             settings_path_for(path))
 
     info = enumerate_project_rooms(path, timeout=timeout)
@@ -2456,7 +3277,7 @@ def psycopg2_available():
 
     Probes the oTree-runtime interpreter (``otree_runtime_python``) in a short
     subprocess so the answer reflects where ``otree resetdb`` will actually try
-    to import the driver — not necessarily the launcher's own interpreter. Falls
+    to import the driver, not necessarily the launcher's own interpreter. Falls
     back to the launcher's interpreter only when the oTree interpreter cannot be
     located (best reasonable check; see POLISH note on the residual limitation).
     """
@@ -2484,21 +3305,21 @@ def preflight_check_psycopg2(config):
     config selects a Postgres database (lab or custom) but ``psycopg2`` cannot be
     imported, ``otree resetdb`` would later die with a cryptic
     ``ModuleNotFoundError: No module named 'psycopg2'``. Catch it here, up front,
-    with an actionable message instead. Only Postgres modes trigger it — SQLite /
+    with an actionable message instead. Only Postgres modes trigger it, SQLite /
     no-database never does.
     """
     c = normalize_config(config)
     if c["db_mode"] == DB_MODE_NONE:
         return _preflight_result(
             "psycopg2", True,
-            "No lab database (oTree SQLite) — psycopg2 is not needed.",
+            "No lab database (oTree SQLite): psycopg2 is not needed.",
             "db_mode is 'none', so no Postgres driver is required.")
     if psycopg2_available():
         return _preflight_result(
             "psycopg2", True, "psycopg2 (the Postgres driver) is installed.", "")
     return _preflight_result(
         "psycopg2", False,
-        "Postgres is selected but psycopg2 is not installed — run: "
+        "Postgres is selected but psycopg2 is not installed. Run: "
         "pip install psycopg2-binary, or use the oTree default (SQLite).",
         "Without psycopg2 'otree resetdb' fails with "
         "ModuleNotFoundError: No module named 'psycopg2'.")
@@ -2508,7 +3329,7 @@ def preflight(config, lab_info=None):
     """Run the pre-launch checks and return their result dicts, in order.
 
     Each entry is ``{check, ok, message, detail}``. This is FAIL-SOFT: it reports
-    problems, it never blocks — the caller lists any failures and offers a
+    problems, it never blocks, the caller lists any failures and offers a
     "Launch anyway". ``lab_info`` is accepted for parity with the web app and
     future checks; the checks read everything they need from ``config`` (in
     lab-database mode ``normalize_config`` has already forced the lab Postgres
@@ -2531,6 +3352,25 @@ def preflight(config, lab_info=None):
 def preflight_failures(results):
     """Just the failed checks from a ``preflight()`` result list."""
     return [r for r in results if not r.get("ok", False)]
+
+
+def suppress_shadowed_warnings(issues):
+    """Drop every soft warning whose field already has a hard blocker.
+
+    General rule for the pre-launch screen (both launchers): a hard blocker on a
+    field suppresses the softer warning about that same field. With no project
+    folder chosen, the must-fix "Choose your oTree project folder" item (with its
+    Choose folder action) is the whole story, so the fail-soft preflight "Project
+    folder not found" warning about the same field is not shown beside it.
+
+    ``issues`` is the list of ``{level: 'block'|'warn', field?, ...}`` dicts the
+    screen renders. Issues without a ``field`` are never touched, order is kept,
+    and a new list is returned.
+    """
+    blocked = set(issue.get("field") for issue in issues
+                  if issue.get("level") == "block" and issue.get("field"))
+    return [issue for issue in issues
+            if not (issue.get("level") == "warn" and issue.get("field") in blocked)]
 
 
 def issue_fix_for(failure):
@@ -2560,7 +3400,7 @@ def issue_fix_for(failure):
 
 
 # ---------------------------------------------------------------------------
-# Create a new Postgres database (Feature 2) — uses psycopg2 in AUTOCOMMIT
+# Create a new Postgres database (Feature 2), uses psycopg2 in AUTOCOMMIT
 # (CREATE DATABASE cannot run inside a transaction). psycopg2 is imported
 # lazily so importing this module stays standard-library-only for the Tk app.
 # ---------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""oTree Lab Launcher — web-tech front end (pywebview host).
+"""oTree Lab Launcher: web-tech front end (pywebview host).
 
 This is the re-skin of ``otree_lab_launcher.py``. The window and every button
-are HTML/CSS/JS (``web/index.html``), but the real work — picking folders,
+are HTML/CSS/JS (``web/index.html``), but the real work (picking folders,
 validating the project, saving configs, resetting the database and starting
-``otree prodserver`` — is done here in Python, so the app keeps the full
+``otree prodserver``) is done here in Python, so the app keeps the full
 filesystem and process powers a browser tab can never have.
 
     Web tech for the looks, a native Python process for the powers.
@@ -17,7 +17,7 @@ so there is no Chromium bundle and no Node build. Run it with::
 
 The pure logic (config model, DATABASE_URL, seat files, resetdb/prodserver
 commands, the settings.py block, presets storage) is imported unchanged from
-``otree_lab_launcher.py`` — this file only wires that logic to the web UI.
+``otree_lab_launcher.py``; this file only wires that logic to the web UI.
 """
 
 from __future__ import annotations
@@ -27,13 +27,11 @@ import getpass
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import threading
 import time
 import traceback
-import webbrowser
 
 import otree_core as core
 
@@ -42,12 +40,59 @@ INDEX_HTML = os.path.join(HERE, "web", "index.html")
 
 # ---------------------------------------------------------------------------
 # Diagnostics. On Windows the pywebview console shows nothing, so we tee a full
-# log to _ai/web_launcher.log: startup, every Api method entry/exit, and any
-# exception with traceback. Julian reads this file after clicking a button.
+# log to data/web_launcher.log: startup, every Api method entry/exit, and any
+# exception with traceback. Julian reads this file after clicking a button. The
+# log lives in the app's data/ folder like everything else the launcher writes.
 # ---------------------------------------------------------------------------
 
-LOG_DIR = os.path.join(HERE, "_ai")
+LOG_DIR = core.data_dir()
 LOG_PATH = os.path.join(LOG_DIR, "web_launcher.log")
+
+# On Windows the windowless launcher runs under pythonw.exe (no console), so
+# stdout/stderr are None and a startup crash would be invisible. Point them at
+# the crash log before anything else (in particular before the StreamHandler
+# below captures sys.stderr). A normal console run, where the streams already
+# exist, is left untouched. The log lives in data/, falling back to the user's
+# home folder only if data/ cannot be created or written.
+def _resolve_crash_log_path():
+    data_target = os.path.join(core.data_dir(), "otree-lab-launcher.log")
+    try:
+        os.makedirs(core.data_dir(), exist_ok=True)
+        with open(data_target, "a", encoding="utf-8"):
+            pass
+        return data_target
+    except OSError:
+        return os.path.join(os.path.expanduser("~"), "otree-lab-launcher.log")
+
+
+CRASH_LOG_PATH = _resolve_crash_log_path()
+
+
+def _install_crash_log():
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        stream = open(CRASH_LOG_PATH, "a", buffering=1, encoding="utf-8")
+    except OSError:
+        return
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
+def _log_startup_crash(exc):
+    try:
+        with open(CRASH_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write("\n" + "=" * 60 + "\n")
+            fh.write("otree_launcher_web startup crash %s\n"
+                     % time.strftime("%Y-%m-%d %H:%M:%S"))
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=fh)
+    except OSError:
+        pass
+
+
+_install_crash_log()
 
 
 def _setup_logging():
@@ -76,7 +121,7 @@ LOG = _setup_logging()
 # JSON-serializable is what keeps the JS promise from hanging forever (a hung
 # promise is indistinguishable from a frozen UI on EdgeChromium).
 _SAFE_ERROR = {"ok": False, "error": True,
-               "message": "Internal launcher error — see _ai/web_launcher.log."}
+               "message": "Internal launcher error. See data/web_launcher.log."}
 
 
 def api_call(fn):
@@ -151,7 +196,7 @@ def preset_row(preset):
 
 
 # ---------------------------------------------------------------------------
-# The JS API — every method here is callable from the page as
+# The JS API: every method here is callable from the page as
 # window.pywebview.api.<name>(...). Keep the returns JSON-serializable.
 # ---------------------------------------------------------------------------
 
@@ -243,7 +288,7 @@ class Api(object):
         fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
         # The labs the selector should offer, seeded from lab_info.json and
         # narrowed to the displayed ones. The JS builds its lab buttons and seat
-        # maps from this list — no lab data is hardcoded in the page.
+        # maps from this list; no lab data is hardcoded in the page.
         all_presets = core.lab_presets_from_store(self.store_extra)
         labs = [
             {"id": p["id"], "name": p["name"], "host": p["ip"],
@@ -277,6 +322,13 @@ class Api(object):
             "lab_marker": core.read_lab_marker() or "",
             "lab_presets": lab_presets,
             "pg_admin": pg_admin,
+            # Round 3 database registry (global list + roster + default), read
+            # from the store's extra through the shared core helpers so the web
+            # picker, create dialog and Lab Settings match the Tk app exactly.
+            "databases": core.known_databases_from_store(self.store_extra),
+            "researchers": core.list_researchers(self.store_extra, self.presets),
+            "default_database": str(self.store_extra.get(
+                "default_database", core.DB_BUILTIN_LAB)),
         }
 
     @api_call
@@ -372,7 +424,7 @@ class Api(object):
             core.save_store(self.presets, self.store_extra, self.store_path)
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
-        # Log line is RETURNED for the page to append — not pushed via
+        # Log line is RETURNED for the page to append, not pushed via
         # evaluate_js from this JS-invoked method (that would deadlock).
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
                 "selected": name,
@@ -403,7 +455,7 @@ class Api(object):
         """First-launch operator choice of this machine's lab.
 
         Writes lab.local ONCE. Refuses if a valid marker already exists, so the
-        identity can never revert silently — changing it is a hand-edit of the
+        identity can never revert silently; changing it is a hand-edit of the
         file. ``lab`` is a lab id from the data-driven list (lab_info.json), so
         no small/large names are hardcoded. On success the built-in default's lab
         is updated in memory and the refreshed rows + selected config are
@@ -447,17 +499,103 @@ class Api(object):
         """The room names the project's own settings.py defines (Feature 3)."""
         return core.enumerate_project_rooms(project_path)
 
+    # -- the global database registry + researcher roster (Round 3) --------
+    # These map straight onto the shared core helpers so the web picker, create
+    # dialog and Lab Settings render the SAME global list as the Tk app. The
+    # registry is passive (only create_database touches Postgres).
+
+    def _current_database_id(self, cfg):
+        """The registry id of the database this config uses, for the picker to
+        tick (mirror of the Tk ``current_database_id``): the built-ins by mode,
+        a custom by its connection (name + host + user), or "" when nothing
+        matches."""
+        mode = cfg.get("db_mode")
+        if mode == core.DB_MODE_NONE:
+            return core.DB_BUILTIN_SQLITE
+        if mode == core.DB_MODE_LAB:
+            return core.DB_BUILTIN_LAB
+        name = (cfg.get("db_name") or "").strip()
+        host = (cfg.get("db_host") or "").strip()
+        user = (cfg.get("db_user") or "").strip()
+        for entry in core.known_databases_from_store(self.store_extra):
+            if (entry["db_name"] == name and entry["db_host"] == host
+                    and entry["db_user"] == user):
+                return entry["id"]
+        return ""
+
     @api_call
-    def create_database(self, new_db, new_user="", new_password=""):
-        """Create a Postgres database with the stored admin config (Feature 2).
+    def list_databases(self, fields=None):
+        """The whole database picker list (Round 3, Task 1): the SQLite built-in,
+        the lab shared built-in, then every custom database in the global
+        registry. Each carries its creator ``researcher`` (grey in the UI).
+        ``current_id`` ticks the database the on-screen config uses now."""
+        cfg = fields_to_config(fields or {})
+        return {"ok": True,
+                "databases": core.list_databases(self.store_extra),
+                "current_id": self._current_database_id(cfg)}
+
+    @api_call
+    def database_config_fields(self, db_id):
+        """The config field overrides to apply when a picker entry is chosen
+        (Round 3, Task 1). One path for all three kinds via
+        ``core.database_config_fields``; ``None`` when the id is unknown."""
+        entry = core.find_database(self.store_extra, db_id)
+        if entry is None:
+            return {"ok": False, "message": "No such database."}
+        return {"ok": True, "entry": entry,
+                "fields": core.database_config_fields(entry)}
+
+    @api_call
+    def list_researchers(self):
+        """The shared researcher roster (Round 3, Task 2): the same list that
+        feeds Save-as-new's author field AND the create-database Researcher
+        field. ``suggested`` prefills the last author used."""
+        suggested = str(self.store_extra.get("last_author", "")).strip() or self._default_author()
+        return {"ok": True,
+                "researchers": core.list_researchers(self.store_extra, self.presets),
+                "suggested": suggested}
+
+    @api_call
+    def save_default_db(self, db_id):
+        """Persist which built-in database a brand-new config starts on (Lab
+        Settings > Default database). Mirrors the Tk ``_save_default_db``."""
+        db_id = (db_id or "").strip() or core.DB_BUILTIN_LAB
+        self.store_extra["default_database"] = db_id
+        try:
+            core.save_store(self.presets, self.store_extra, self.store_path)
+        except OSError as error:
+            return {"ok": False, "message": "Could not save: %s" % error}
+        return {"ok": True, "default_database": db_id}
+
+    @api_call
+    def create_database(self, new_db, new_user="", new_password="", researcher=""):
+        """Create a Postgres database with the stored admin config (Feature 2),
+        then, on a confirmed create, register it in the global registry with its
+        creator researcher and persist the store (Round 3, Task 2).
 
         The admin credentials come from the store's ``pg_admin`` (set on the Lab
         Settings page), exactly as the Tk ``create_database_dialog`` uses them.
-        Returns core.create_database's result dict; on success ``fields`` holds
-        the Custom DB config for the page to auto-fill.
+        Mirrors the Tk ``_run_create_database``: the Postgres user (a credential)
+        is recorded separately from the researcher (the person). Registration
+        must never lose a created database, so a registry error is reported but
+        does not fail the create. Returns core.create_database's result dict; on
+        success ``fields`` holds the Custom DB config for the page to auto-fill.
         """
         admin = core.pg_admin_from_store(self.store_extra)
-        return core.create_database(admin, new_db, new_user, new_password)
+        result = core.create_database(admin, new_db, new_user, new_password)
+        if result.get("ok"):
+            fields = result.get("fields") or {}
+            try:
+                entry = core.register_database(
+                    self.store_extra, title=new_db, researcher=researcher,
+                    connection=fields, postgres_user=fields.get("db_user", ""))
+                core.save_store(self.presets, self.store_extra, self.store_path)
+                result["registered"] = entry
+                result["databases"] = core.known_databases_from_store(self.store_extra)
+                result["researchers"] = core.list_researchers(self.store_extra, self.presets)
+            except Exception as error:   # registration must never lose the DB
+                result["register_error"] = str(error)
+        return result
 
     @api_call
     def save_pg_admin(self, fields):
@@ -577,7 +715,7 @@ class Api(object):
         if not state["readable"]:
             return {"ok": False, "message": "Could not read %s" % state["path"]}
         if state["has_block"]:
-            # Refuse to append twice — the markers are already in the file.
+            # Refuse to append twice: the markers are already in the file.
             return {"ok": False, "already": True,
                     "settings": state,
                     "message": "settings.py already has the oTree lab support block, "
@@ -592,32 +730,52 @@ class Api(object):
                 "log": [["ok", "Backed up settings.py to %s" % backup],
                         ["ok", "Appended the oTree lab support block to %s" % path]]}
 
-    # -- export a .bat -----------------------------------------------------
+    # -- save a one-click shortcut -----------------------------------------
 
     @api_call
-    def export_bat(self, name, fields):
-        # Build the text now (fast, safe), then open the SAVE dialog + write on
-        # a worker thread and report the result to a page callback.
-        cfg = fields_to_config(fields)
-        name = name or "config"
-        text = core.export_bat_text(cfg, name)
-        # Default filename = the config name (sanitised), keeping spaces, e.g.
-        # "Dictator study.bat" — matches the Tk one-click shortcut button.
-        safe = re.sub(r"[^A-Za-z0-9 _.-]", "_", name).strip() or "config"
-        default_name = safe + ".bat"
-        self._spawn(lambda: self._dialog_export(text, default_name), "dlg-export")
+    def save_shortcut(self, name, fields):
+        """Save a LIVE one-click shortcut for the current SAVED config.
+
+        Mirrors the Tk ``save_shortcut``: the shortcut calls the launcher
+        headlessly (``otree_lab_launcher.py --run "<name>"``), so it always
+        reflects the latest saved settings and the DB password is NOT written
+        into the file -- the secret stays in presets.json. It therefore requires
+        a saved, unmodified config: an unsaved or edited setup is refused with a
+        clear "save it first" message rather than a password-baked snapshot.
+        """
+        name = (name or "").strip()
+        match = None
+        for preset in self.presets:
+            if str(preset.get("name", "")).strip() == name:
+                match = preset
+                break
+        if match is None:
+            return {"ok": False, "needs_save": True,
+                    "message": "Save these settings as a named config first (Save as "
+                               "new config), then create the one-click shortcut."}
+        if core.configs_differ(fields_to_config(fields), match):
+            return {"ok": False, "needs_save": True,
+                    "message": 'This config ("%s") has unsaved changes. Save it first, '
+                               "then create the one-click shortcut." % name}
+        # The shortcut invokes the Tk launcher's headless entry point, resolved to
+        # an absolute path next to this file (both apps ship in the same folder).
+        launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "otree_lab_launcher.py")
+        shortcut = core.headless_shortcut(name, launcher_path)
+        self._spawn(lambda: self._dialog_export(shortcut["content"], shortcut["filename"],
+                                                shortcut["ext"]), "dlg-export")
         return {"ok": True, "pending": True}
 
-    def _dialog_export(self, text, default_name):
+    def _dialog_export(self, text, default_name, ext=".bat"):
         import webview
         try:
             result = self.window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=default_name,
-                file_types=("Batch files (*.bat)", "All files (*.*)"))
+                file_types=("One-click shortcut (*%s)" % ext, "All files (*.*)"))
         except Exception:
             LOG.exception("save dialog failed")
             self._callback("pywOnBatResult",
-                           {"ok": False, "message": "Save dialog failed — see the log."})
+                           {"ok": False, "message": "Save dialog failed. See the log."})
             return
         path = result if isinstance(result, str) else (result[0] if result else None)
         if not path:
@@ -638,7 +796,7 @@ class Api(object):
     def launch_briefing(self, fields):
         """What to tell the experimenter BEFORE the server starts (Deliverable 4).
 
-        A pure description — it starts nothing. The web UI shows this in a
+        A pure description: it starts nothing. The web UI shows this in a
         confirmation modal and only calls ``launch`` after an explicit OKAY.
         The behaviour described is the real, verified one: the lab machines
         open a per-seat link ``http://HOST:PORT/room/ROOM?participant_label=SEAT``
@@ -650,7 +808,7 @@ class Api(object):
         """
         cfg = fields_to_config(fields)
         # The whole host/room/caution decision stays in core.launch_briefing so
-        # the web UI only renders it — the same dict the Tk app uses. Resolved
+        # the web UI only renders it, the same dict the Tk app uses. Resolved
         # against THIS store's lab presets, so added labs and the Local host work.
         lab_presets = core.lab_presets_from_store(self.store_extra)
         briefing = core.launch_briefing(cfg, lab_presets)
@@ -670,12 +828,20 @@ class Api(object):
         ``{level:'block'|'warn', title, hint, fix, fix_label, info}`` where
         ``fix`` is a string the page maps to an inline action ('add_block') or ''
         for a hint-only item. Every host/room/db/psycopg2/oTree decision lives in
-        core; nothing here decides whether to launch — the page only renders.
+        core; nothing here decides whether to launch; the page only renders.
+
+        A hard blocker on a field SUPPRESSES the softer warning about that same
+        field, so the two are mutually exclusive: with no usable project folder
+        the list carries only the blocking "choose your folder" item (with its
+        [Choose folder…] action), never also the preflight "Project folder not
+        found" warning that fires on the identical condition.
         """
         cfg = fields_to_config(fields)
         lab_presets = core.lab_presets_from_store(self.store_extra)
         issues = []
         folder_problem = self._project_folder_problem(cfg)
+        # Preflight checks whose field already has a hard blocker above them.
+        blocked_checks = {"project"} if folder_problem else set()
         for message in self._hard_block_problems(cfg, lab_presets):
             issue = {"level": "block", "title": message, "hint": "",
                      "fix": "", "fix_label": "", "info": ""}
@@ -689,7 +855,7 @@ class Api(object):
         if self._project_needs_block(cfg):
             issues.append({
                 "level": "warn",
-                "title": "This project has no oTree lab support block — the lab "
+                "title": "This project has no oTree lab support block, so the lab "
                          "room, seat board and lab database won’t take effect "
                          "without it.",
                 "hint": "Adds a clearly-marked block to the end of settings.py, "
@@ -697,6 +863,8 @@ class Api(object):
                         "manual copy/paste is on the info screen.",
                 "fix": "add_block", "fix_label": "Add it for me", "info": "block"})
         for failure in core.preflight_failures(core.preflight(cfg, core.load_lab_info())):
+            if failure.get("check") in blocked_checks:
+                continue
             issue = {"level": "warn", "title": failure.get("message", ""),
                      "hint": str(failure.get("detail", "")),
                      "fix": "", "fix_label": "", "info": "", "rooms": []}
@@ -709,6 +877,21 @@ class Api(object):
                 issue["fix"] = meta["fix"]
                 issue["fix_label"] = meta.get("fix_label", "Fix")
                 issue["rooms"] = list(meta.get("rooms", []))
+                # Addendum (Round 3, Task 5): on a room-not-in-ROOMS issue, also
+                # offer to DEFINE the chosen room in the project via the SAME safe
+                # settings.py append path (timestamped .bak, marker-guarded,
+                # refuse-if-present, revertible). Offered only when seats are used
+                # (the block defines the room from the seat file) and the block is
+                # not there yet. The page renders an "Add <room> room" button that
+                # calls append_settings_block then re-checks. Mirror of the Tk
+                # ``_configure_issue`` add_room addendum.
+                if meta["fix"] == "pick_room":
+                    room = (cfg.get("room_name") or "").strip()
+                    path = (cfg.get("project_path") or "").strip()
+                    if room and path and core.effective_seat_mode(cfg) != core.SEAT_NONE:
+                        state = core.inspect_settings(path)
+                        if state.get("readable") and not state.get("has_block"):
+                            issue["add_room"] = room
             issues.append(issue)
         return {"ok": True, "issues": issues}
 
@@ -782,7 +965,7 @@ class Api(object):
         Validation errors and preflight failures are RETURNED to the page (which
         shows them); nothing is pushed via evaluate_js from this JS-invoked
         method. When preflight finds problems and ``force`` is not set, the launch
-        is NOT started — the failures come back so the page can show a "Launch
+        is NOT started: the failures come back so the page can show a "Launch
         anyway" / "Cancel" prompt (mirroring the Tk PreflightWarningDialog). This
         catches an unreachable DB / missing oTree / busy port / bad project up
         front, BEFORE anything runs and before any handoff banner. The actual
@@ -808,16 +991,28 @@ class Api(object):
         return {"ok": True, "launching": True}
 
     @api_call
-    def open_url(self, url):
-        """Open a URL in the default browser (the handoff 'open dashboard' link).
-
-        Opened on a worker thread so this JS-invoked method returns at once and
-        never re-enters the WebView message loop.
+    def reopen_dashboard(self):
+        """Re-open the admin dashboard (the handoff 'No dashboard? Click here'
+        link). Re-runs the real authenticated open with the last launch's params
+        (fresh form-login + one-shot cookie relay), on a worker thread so this
+        JS-invoked method returns at once and never re-enters the WebView loop.
         """
-        url = (url or "").strip()
-        if not url:
-            return {"ok": False, "message": "No dashboard URL to open yet."}
-        self._spawn(lambda: webbrowser.open(url, new=1), "open-url")
+        last = getattr(self, "_last_launch", None)
+        if not last:
+            return {"ok": False, "message": "No dashboard to open yet."}
+
+        def worker():
+            result = core.open_dashboard_authenticated(
+                core.AUTOLOGIN_HOST, last["port"], last["room_name"],
+                last["admin_username"], last["admin_password"],
+                auto_login=last["auto_login"])
+            if result["method"] == "cookie":
+                self._log("ok", "Re-opened the dashboard already logged in.")
+            else:
+                self._log("info", "Re-opened the dashboard login page. %s"
+                          % result["reason"])
+
+        self._spawn(worker, "reopen-dashboard")
         return {"ok": True}
 
     @api_call
@@ -882,39 +1077,77 @@ class Api(object):
             self._log("ok", "otree prodserver started in its OWN terminal window (in the "
                             "background). Watch that window for live server logs and any errors.")
 
-            url = core.build_url(cfg)
+            # Auto login (default ON): open the admin room monitor already
+            # authenticated via a REAL form-login + one-shot localhost cookie relay
+            # (core.open_dashboard_authenticated). oTree ignores Basic Auth, so the
+            # old credentials-in-URL trick was dead; this replays a real login and
+            # plants the session cookie in the SYSTEM DEFAULT BROWSER. With auto
+            # login off, or if the login fails, it opens the plain login page and
+            # the operator logs in by hand. Opened on localhost (the operator's own
+            # machine); the per-seat participant links keep the lab host. Mirror of
+            # the Tk otree_lab_launcher launch.
+            self._remember_launch(cfg)
+            result = {"ok": True, "method": "manual",
+                      "monitor_url": "http://%s:%s%s" % (
+                          core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
+                          core.room_monitor_path(cfg.get("room_name", "")))}
             if cfg.get("open_browser"):
-                wait = int(cfg.get("wait_seconds", 5) or 0)
-                # Brief delay so the server is up, then open the dashboard in front.
-                self._log("muted", "Waiting %d s for the server, then opening %s …" % (wait, url))
-                time.sleep(max(wait, 0))
-                webbrowser.open(url, new=1)
-                self._log("ok", "Opened the oTree dashboard in your browser.")
+                # Open the dashboard the instant the server responds. The readiness
+                # poll lives in core.open_dashboard_authenticated (wait_for_server),
+                # so there is no blind fixed pre-open delay any more.
+                self._log("muted", "Waiting for the server to respond, then opening the dashboard …")
+                result = core.open_dashboard_authenticated(
+                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
+                    cfg.get("admin_username", ""), cfg.get("admin_password", ""),
+                    auto_login=cfg.get("auto_login", True))
+                if result["method"] == "cookie":
+                    self._log("ok", "Opened the oTree dashboard already logged in "
+                                    "(auto-login: form-login + cookie relay).")
+                else:
+                    self._log("info", "Opened the oTree dashboard login page. %s Log in with "
+                                      "the admin username and password shown here."
+                                      % result["reason"])
 
             self._mark_run(cfg)
-            self._status("ok", "Launched — the oTree dashboard is opening in your browser. The "
+            self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
                                "server runs in its own window; watch there for live logs. You "
                                "can close this launcher.")
-            # Only a real success reaches here: tell the handoff banner, with a
-            # working open-dashboard URL for the "No dashboard? Click here" link.
-            self._launch_result(True, "", url=url)
+            # Only a real success reaches here: tell the handoff banner, with the
+            # method so it reports honestly (already logged in vs at the login page).
+            self._launch_result(True, "", url=result["monitor_url"],
+                                method=result["method"])
         except Exception:
             LOG.exception("_run_launch: EXCEPTION")
             self._log("err", traceback.format_exc())
-            self._status("err", "Launch failed — see the activity log.")
-            self._launch_result(False, "Launch failed — see the activity log.")
+            self._status("err", "Launch failed. See the activity log.")
+            self._launch_result(False, "Launch failed. See the activity log.")
         finally:
             LOG.info("_run_launch: end")
 
-    def _launch_result(self, ok, message, url=""):
+    def _launch_result(self, ok, message, url="", method="manual"):
         """Deliver the REAL launch outcome to the page's handoff banner.
 
         Worker-thread only (it uses evaluate_js via _callback). ``ok`` True means
-        the server actually started; ``url`` is then the open-dashboard link. On
-        failure ``message`` explains what went wrong; there is NO false success.
+        the server actually started; ``url`` is then the open-dashboard link and
+        ``method`` is "cookie" (opened already logged in) or "manual" (opened the
+        login page). On failure ``message`` explains what went wrong; there is NO
+        false success.
         """
         self._callback("pywOnLaunchResult",
-                       {"ok": bool(ok), "message": message, "url": url})
+                       {"ok": bool(ok), "message": message, "url": url,
+                        "method": method})
+
+    def _remember_launch(self, cfg):
+        """Stash the params the takeover 'Click here' needs to re-open the
+        dashboard (the cookie relay is one-shot, so a fresh form-login is done
+        each time)."""
+        self._last_launch = {
+            "port": cfg.get("port", "8000"),
+            "room_name": cfg.get("room_name", ""),
+            "admin_username": cfg.get("admin_username", ""),
+            "admin_password": cfg.get("admin_password", ""),
+            "auto_login": cfg.get("auto_login", True),
+        }
 
     def _run_resetdb(self, project, env):
         proc = subprocess.Popen(
@@ -956,6 +1189,10 @@ def main():
     LOG.info("startup: otree_launcher_web on %s, python %s",
              sys.platform, sys.version.split()[0])
     LOG.info("log file: %s", LOG_PATH)
+    # Pull any pre-data/ files (lab.local, lab_info.json, presets.json, seats/)
+    # into data/ before anything reads them, then refresh lab_info.
+    core.migrate_legacy_data()
+    core.reload_lab_info()
     try:
         import webview
     except ImportError:
@@ -994,4 +1231,10 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - last-resort startup diagnostics
+        _log_startup_crash(exc)
+        raise

@@ -15,11 +15,11 @@ share one map file, and you can add your own room by dropping a new
 `maps/<name>.json` here and referencing it. (A lab may also inline a full map
 object instead of naming a file, but a file is the normal, reusable way.)
 
-There is **no in-app editor for maps** — you author them by hand-editing JSON
+There is **no in-app editor for maps**. You author them by hand-editing JSON
 (an LLM is good at this if you paste it this README plus the room shape). The two
 example files are complete, working templates: copy one and change it.
 
-## The map is geometry only — seat *names* come from the lab
+## The map is geometry only: seat *names* come from the lab
 
 A map does **not** contain seat names. Every `"kind": "seat"` cell is filled, in
 the order the seat cells appear in `cells`, from that lab's own `seats` list in
@@ -35,10 +35,10 @@ Top level:
 | field        | type   | meaning |
 |--------------|--------|---------|
 | `description`| string | Free text; ignored by the app. Describe the room. |
-| `front`      | string | Which edge is the front of the room. Convention: `"bottom"` — grid **row 1 is the BACK**, the highest row number is the FRONT (drawn at the bottom). Informational. |
+| `front`      | string | Which edge is the front of the room. Convention: `"bottom"`. Grid **row 1 is the BACK**, the highest row number is the FRONT (drawn at the bottom). Informational. |
 | `rows`       | int    | Number of grid rows. |
 | `cols`       | int    | Number of grid columns. |
-| `aisle_cols` | array  | Column numbers left empty as an aisle (no cells placed there). Informational — an aisle is simply a column you put no cells in. |
+| `aisle_cols` | array  | Column numbers left empty as an aisle (no cells placed there). Informational. An aisle is simply a column you put no cells in. |
 | `cells`      | array  | The cells of the room (see below). |
 
 Each entry in `cells`:
@@ -79,10 +79,10 @@ they fill in the order the seat cells appear above.
 
 ## The two examples
 
-- **`example_small.json`** — a 5×5 room with the experimenter desk front-left and
+- **`example_small.json`**: a 5×5 room with the experimenter desk front-left and
   a wall down the right of two middle rows. No aisle. 22 seats. A good starting
   point for a plain rectangular room with a couple of blocked cells.
-- **`example_large.json`** — a 9-column room with a **central aisle** (column 5),
+- **`example_large.json`**: a 9-column room with a **central aisle** (column 5),
   the experimenter desk beside the aisle, short end rows at the back, and a wall
   spanning the back of the aisle. 31 seats. Shows aisles, spanning walls, and
   partially-filled rows.

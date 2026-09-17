@@ -26,12 +26,14 @@ link on each desktop once, and arrivals then show up on the monitor.
 
 ## Which launcher to run
 
-The repo ships four start scripts. Pick by your operating system and which
-version of the app you want.
+Pick by your operating system and which version of the app you want.
 
-- **File extension tells you the OS.** `.bat` files are for **Windows**
-  (double-click to run). `.command` files are for **macOS** (double-click to
-  run).
+- **On Windows, double-click the `.vbs` file.** It starts the app windowless:
+  no black console box is left sitting behind the GUI. The `.bat` file still
+  works too, if you prefer it, but it leaves a brief flash of a console window
+  as the app starts.
+- **On macOS, double-click the `.command` file.** A Terminal window opens and
+  stays behind the app while it runs. That is normal and can be ignored.
 - **Two versions, same app.** Both versions do exactly the same thing, with the
   same features and the same logic. They only look different.
   - **`Start oTree Lab Launcher`** is the **main app**: the standard Tkinter
@@ -40,29 +42,47 @@ version of the app you want.
   - **`Start oTree Lab Launcher (web)`** is a **prettier version of the same
     app**: identical features and behaviour, just a nicer-looking UI.
 
-So the four scripts are:
+So the start files are:
 
-- `Start oTree Lab Launcher.bat`: main app, Windows
+- `Start oTree Lab Launcher.vbs`: main app, Windows (windowless, recommended)
+- `Start oTree Lab Launcher.bat`: main app, Windows (brief console flash)
 - `Start oTree Lab Launcher.command`: main app, macOS
-- `Start oTree Lab Launcher (web).bat`: web version, Windows
+- `Start oTree Lab Launcher (web).vbs`: web version, Windows (windowless, recommended)
+- `Start oTree Lab Launcher (web).bat`: web version, Windows (brief console flash)
 - `Start oTree Lab Launcher (web).command`: web version, macOS
 
 A lab can use whichever it prefers.
 
+If the Windows app fails to start before its window appears, a crash log is
+written to `data\otree-lab-launcher.log` (or, if the `data` folder cannot be
+written, `%USERPROFILE%\otree-lab-launcher.log`).
+
 ## Quick start
 
-1. **Copy the template:** `lab_info.example.json` → `lab_info.json`.
-2. **Edit `lab_info.json`:** set each lab's real `host`, and set the database
-   and admin passwords. (`lab_info.json` is git-ignored. It holds your real
+1. **Copy the template:** `lab_info.example.json` → `data/lab_info.json` (create
+   the `data` folder beside the app if it is not there yet).
+2. **Edit `data/lab_info.json`:** set each lab's real `host`, and set the
+   database and admin passwords. (`data/` is git-ignored. It holds your real
    hosts and passwords and must never be committed.)
 3. **Run the launcher (Windows):** double-click
-   **`Start oTree Lab Launcher.bat`** (or run it from a command prompt).
+   **`Start oTree Lab Launcher.vbs`** (windowless), or the matching `.bat`.
 
-   The first run with **no** `lab_info.json` opens a **setup wizard** that walks
-   you through creating one, so you can also just launch it and follow along.
+   The first run with **no** `data/lab_info.json` opens a **setup wizard** that
+   walks you through creating one (in `data/`), so you can also just launch it
+   and follow along.
 
 Then point the launcher at your oTree project folder, pick the lab and room, and
 hit **Launch session**.
+
+## Updating
+
+Everything the launcher reads and writes lives in one **`data/`** folder beside
+the app (it holds `lab.local`, `lab_info.json`, `presets.json` and `seats/`). To
+update, **copy the new version over the top and keep your `data/` folder.** Your
+labs, saved configs, database registry and this machine's lab identity all carry
+over untouched. (An existing install from before the `data/` folder is migrated
+automatically on first launch: the old files are copied into `data/` for you,
+and the originals are left in place.)
 
 ## Two roles: set it up once, then just launch
 
