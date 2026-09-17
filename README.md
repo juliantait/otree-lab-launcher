@@ -24,6 +24,31 @@ link on each desktop once; arrivals then show up on the monitor.
   one exception is an explicit, clearly-marked, fully-revertible "Add block to
   settings.py" button you choose to click.)
 
+## Which launcher to run
+
+The repo ships four start scripts. Pick by your operating system and which
+version of the app you want.
+
+- **File extension tells you the OS.** `.bat` files are for **Windows**
+  (double-click to run). `.command` files are for **macOS** (double-click to
+  run).
+- **Two versions, same app.** Both versions do exactly the same thing, with the
+  same features and the same logic. They only look different.
+  - **`Start oTree Lab Launcher`** is the **main app**: the standard Tkinter
+    desktop launcher. This is the primary, most reliable one, so use it if you
+    are not sure which to pick.
+  - **`Start oTree Lab Launcher (web)`** is a **prettier version of the same
+    app**: identical features and behaviour, just a nicer-looking UI.
+
+So the four scripts are:
+
+- `Start oTree Lab Launcher.bat` — main app, Windows
+- `Start oTree Lab Launcher.command` — main app, macOS
+- `Start oTree Lab Launcher (web).bat` — web version, Windows
+- `Start oTree Lab Launcher (web).command` — web version, macOS
+
+A lab can use whichever it prefers.
+
 ## Quick start
 
 1. **Copy the template:** `lab_info.example.json` → `lab_info.json`.
