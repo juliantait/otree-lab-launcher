@@ -525,6 +525,41 @@ input::placeholder{color:var(--faint)}
 .shown-toggle.off{color:var(--faint)}
 .ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
 
+/* ---- first-run setup wizard ---- */
+.wiz-head{margin:0 0 14px}
+.wiz-rail{display:flex;align-items:center;margin:2px 0 18px}
+.wiz-step{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--faint);flex:none}
+.wiz-step .dot{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);display:flex;
+  align-items:center;justify-content:center;font-size:11.5px;font-weight:600;color:var(--faint);background:var(--bg-deep)}
+.wiz-step.active{color:var(--text-strong)}
+.wiz-step.active .dot{border-color:var(--accent);color:#fff;background:linear-gradient(180deg,#e85a80,var(--accent))}
+.wiz-step.done{color:var(--muted)}
+.wiz-step.done .dot{border-color:var(--accent-dim);color:var(--accent);background:var(--accent-soft)}
+.wiz-rail .bar{flex:1;height:1px;background:var(--line);margin:0 10px;min-width:12px}
+.wiz-body{min-height:236px}
+.ls-card.primary{border-color:rgba(224,70,110,.32);
+  background:radial-gradient(140% 120% at 0% 0%,rgba(224,70,110,.06),var(--bg-deep))}
+.db-mode-note{font-size:11.5px;color:var(--faint);margin:4px 0 2px 24px}
+.db-mode-note.create{color:var(--accent)}
+.db-create-hint{font-size:11.5px;color:var(--faint);font-style:italic;margin:2px 0 2px 24px}
+.chk input:disabled{cursor:not-allowed;opacity:.55}
+.wiz-row{display:flex;align-items:center;gap:10px;padding:8px 11px;background:var(--bg-deep);
+  border:1px solid var(--line-soft);border-radius:var(--r-sm);margin:6px 0;font-size:12.5px}
+.wiz-row .nm{color:var(--text-strong);font-weight:600}
+.wiz-row .meta{color:var(--muted);flex:1}
+.wiz-row .x{background:none;border:0;color:var(--faint);cursor:pointer;font-size:16px;line-height:1}
+.wiz-row .x:hover{color:var(--err)}
+.wiz-empty{font-size:12px;color:var(--faint);padding:6px 2px}
+.wiz-review .rrow{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.wiz-review .rk{width:150px;color:var(--muted);font-size:12px;flex:none}
+.wiz-review .rv{color:var(--text-strong);font-size:12.5px}
+.wiz-review .rv .mut{color:var(--muted);font-weight:400}
+.pill{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:11px}
+.pill.create{color:var(--accent);background:var(--accent-soft);border:1px solid rgba(224,70,110,.3)}
+.pill.link{color:var(--muted);background:var(--panel-2);border:1px solid var(--line)}
+.wiz-foot{margin-top:18px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.wiz-foot .right{display:flex;gap:9px}
+
 /* launch briefing / handoff */
 .caution-bar{background:var(--caution);color:#fff;font-weight:700;font-size:13.5px;line-height:1.5;
   border-radius:var(--r-md);padding:14px 16px;margin:0 0 16px}
@@ -883,6 +918,28 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
     <button class="modal-x" onclick="closeModal()" aria-label="Close">&times;</button>
     <h3 class="modal-title" id="modalTitle"></h3>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- ==================== FIRST-RUN SETUP WIZARD ==================== -->
+<!-- Shown only on first run (lab_info.json absent). Deliberately has no close
+     X and does not dismiss on a backdrop click: there is nothing behind it to
+     use until setup is done. All step logic renders here; the Api does the work. -->
+<div class="modal" id="wizModal" hidden>
+  <div class="modal-card wide" id="wizCard">
+    <div class="wiz-head">
+      <h3 class="modal-title">Set up this launcher for your lab</h3>
+      <p class="modal-desc" style="margin:4px 0 0">Add your lab(s), the shared database, and the admin login. You can change all of this later in Lab settings.</p>
+    </div>
+    <div class="wiz-rail" id="wizRail"></div>
+    <div class="wiz-body" id="wizBody"></div>
+    <div class="wiz-foot">
+      <button class="link" id="wizExample" onclick="wizUseExample()">Use example values</button>
+      <div class="right">
+        <button class="btn" id="wizBack" onclick="wizGo(-1)">Back</button>
+        <button class="btn accent" id="wizNext" onclick="wizGo(1)">Next &rarr;</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2033,6 +2090,268 @@ function onExport(){
 }
 
 /* ======================================================================
+   FIRST-RUN SETUP WIZARD  (shown when lab_info.json is absent)
+   ----------------------------------------------------------------------
+   A re-skin: this JS only collects fields and RENDERS; every decision (create
+   or link a database, write lab_info.json, reload) is made in Python via
+   Api.provision_database / Api.create_lab_info. See _ai/web_wizard_design.md.
+   ====================================================================== */
+var WIZ_STEPS=["Labs","Databases","Review"];
+var WIZ_MAPS=[];
+var WIZ=null;
+function wizFreshDb(){
+  return {db_name:"otree",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432",create:false};
+}
+function openSetupWizard(maps){
+  WIZ_MAPS=maps||[];
+  // admin = the shared, OPTIONAL Postgres admin creds (entered once at the top of
+  // the Databases step; needed only to CREATE databases). otree = the oTree admin
+  // login, pre-filled to admin/password and never a blocking step.
+  WIZ={step:0,labs:[],
+    admin:{admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"},
+    db:wizFreshDb(),extras:[],extraOpen:false,exDraft:null,
+    otree:{username:"admin",password:"password"},busy:false};
+  el("wizModal").hidden=false;
+  wizRender();
+}
+function wizUseExample(){
+  if(!NATIVE||!API){
+    WIZ.labs=[{name:"Small lab",host:"192.168.1.10",seats:["1","2","3","4"],map:""}];
+    WIZ.db=wizFreshDb();wizRender();return;}
+  el("wizExample").textContent="Loading…";
+  API.use_example_lab_info().then(function(res){
+    if(res&&res.ok&&res.state){closeSetupWizard();initNative(res.state);
+      window.pywStatus("ok","Loaded example lab settings.");}
+    else{el("wizExample").textContent="Use example values";
+      window.pywStatus("err",(res&&res.message)||"Could not load the example.");}
+  });
+}
+function closeSetupWizard(){el("wizModal").hidden=true;WIZ=null;}
+function wizMapOptions(sel){
+  var opts=["(plain grid)"].concat(WIZ_MAPS||[]);
+  return opts.map(function(m){
+    var v=(m==="(plain grid)")?"":m;
+    return '<option value="'+escapeHtml(v)+'"'+((sel||"")===v?" selected":"")+'>'+escapeHtml(m)+'</option>';
+  }).join("");
+}
+function wizRenderRail(){
+  var h="";
+  for(var i=0;i<WIZ_STEPS.length;i++){
+    var cls="wiz-step"+(i===WIZ.step?" active":(i<WIZ.step?" done":""));
+    h+='<div class="'+cls+'"><span class="dot">'+(i<WIZ.step?"✓":(i+1))+'</span>'+WIZ_STEPS[i]+'</div>';
+    if(i<WIZ_STEPS.length-1)h+='<span class="bar"></span>';
+  }
+  el("wizRail").innerHTML=h;
+}
+/* -- reusable database field renderers (default DB and each extra) -- */
+function wizConnFields(p,o){
+  return '<div class="mfield"><label>Database</label><input type="text" id="'+p+'Name" value="'+escapeHtml(o.db_name)+'"></div>'+
+    '<div class="mfield"><label>User</label><input type="text" id="'+p+'User" value="'+escapeHtml(o.db_user)+'"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="'+p+'Pw" value="'+escapeHtml(o.db_password)+'">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\''+p+'Pw\',this)">Show</button></div></div>'+
+    '<div class="mfield"><label>Host</label><input type="text" id="'+p+'Host" value="'+escapeHtml(o.db_host)+'"></div>'+
+    '<div class="mfield"><label>Port</label><input type="text" id="'+p+'Port" value="'+escapeHtml(o.db_port)+'"></div>';
+}
+/* The ONE shared Postgres admin section (top of the Databases step). Optional:
+   filled = create-new becomes available on every database card; blank = those
+   toggles are disabled and only link-existing is possible. Never used to launch. */
+function wizAdminCard(){
+  var a=WIZ.admin;
+  return '<div class="ls-card"><h4>Postgres admin <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
+    '<p class="d">Needed only to CREATE new databases. Leave blank to link databases that already exist. Entered once, used only at setup, never to launch.</p>'+
+    '<div class="mfield"><label>Admin user</label><input type="text" id="admU" value="'+escapeHtml(a.admin_username)+'" oninput="wizAdminChanged()"></div>'+
+    '<div class="mfield"><label>Admin password</label><div class="pwrap"><input type="password" id="admP" value="'+escapeHtml(a.admin_password)+'" oninput="wizAdminChanged()">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\'admP\',this)">Show</button></div></div>'+
+    '<div class="mfield"><label>Admin host</label><input type="text" id="admH" value="'+escapeHtml(a.admin_host)+'" oninput="wizAdminChanged()"></div>'+
+    '<div class="mfield"><label>Admin port</label><input type="text" id="admPort" value="'+escapeHtml(a.admin_port)+'" oninput="wizAdminChanged()"></div></div>';
+}
+function wizReadAdmin(){
+  WIZ.admin={admin_username:(val("admU")||"").trim(),admin_password:val("admP")||"",
+    admin_host:(val("admH")||"").trim()||"localhost",admin_port:(val("admPort")||"").trim()||"5432"};
+}
+/* Create-new is available once admin user + password are present (host/port
+   default). Matches core.pg_admin_ready's minimum without a live connection. */
+function wizAdminReady(){return !!(WIZ.admin.admin_username && WIZ.admin.admin_password);}
+/* Live-toggle each visible create checkbox as the admin section is edited, with
+   no full re-render (which would drop focus). */
+function wizAdminChanged(){
+  wizReadAdmin();
+  var ready=wizAdminReady();
+  ["wd"].concat(WIZ.extraOpen?["ex"]:[]).forEach(function(p){
+    var c=el(p+"Create");if(!c)return;
+    c.disabled=!ready;
+    var hint=el(p+"Hint");if(hint)hint.hidden=ready;
+    if(!ready&&c.checked)c.checked=false;
+    var eff=c.checked&&ready;
+    var n=el(p+"Note");if(n){n.className="db-mode-note"+(eff?" create":"");n.innerHTML=wizModeNote(eff);}
+  });
+}
+function wizModeNote(create){
+  return create
+    ? 'The launcher will create it with the admin details below. A database of this name that already exists is reused.'
+    : 'Connects to a Postgres database that already exists &mdash; nothing is created.';
+}
+function wizDbControl(p,o){
+  // The create toggle relies on the ONE shared admin section above: disabled
+  // (with a hint) until admin user + password are filled.
+  var ready=wizAdminReady();
+  var eff=o.create&&ready;
+  return wizConnFields(p,o)+
+    '<label class="chk" style="margin:12px 0 2px"><input type="checkbox" id="'+p+'Create"'+(eff?" checked":"")+(ready?"":" disabled")+' onchange="wizToggleCreate(\''+p+'\')"> Create this database in Postgres for me</label>'+
+    '<p class="db-mode-note'+(eff?' create':'')+'" id="'+p+'Note">'+wizModeNote(eff)+'</p>'+
+    '<p class="db-create-hint" id="'+p+'Hint"'+(ready?' hidden':'')+'>Fill in Postgres admin above to create a new database.</p>';
+}
+function wizToggleCreate(p){
+  var c=el(p+"Create");if(!c||c.disabled)return;
+  var n=el(p+"Note");n.className="db-mode-note"+(c.checked?" create":"");n.innerHTML=wizModeNote(c.checked);
+}
+function wizReadDb(p,into){
+  into.db_name=(val(p+"Name")||"").trim();into.db_user=(val(p+"User")||"").trim();
+  into.db_password=val(p+"Pw")||"";into.db_host=(val(p+"Host")||"").trim();into.db_port=(val(p+"Port")||"").trim();
+  var c=el(p+"Create");into.create=!!(c&&c.checked&&!c.disabled);
+  return into;
+}
+/* -- step 1: labs -- */
+function wizStepLabs(){
+  var rows=WIZ.labs.length?WIZ.labs.map(function(l,i){
+    return '<div class="wiz-row"><span class="nm">'+escapeHtml(l.name)+'</span>'+
+      '<span class="meta">'+escapeHtml(l.host||"(no host)")+' · '+l.seats.length+' seats'+
+      (l.map?' · map: '+escapeHtml(l.map):'')+'</span>'+
+      '<button class="x" onclick="wizRemoveLab('+i+')" title="Remove">×</button></div>';
+  }).join(""):'<div class="wiz-empty">No labs yet &mdash; fill the row below and click Add lab.</div>';
+  return '<div>'+rows+'</div>'+
+    '<div class="ls-card" style="margin-top:12px"><h4>Add a lab</h4>'+
+    '<div class="mfield"><label>Name</label><input type="text" id="wlName" placeholder="e.g. Small lab"></div>'+
+    '<div class="mfield"><label>Host / IP</label><input type="text" id="wlHost" placeholder="host or IP the seats connect to"></div>'+
+    '<div class="mfield"><label>Map</label><select id="wlMap">'+wizMapOptions("")+'</select></div>'+
+    '<div class="mfield" style="align-items:start"><label>Seats</label>'+
+      '<textarea id="wlSeats" rows="3" placeholder="one per line, or space / comma separated" style="font-family:var(--mono);font-size:12px"></textarea></div>'+
+    '<div style="text-align:right"><button class="btn" onclick="wizAddLab()">Add lab</button></div>'+
+    '<div class="modal-err" id="wlErr"></div></div>';
+}
+function wizAddLab(){
+  var name=(val("wlName")||"").trim(),host=(val("wlHost")||"").trim();
+  var seats=(val("wlSeats")||"").trim().split(/[\s,]+/).filter(Boolean);
+  var map=val("wlMap")||"";
+  var e=el("wlErr");
+  if(!name){e.style.display="block";e.textContent="Give the lab a name.";return;}
+  if(!seats.length){e.style.display="block";e.textContent="Add at least one seat.";return;}
+  WIZ.labs.push({name:name,host:host,seats:seats,map:map});
+  wizRender();
+}
+function wizRemoveLab(i){WIZ.labs.splice(i,1);wizRender();}
+/* -- step 2: databases -- */
+function wizStepDb(){
+  var extras=WIZ.extras.length?WIZ.extras.map(function(x,i){
+    return '<div class="wiz-row"><span class="nm">'+escapeHtml(x.db_name)+'</span>'+
+      '<span class="meta">'+(x.create?"will be created":"existing")+' · '+escapeHtml(x.db_host)+'</span>'+
+      '<button class="x" onclick="wizRemoveExtra('+i+')">×</button></div>';
+  }).join(""):'';
+  var draft=WIZ.extraOpen?
+    ('<div class="ls-card" style="margin-top:10px;border-style:dashed"><h4 style="font-size:12.5px">New database</h4>'+
+      wizDbControl("ex",WIZ.exDraft)+
+      '<div class="modal-err" id="exErr"></div>'+
+      '<div class="cta"><button class="btn" onclick="wizCancelExtra()">Cancel</button>'+
+      '<button class="btn accent" onclick="wizAddExtra()">Add to list</button></div></div>')
+    :'<button class="btn ghost" style="margin-top:2px" onclick="wizOpenExtra()">+ Add another database</button>';
+  return wizAdminCard()+
+    '<div class="ls-card primary"><h4>Lab default database</h4>'+
+    '<p class="d">The shared database every researcher gets in one click. Connect to an existing Postgres database, or tick below to have the launcher create it.</p>'+
+    wizDbControl("wd",WIZ.db)+'</div>'+
+    '<div class="ls-card"><h4>Additional databases <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
+    '<p class="d">Extra databases for researchers who want their own. Same choice: link an existing one, or create a new one.</p>'+
+    '<div>'+extras+'</div>'+draft+'</div>';
+}
+function wizOpenExtra(){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.exDraft=wizFreshDb();WIZ.extraOpen=true;wizRender();}
+function wizCancelExtra(){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.extraOpen=false;WIZ.exDraft=null;wizRender();}
+function wizAddExtra(){
+  wizReadAdmin();wizReadDb("wd",WIZ.db);
+  var d=wizReadDb("ex",WIZ.exDraft||wizFreshDb());
+  var e=el("exErr");
+  if(!d.db_name){e.style.display="block";e.textContent="Enter a database name.";return;}
+  WIZ.extras.push(d);WIZ.extraOpen=false;WIZ.exDraft=null;wizRender();
+}
+function wizRemoveExtra(i){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.extras.splice(i,1);wizRender();}
+/* -- step 3: review (the oTree admin login is NON-blocking: pre-filled defaults,
+      editable here, never gates the flow) -- */
+function wizStepReview(){
+  var d=WIZ.db,o=WIZ.otree;
+  var labNames=WIZ.labs.map(function(l){return escapeHtml(l.name)+' <span class="mut">('+l.seats.length+')</span>';}).join(", ")||'<span class="mut">none</span>';
+  var dbPill=d.create?'<span class="pill create">will be created</span>':'<span class="pill link">existing</span>';
+  var extra=WIZ.extras.length?WIZ.extras.map(function(x){return escapeHtml(x.db_name)+(x.create?" (new)":"");}).join(", "):'<span class="mut">none</span>';
+  return '<div class="ls-card wiz-review"><h4>Review</h4>'+
+    '<div class="rrow"><div class="rk">Labs</div><div class="rv">'+labNames+'</div></div>'+
+    '<div class="rrow"><div class="rk">Default database</div><div class="rv">'+escapeHtml(d.db_name)+' <span class="mut">@ '+escapeHtml(d.db_host)+'</span> '+dbPill+'</div></div>'+
+    '<div class="rrow"><div class="rk">Additional</div><div class="rv">'+extra+'</div></div>'+
+    '</div>'+
+    '<div class="ls-card"><h4>oTree admin login <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
+    '<p class="d">Pre-filled defaults the launcher configures for the lab. Change them if you like; you can also edit later.</p>'+
+    '<div class="mfield"><label>Username</label><input type="text" id="woU" value="'+escapeHtml(o.username)+'"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="woP" value="'+escapeHtml(o.password)+'">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\'woP\',this)">Show</button></div></div></div>'+
+    '<p class="hint" style="font-size:11.5px;color:var(--faint);margin:6px 0 0">Save lab settings creates any &ldquo;will be created&rdquo; database, writes lab_info.json, then opens the launcher.</p>'+
+    '<div class="modal-err" id="wizSaveErr"></div>';
+}
+/* -- read the visible step's inputs into WIZ before leaving it -- */
+function wizCollect(){
+  if(WIZ.step===1){wizReadAdmin();wizReadDb("wd",WIZ.db);if(WIZ.extraOpen&&el("exName"))wizReadDb("ex",WIZ.exDraft=WIZ.exDraft||wizFreshDb());}
+  else if(WIZ.step===2){if(el("woU"))WIZ.otree.username=(val("woU")||"").trim()||"admin";if(el("woP"))WIZ.otree.password=val("woP")||"";}
+}
+function wizRender(){
+  wizRenderRail();
+  el("wizBody").innerHTML=[wizStepLabs,wizStepDb,wizStepReview][WIZ.step]();
+  el("wizBack").disabled=(WIZ.step===0)||WIZ.busy;
+  el("wizExample").style.visibility=(WIZ.step===0)?"visible":"hidden";
+  el("wizNext").textContent=(WIZ.step===WIZ_STEPS.length-1)?"Save lab settings":"Next →";
+  el("wizNext").disabled=WIZ.busy;
+}
+function wizGo(dir){
+  if(WIZ.busy)return;
+  if(dir>0&&WIZ.step===0&&!WIZ.labs.length){var e=el("wlErr");if(e){e.style.display="block";e.textContent="Add at least one lab first.";}return;}
+  wizCollect();
+  if(dir>0&&WIZ.step===WIZ_STEPS.length-1){wizSave();return;}
+  WIZ.step=Math.max(0,Math.min(WIZ_STEPS.length-1,WIZ.step+dir));
+  wizRender();
+}
+function wizFail(msg){
+  WIZ.busy=false;wizRender();
+  var e=el("wizSaveErr");if(e){e.style.display="block";e.textContent=msg;}
+  el("wizNext").disabled=false;
+}
+/* Provision one database entry through the Api (link = record only; create =
+   actually create, already-exists treated as success by the backend). Returns
+   a promise of the Api result. Preview mode short-circuits to ok. */
+function wizProvision(entry,register){
+  var conn={db_name:entry.db_name,db_user:entry.db_user,db_password:entry.db_password,
+    db_host:entry.db_host,db_port:entry.db_port};
+  if(!NATIVE||!API)return Promise.resolve({ok:true,fields:conn});
+  // create-new uses the ONE shared wizard-level Postgres admin (WIZ.admin).
+  return API.provision_database(conn,!!entry.create,entry.create?WIZ.admin:null,"",!!register);
+}
+function wizSave(){
+  if(!NATIVE||!API){
+    alert("Preview only: in the app this creates the databases and writes lab_info.json.");return;}
+  WIZ.busy=true;el("wizNext").textContent="Saving…";el("wizNext").disabled=true;
+  var e=el("wizSaveErr");if(e)e.style.display="none";
+  // 1) default DB, then 2) each extra (registered), then 3) write lab_info.json.
+  wizProvision(WIZ.db,false).then(function(r){
+    if(!r||!r.ok)return wizFail((r&&r.message)||"Could not set up the default database.");
+    var dbFields=(r.fields)||{db_name:WIZ.db.db_name,db_user:WIZ.db.db_user,db_password:WIZ.db.db_password,db_host:WIZ.db.db_host,db_port:WIZ.db.db_port};
+    var chain=Promise.resolve();
+    WIZ.extras.forEach(function(x){chain=chain.then(function(){
+      return wizProvision(x,true).then(function(rr){if(!rr||!rr.ok)throw new Error((rr&&rr.message)||("Could not set up database “"+x.db_name+"”."));});});});
+    chain.then(function(){
+      var database={db_name:dbFields.db_name,db_user:dbFields.db_user,db_password:dbFields.db_password,db_host:dbFields.db_host,db_port:dbFields.db_port};
+      var admin={username:WIZ.otree.username||"admin",password:WIZ.otree.password||""};
+      return API.create_lab_info(WIZ.labs,database,admin).then(function(res){
+        if(res&&res.ok&&res.state){closeSetupWizard();initNative(res.state);
+          window.pywStatus("ok","Lab settings saved.");}
+        else wizFail((res&&res.message)||"Could not write lab_info.json.");});
+    }).catch(function(err){wizFail(String(err&&err.message||err));});
+  });
+}
+
+/* ======================================================================
    BOOTSTRAP: native vs static preview
    ====================================================================== */
 function initNative(state){
@@ -2044,7 +2363,8 @@ function initNative(state){
   if(state.pg_admin)PG_ADMIN=state.pg_admin;
   DATABASES=state.databases||[];RESEARCHERS=state.researchers||[];
   if(state.default_database)defaultDatabase=state.default_database;
-  if(!haveLab){el("labNotice").hidden=false;el("labBody").hidden=true;}
+  if(!haveLab){el("labBody").hidden=true;openSetupWizard(state.maps||[]);}
+  else{el("labBody").hidden=false;el("labNotice").hidden=true;}
   renderConfigList(state.configs,state.selected);currentConfigName=state.selected;
   applyFields(state.fields);applyProject(state.project);applySettings(state.settings);
   appendLog("muted","oTree Lab Launcher ready. Config file: "+state.presets_path);

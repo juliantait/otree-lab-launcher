@@ -312,9 +312,12 @@ class Api(object):
             "fields": fields,
             "project": project_status(fields.get("project_path", "")),
             "settings": core.inspect_settings(fields.get("project_path", "")),
-            # False on first run (lab_info.json absent) → the UI shows a setup
-            # notice instead of an empty lab selector / seat map.
+            # False on first run (lab_info.json absent) → the UI shows the
+            # first-run setup WIZARD instead of an empty lab selector / seat map.
             "lab_info_present": core.lab_info_present(),
+            # The map names the setup wizard offers for a lab to reference
+            # (same source the Tk FirstRunWizard uses). "" = plain grid.
+            "maps": core.available_maps(),
             "labs": labs,
             # Save As prefill, and this machine's lab identity ("" when unset,
             # which triggers the one-time first-launch chooser in the UI).
@@ -613,6 +616,123 @@ class Api(object):
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "pg_admin": core.pg_admin_from_store(self.store_extra)}
 
+    # -- first-run setup wizard -------------------------------------------
+
+    def _register_conn(self, fields, researcher, result):
+        """Append a provisioned database to the global registry + roster, in
+        place, and attach the refreshed lists to ``result``. A registry error
+        must never lose the database, so it is reported, not raised."""
+        try:
+            entry = core.register_database(
+                self.store_extra, title=fields.get("db_name", ""),
+                researcher=researcher, connection=fields,
+                postgres_user=fields.get("db_user", ""))
+            core.save_store(self.presets, self.store_extra, self.store_path)
+            result["registered"] = entry
+            result["databases"] = core.known_databases_from_store(self.store_extra)
+            result["researchers"] = core.list_researchers(self.store_extra, self.presets)
+        except Exception as error:   # registration must never lose the DB
+            result["register_error"] = str(error)
+
+    @api_call
+    def provision_database(self, connection, create_new=False, admin=None,
+                           researcher="", register=False):
+        """The setup wizard's two-fold database control (also reusable by the
+        Lab Settings add-database flow). All Postgres work stays in core.
+
+        ``create_new`` False = LINK an existing database: the connection details
+        are recorded and Postgres is never touched. ``create_new`` True = CREATE
+        it: the admin credentials are saved (``save_pg_admin``, so later creates
+        work) and ``core.create_database`` runs. An already-existing database of
+        that name is treated as SUCCESS and used (not a hard error). A real
+        failure returns the create's own message so the UI can show the reason.
+        With ``register`` the confirmed database is added to the global registry
+        (used for the optional extra databases; the lab default is instead
+        recorded in lab_info.json by ``create_lab_info``).
+        """
+        conn = connection or {}
+        fields = {
+            "db_mode": core.DB_MODE_CUSTOM,
+            "db_name": str(conn.get("db_name", "") or "").strip(),
+            "db_user": str(conn.get("db_user", "") or "").strip(),
+            "db_password": str(conn.get("db_password", "") or ""),
+            "db_host": str(conn.get("db_host", "") or "localhost").strip() or "localhost",
+            "db_port": str(conn.get("db_port", "") or "5432").strip() or "5432",
+        }
+        if not fields["db_name"]:
+            return {"ok": False, "message": "Enter a database name."}
+
+        if not create_new:
+            result = {"ok": True, "created": False, "existed": None,
+                      "fields": fields,
+                      "message": "Using the existing database %r." % fields["db_name"]}
+            if register:
+                self._register_conn(fields, researcher, result)
+            return result
+
+        # Create-new: persist the admin creds, then create the database.
+        saved = self.save_pg_admin(admin or {})
+        if not saved.get("ok"):
+            return saved
+        admin_cfg = core.pg_admin_from_store(self.store_extra)
+        res = core.create_database(admin_cfg, fields["db_name"],
+                                   fields["db_user"], fields["db_password"])
+        if res.get("ok"):
+            result = {"ok": True, "created": True, "existed": False,
+                      "fields": res.get("fields") or fields,
+                      "message": res.get("message", "") or "Database created."}
+            if register:
+                self._register_conn(result["fields"], researcher, result)
+            return result
+        if res.get("reason") == "db_exists":
+            # Already present: treat as success and use the details as entered.
+            result = {"ok": True, "created": False, "existed": True,
+                      "fields": fields,
+                      "message": "Database %r already exists; using it." % fields["db_name"]}
+            if register:
+                self._register_conn(fields, researcher, result)
+            return result
+        # A real failure (bad admin creds / unreachable / privilege): surface it.
+        return {"ok": False, "created": False, "reason": res.get("reason", ""),
+                "message": res.get("message") or "Could not create the database."}
+
+    @api_call
+    def create_lab_info(self, labs, database, admin):
+        """Write lab_info.json from the setup wizard, then reload so the app
+        picks up the labs/credentials without a restart (web parity with the Tk
+        FirstRunWizard's ``_create``). Thin wrapper: all shaping is
+        ``core.build_lab_info``; all file IO + reload is core. Returns ``ok``
+        plus a fresh initial state so the JS can re-render straight into the
+        normal lab-present UI and drop the wizard.
+        """
+        try:
+            data = core.build_lab_info(labs or [], database or {}, admin or {})
+            core.save_lab_info(data)
+            core.reload_lab_info()
+        except Exception as error:
+            LOG.exception("create_lab_info failed")
+            return {"ok": False,
+                    "message": "Could not save lab settings: %s" % error}
+        return {"ok": True, "state": self.get_initial_state()}
+
+    @api_call
+    def use_example_lab_info(self):
+        """Convenience mirror of the Tk wizard's "Use example values": write the
+        shipped lab_info.example.json as lab_info.json and reload. Thin wrapper
+        over ``core.load_example_lab_info`` + save + reload."""
+        example = core.load_example_lab_info()
+        if not example:
+            return {"ok": False,
+                    "message": "Could not read lab_info.example.json."}
+        example.pop("_comment", None)
+        try:
+            core.save_lab_info(example)
+            core.reload_lab_info()
+        except Exception as error:
+            LOG.exception("use_example_lab_info failed")
+            return {"ok": False, "message": "Could not save: %s" % error}
+        return {"ok": True, "state": self.get_initial_state()}
+
     @api_call
     def set_lab_display(self, lab_id, display):
         """Show/hide a lab in the main selector from the Lab Settings table."""
@@ -771,7 +891,7 @@ class Api(object):
         try:
             result = self.window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=default_name,
-                file_types=("One-click shortcut (*%s)" % ext, "All files (*.*)"))
+                file_types=("One click shortcut (*%s)" % ext, "All files (*.*)"))
         except Exception:
             LOG.exception("save dialog failed")
             self._callback("pywOnBatResult",
@@ -788,6 +908,15 @@ class Api(object):
             self._callback("pywOnBatResult",
                            {"ok": False, "message": "Could not write %s: %s" % (path, error)})
             return
+        # A macOS/Unix shell shortcut (.command/.sh, or a shebang script) must be
+        # executable or the OS refuses to run it ("no appropriate access
+        # privileges"). Windows .vbs/.bat/.txt need no exec bit -- leave them.
+        lower = path.lower()
+        if lower.endswith(".command") or lower.endswith(".sh") or text.startswith("#!"):
+            try:
+                os.chmod(path, os.stat(path).st_mode | 0o111)
+            except OSError:
+                LOG.exception("could not set executable bit on %s", path)
         self._callback("pywOnBatResult", {"ok": True, "path": path})
 
     # -- the launch --------------------------------------------------------

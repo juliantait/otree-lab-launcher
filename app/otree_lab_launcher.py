@@ -3995,6 +3995,15 @@ class LauncherApp(object):
             messagebox.showerror("Could not save shortcut", str(error), parent=self.root)
             self.log("Saving the shortcut failed: %s" % error, "err")
             return
+        # A macOS/Unix shell shortcut (.command/.sh, or a shebang script) must be
+        # executable or the OS refuses to run it. Windows .vbs/.bat need no exec bit.
+        target_lower = target.lower()
+        if (target_lower.endswith(".command") or target_lower.endswith(".sh")
+                or shortcut["content"].startswith("#!")):
+            try:
+                os.chmod(target, os.stat(target).st_mode | 0o111)
+            except OSError as error:
+                self.log("Could not mark the shortcut executable: %s" % error, "warn")
         self.log("Saved one-click shortcut: %s" % target, "ok")
         self.log('Double-click it to launch the saved config "%s". The database '
                  "password is not stored in the file." % name, "muted")
@@ -7510,9 +7519,15 @@ def headless_run(config_name, store_path=None):
     use_auto = cfg.get("auto_login", True)
     if cfg["open_browser"]:
         _hlog("Waiting for the server to respond, then opening the dashboard.")
+        # block_relay=True: this headless process exits the instant we return, so
+        # wait for the one-shot cookie relay to actually serve the browser (bounded
+        # by its idle_timeout) before exiting -- otherwise the daemon relay thread
+        # dies before the browser connects and Safari shows "cannot connect to
+        # localhost:<port>". The GUI/web paths leave block_relay at its default.
         result = core.open_dashboard_authenticated(
             core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
-            cfg["admin_username"], cfg["admin_password"], auto_login=use_auto)
+            cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
+            block_relay=True)
         if result.get("method") == "cookie":
             _hlog("Opened the dashboard already logged in (auto-login: form-login + "
                   "cookie relay): %s" % result.get("monitor_url"))

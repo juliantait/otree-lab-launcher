@@ -2596,7 +2596,7 @@ def otree_form_login(host, port, username, password, timeout=4.0,
 
 def start_cookie_relay(cookie_value, monitor_url, host=AUTOLOGIN_HOST,
                        idle_timeout=30.0):
-    """Start a one-shot localhost cookie-relay responder; return its URL.
+    """Start a one-shot localhost cookie-relay responder.
 
     The first GET it receives is answered with ``302 Location: monitor_url`` plus
     ``Set-Cookie: session=<cookie_value>; Path=/; SameSite=Lax``, planting the
@@ -2604,7 +2604,14 @@ def start_cookie_relay(cookie_value, monitor_url, host=AUTOLOGIN_HOST,
     it then rides to the monitor's server) and immediately shutting the responder
     down. If the browser never arrives it self-destructs after ``idle_timeout``
     seconds so nothing lingers. Bound to the 127.0.0.1 loopback only, on a free
-    OS-chosen port, in a background daemon thread. Returns the relay URL to open.
+    OS-chosen port, in a background daemon thread.
+
+    Returns ``(relay_url, server, serve_thread)``. Most callers only need
+    ``relay_url``; a caller that must not let the process exit before the browser
+    has been served (the headless one-click shortcut) can join ``serve_thread`` --
+    it ends when the relay has answered its one request, or, at the latest, when
+    the ``idle_timeout`` safety net shuts the server down -- so the wait is always
+    bounded and can never hang forever.
     """
     import http.server
 
@@ -2625,12 +2632,15 @@ def start_cookie_relay(cookie_value, monitor_url, host=AUTOLOGIN_HOST,
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _Relay)
     port = server.server_address[1]
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    # Safety net: tear the responder down if the browser never hits it.
+    serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serve_thread.start()
+    # Safety net: tear the responder down if the browser never hits it. This also
+    # bounds any join() on serve_thread, so a blocking caller can never hang.
     timer = threading.Timer(idle_timeout, server.shutdown)
     timer.daemon = True
     timer.start()
-    return "http://%s:%s/" % (host, port)
+    relay_url = "http://%s:%s/" % (host, port)
+    return relay_url, server, serve_thread
 
 
 def wait_for_server(host, port, timeout=8.0, interval=0.25):
@@ -2671,7 +2681,8 @@ def wait_for_server(host, port, timeout=8.0, interval=0.25):
 def open_dashboard_authenticated(host, port, room, username, password,
                                  auto_login=True, open_url=None,
                                  login=None, start_relay=None,
-                                 wait=None, ready_timeout=8.0):
+                                 wait=None, ready_timeout=8.0,
+                                 block_relay=False):
     """The single dashboard-open entry point both launchers call.
 
     Opens the admin room monitor for ``room`` in the SYSTEM DEFAULT BROWSER. When
@@ -2698,6 +2709,15 @@ def open_dashboard_authenticated(host, port, room, username, password,
     are injection points for tests; by default they are the real
     browser/login/relay and ``wait_for_server``. ``ready_timeout`` caps the
     readiness poll. Never raises.
+
+    ``block_relay`` (default ``False`` -- the GUI/web behaviour is byte-for-byte
+    unchanged) is for the headless one-click shortcut, whose process exits the
+    instant this returns. When ``True`` and the cookie-relay path is taken, after
+    opening the browser this waits for the relay to actually serve the browser's
+    request (by joining the relay's serve thread) before returning, so the process
+    stays alive long enough for the 302 + Set-Cookie to happen. The wait is
+    bounded by the relay's ``idle_timeout`` safety net, so it can never hang -- if
+    the browser never arrives the relay self-destructs and this returns anyway.
 
     Before doing anything else it polls the server for readiness (``wait``, the
     real :func:`wait_for_server`) so the dashboard opens the instant the server
@@ -2737,13 +2757,30 @@ def open_dashboard_authenticated(host, port, room, username, password,
             cookie = None
         if cookie:
             try:
-                relay_url = start_relay(cookie, monitor_url, host=host)
+                relay = start_relay(cookie, monitor_url, host=host)
             except Exception as error:
                 result["reason"] = ("auto-login worked but the cookie relay "
                                     "could not start (%s); opened the login page"
                                     % type(error).__name__)
             else:
+                # start_cookie_relay now returns (url, server, serve_thread);
+                # tolerate an old-style bare-URL return from an injected double.
+                serve_thread = None
+                if isinstance(relay, (tuple, list)):
+                    relay_url = relay[0]
+                    if len(relay) >= 3:
+                        serve_thread = relay[2]
+                else:
+                    relay_url = relay
                 if _open(relay_url):
+                    if block_relay and serve_thread is not None:
+                        # Keep the process alive until the relay has served the
+                        # browser (or its idle_timeout self-destruct fires). The
+                        # relay's safety-net timer bounds this join, so no hang.
+                        try:
+                            serve_thread.join()
+                        except Exception:
+                            pass
                     result.update(ok=True, method="cookie", opened_url=relay_url,
                                   reason="logged in automatically (form-login + "
                                          "cookie relay)")
