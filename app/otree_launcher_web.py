@@ -707,6 +707,13 @@ class Api(object):
         plus a fresh initial state so the JS can re-render straight into the
         normal lab-present UI and drop the wizard.
         """
+        # Gate on the SAME shared validator the Lab Settings "Add lab" path uses,
+        # so a lab with an empty Host/IP (or no/invalid seats) can never be saved
+        # here -- it would render <host> in the participant links and then hide
+        # this wizard on every future start.
+        ok, message = core.validate_wizard_labs(labs or [])
+        if not ok:
+            return {"ok": False, "message": message}
         try:
             data = core.build_lab_info(labs or [], database or {}, admin or {})
             core.save_lab_info(data)
@@ -1204,7 +1211,7 @@ class Api(object):
                 startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
                 popen_kwargs["startupinfo"] = startup
-            subprocess.Popen(launch["cmd"], **popen_kwargs)
+            server_proc = subprocess.Popen(launch["cmd"], **popen_kwargs)
             self._log("ok", "otree prodserver started in its OWN terminal window (in the "
                             "background). Watch that window for live server logs and any errors.")
 
@@ -1218,14 +1225,15 @@ class Api(object):
             # machine); the per-seat participant links keep the lab host. Mirror of
             # the Tk otree_lab_launcher launch.
             self._remember_launch(cfg)
-            result = {"ok": True, "method": "manual",
-                      "monitor_url": "http://%s:%s%s" % (
-                          core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
-                          core.room_monitor_path(cfg.get("room_name", "")))}
+            monitor_url = "http://%s:%s%s" % (
+                core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
+                core.room_monitor_path(cfg.get("room_name", "")))
+            result = {"ok": True, "method": "manual", "monitor_url": monitor_url,
+                      "server_ready": False}
             if cfg.get("open_browser"):
                 # Open the dashboard the instant the server responds. The readiness
                 # poll lives in core.open_dashboard_authenticated (wait_for_server),
-                # so there is no blind fixed pre-open delay any more.
+                # which now RETURNS whether the server actually came up.
                 self._log("muted", "Waiting for the server to respond, then opening the dashboard …")
                 result = core.open_dashboard_authenticated(
                     core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
@@ -1238,13 +1246,33 @@ class Api(object):
                     self._log("info", "Opened the oTree dashboard login page. %s Log in with "
                                       "the admin username and password shown here."
                                       % result["reason"])
+            else:
+                # No browser open: still confirm the server really came up before
+                # reporting success, so a crash is not mis-reported as "Launched".
+                self._log("muted", "Open in browser is off. Confirming the server is up …")
+                result["server_ready"] = core.wait_for_server(
+                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"))
+
+            if not result.get("server_ready"):
+                # A startup crash / missing project / port race: prodserver did not
+                # answer. Do NOT stamp last_run or claim "Launched" -- the real
+                # traceback is in the server terminal window.
+                msg = self._startup_failure_message(server_proc)
+                self._status("err", msg)
+                self._log("err", msg)
+                # Fail-soft: a page may already be open (manual fallback), so keep
+                # the url so the operator can retry, but report the honest failure.
+                self._launch_result(False, msg, url=result.get("monitor_url", monitor_url),
+                                    method=result.get("method", "manual"))
+                return
 
             self._mark_run(cfg)
             self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
                                "server runs in its own window; watch there for live logs. You "
                                "can close this launcher.")
-            # Only a real success reaches here: tell the handoff banner, with the
-            # method so it reports honestly (already logged in vs at the login page).
+            # Only a real, server-ready success reaches here: tell the handoff
+            # banner, with the method so it reports honestly (already logged in vs
+            # at the login page).
             self._launch_result(True, "", url=result["monitor_url"],
                                 method=result["method"])
         except Exception:
@@ -1297,6 +1325,26 @@ class Api(object):
                 self._log("out", line)
         proc.stdout.close()
         return proc.wait()
+
+    def _startup_failure_message(self, server_proc=None):
+        """The message shown when prodserver never became ready.
+
+        Points the operator to the server terminal window (which holds the real
+        traceback) and, when the child has already exited (easy to see on the
+        Linux background path), surfaces its exit code.
+        """
+        base = ("The oTree server did not become ready — it may have crashed on "
+                "startup (a missing project, a database error, or the port already "
+                "in use). Nothing was marked as launched. Check the server terminal "
+                "window for the real error.")
+        try:
+            if server_proc is not None:
+                code = server_proc.poll()
+                if code is not None:
+                    base += " (The server process already exited with code %s.)" % code
+        except Exception:
+            pass
+        return base
 
     def _mark_run(self, cfg):
         """Stamp the matching saved config as run just now, if one matches."""

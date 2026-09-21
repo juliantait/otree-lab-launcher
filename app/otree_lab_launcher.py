@@ -4538,8 +4538,6 @@ class LauncherApp(object):
         if not self._start_server(cfg, path, env):
             return False, "The oTree server could not be started. See the activity log above."
 
-        self._stamp_last_run(cfg)
-
         # Auto login (default ON, the "Auto login" tick on the oTree admin row):
         # open the admin room monitor already authenticated via a REAL form-login
         # + one-shot localhost cookie relay (core.open_dashboard_authenticated).
@@ -4551,7 +4549,8 @@ class LauncherApp(object):
         # fallback. Always opened on localhost (the operator's own machine); the
         # per-seat participant links keep the configured lab host, unchanged.
         use_auto = cfg.get("auto_login", True)
-        result = None
+        monitor_url = "http://%s:%s%s" % (
+            core.AUTOLOGIN_HOST, cfg["port"], core.room_monitor_path(cfg["room_name"]))
         if cfg["open_browser"]:
             self.log("Waiting for the server to respond, then opening the dashboard.", "info")
             result = core.open_dashboard_authenticated(
@@ -4565,11 +4564,26 @@ class LauncherApp(object):
                 self.log("    %s. Log in with the admin username and password shown in the popup."
                          % result["reason"], "muted", prefix=False)
         else:
-            monitor_url = "http://%s:%s%s" % (
-                core.AUTOLOGIN_HOST, cfg["port"], core.room_monitor_path(cfg["room_name"]))
-            self.log("Open in browser is off. The page would be %s" % monitor_url, "muted")
-            result = {"ok": True, "method": "manual", "monitor_url": monitor_url}
+            # No browser open: still confirm the server really came up before
+            # reporting success, so a crash is not mis-reported as "Launched".
+            self.log("Open in browser is off. Confirming the server is up. The page would be %s"
+                     % monitor_url, "muted")
+            ready = core.wait_for_server(core.AUTOLOGIN_HOST, cfg["port"])
+            result = {"ok": True, "method": "manual", "monitor_url": monitor_url,
+                      "server_ready": ready}
 
+        if not result.get("server_ready"):
+            # A startup crash / missing project / port race: prodserver never
+            # answered. Do NOT stamp last_run or claim success -- the real
+            # traceback is in the server terminal window. Fail-soft: a page may
+            # already be open (manual fallback), so the operator can still retry.
+            msg = self._startup_failure_message()
+            self.log(msg, "err")
+            self._on_main(lambda: self.inline_status.set("error", msg))
+            return False, msg
+
+        # Only a real, server-ready success stamps the run and claims "Launched".
+        self._stamp_last_run(cfg)
         self._on_main(lambda: self.inline_status.set(
             "ok", "Server started. Its window stays open; press Ctrl-C there to stop it."))
         self.log("Done. The server keeps running in its own window.", "ok")
@@ -4578,6 +4592,26 @@ class LauncherApp(object):
         # reports HONESTLY whether the dashboard opened logged in (cookie) or at
         # the login page (manual), via _deliver_launch_result.
         return True, result
+
+    def _startup_failure_message(self):
+        """The message shown when prodserver never became ready.
+
+        Points the operator to the server terminal window (the real traceback is
+        there) and, when the linux-background child has already exited, surfaces
+        its exit code."""
+        base = ("The oTree server did not become ready — it may have crashed on "
+                "startup (a missing project, a database error, or the port already "
+                "in use). Nothing was marked as launched. Check the server terminal "
+                "window for the real error.")
+        proc = getattr(self, "_server_proc", None)
+        try:
+            if proc is not None:
+                code = proc.poll()
+                if code is not None:
+                    base += " (The server process already exited with code %s.)" % code
+        except Exception:
+            pass
+        return base
 
     def _run_resetdb(self, path, env):
         command = resetdb_command()
@@ -4615,11 +4649,16 @@ class LauncherApp(object):
         kwargs = {"cwd": path, "env": env}
         if spec["creationflags"]:
             kwargs["creationflags"] = spec["creationflags"]
+        # Remember the child on the linux-background path so a launch that fails
+        # its readiness poll can surface an early child exit (elsewhere the server
+        # runs detached in its own terminal, so there is no handle to poll).
+        self._server_proc = None
         try:
             if spec["kind"] == "linux-background":
                 process = subprocess.Popen(
                     spec["cmd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     universal_newlines=True, bufsize=1, **kwargs)
+                self._server_proc = process
                 threading.Thread(target=self._pipe_to_log, args=(process,), daemon=True).start()
             else:
                 subprocess.Popen(spec["cmd"], **kwargs)
@@ -7201,11 +7240,12 @@ class FirstRunWizard(object):
         name = self.w_name.get().strip()
         host = self.w_host.get().strip()
         seats = self._parse_seats()
-        if not name:
-            self.status.configure(text="Give the lab a name.")
-            return
-        if not seats:
-            self.status.configure(text="Add at least one seat for the lab.")
+        # Reuse the SAME shared core validator the Lab Settings "Add lab" path
+        # uses (name + non-empty Host/IP + valid, non-duplicate seats), so the
+        # first-run wizard can no longer accept a lab with an empty host.
+        ok, message, seats = core.validate_lab_preset_fields(name, host, seats)
+        if not ok:
+            self.status.configure(text=message)
             return
         map_choice = self.w_map.get()
         map_name = "" if map_choice == "(plain grid)" else map_choice
@@ -7241,6 +7281,12 @@ class FirstRunWizard(object):
     def _create(self):
         if not self.labs:
             self.status.configure(text="Add at least one lab first (fill the row, then Add lab).")
+            return
+        # Backstop with the same shared validator (so an empty-host lab can never
+        # be written even if one slipped past the per-row Add check).
+        ok, message = core.validate_wizard_labs(self.labs)
+        if not ok:
+            self.status.configure(text=message)
             return
         database = {k: v.get() for k, v in self.db_vars.items()}
         admin = {"username": self.admin_user.get(), "password": self.admin_pw.get()}
@@ -7415,13 +7461,16 @@ def _headless_resetdb(path, env):
 
 def _headless_start_server(cfg, path, env):
     """Start ``otree prodserver`` in its own terminal, exactly as the GUI does
-    (via build_server_launch). Returns True on success."""
+    (via build_server_launch). Returns ``(ok, process)``: ``ok`` is True on a
+    successful spawn; ``process`` is the linux-background child (so the caller can
+    surface an early exit) or None on the terminal paths / on failure."""
     spec = build_server_launch(cfg, path, env)
     _hlog("Starting the server in a %s." % spec["description"])
     _hlog("$ " + " ".join(spec["cmd"][:2]) + (" ..." if len(spec["cmd"]) > 2 else ""))
     kwargs = {"cwd": path, "env": env}
     if spec["creationflags"]:
         kwargs["creationflags"] = spec["creationflags"]
+    process = None
     try:
         if spec["kind"] == "linux-background":
             process = subprocess.Popen(
@@ -7434,9 +7483,27 @@ def _headless_start_server(cfg, path, env):
             subprocess.Popen(spec["cmd"], **kwargs)
     except OSError as error:
         _hlog("Could not start otree prodserver: %s" % error)
-        return False
+        return False, None
     _hlog("otree prodserver started.")
-    return True
+    return True, process
+
+
+def _headless_startup_failure_message(process=None):
+    """Message logged when a headless prodserver never became ready: point at the
+    server terminal window (real traceback) and surface an early child exit when
+    the linux-background handle shows one."""
+    base = ("ERROR: the oTree server did not become ready — it may have crashed on "
+            "startup (a missing project, a database error, or the port already in "
+            "use). Nothing was marked as launched. Check the server terminal window "
+            "for the real error.")
+    try:
+        if process is not None:
+            code = process.poll()
+            if code is not None:
+                base += " (The server process already exited with code %s.)" % code
+    except Exception:
+        pass
+    return base
 
 
 def headless_run(config_name, store_path=None):
@@ -7515,18 +7582,13 @@ def headless_run(config_name, store_path=None):
         _hlog("Reset database is off, so otree resetdb was skipped.")
 
     # 4. Start the server in its own terminal window (the wanted Launch terminal).
-    if not _headless_start_server(cfg, path, env):
+    ok, server_proc = _headless_start_server(cfg, path, env)
+    if not ok:
         return 6
 
-    # Record the run on the saved config, exactly like the GUI's _stamp_last_run.
-    try:
-        match["last_run"] = core.now_iso()
-        save_store(presets, store_extra, store_path)
-    except OSError:
-        pass
-
     # 5. Open the admin dashboard already authenticated (auto-login on by default,
-    #    the GUI default), via the SAME core entry point the GUI uses.
+    #    the GUI default), via the SAME core entry point the GUI uses. The open
+    #    also polls readiness and now RETURNS whether the server actually came up.
     use_auto = cfg.get("auto_login", True)
     if cfg["open_browser"]:
         _hlog("Waiting for the server to respond, then opening the dashboard.")
@@ -7539,6 +7601,7 @@ def headless_run(config_name, store_path=None):
             core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
             cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
             block_relay=True)
+        server_ready = bool(result.get("server_ready"))
         if result.get("method") == "cookie":
             _hlog("Opened the dashboard already logged in (auto-login: form-login + "
                   "cookie relay): %s" % result.get("monitor_url"))
@@ -7548,7 +7611,25 @@ def headless_run(config_name, store_path=None):
     else:
         monitor_url = "http://%s:%s%s" % (
             core.AUTOLOGIN_HOST, cfg["port"], core.room_monitor_path(cfg["room_name"]))
-        _hlog("Open in browser is off. The monitor page would be %s" % monitor_url)
+        _hlog("Open in browser is off. Confirming the server is up. The monitor page "
+              "would be %s" % monitor_url)
+        server_ready = core.wait_for_server(core.AUTOLOGIN_HOST, cfg["port"])
+
+    if not server_ready:
+        # A startup crash / missing project / port race: prodserver never
+        # answered. Do NOT stamp last_run; report the honest failure and a non-zero
+        # exit so a broken one-click shortcut is obvious. Fail-soft: a page may
+        # already be open (manual fallback), so the operator can still retry.
+        _hlog(_headless_startup_failure_message(server_proc))
+        return 7
+
+    # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
+    # but ONLY now that the server is confirmed ready.
+    try:
+        match["last_run"] = core.now_iso()
+        save_store(presets, store_extra, store_path)
+    except OSError:
+        pass
 
     _hlog("Done. The server keeps running in its own window.")
     return 0

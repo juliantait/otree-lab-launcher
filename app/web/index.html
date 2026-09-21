@@ -2309,6 +2309,7 @@ function wizAddLab(){
   var map=val("wlMap")||"";
   var e=el("wlErr");
   if(!name){e.style.display="block";e.textContent="Give the lab a name.";return;}
+  if(!host){e.style.display="block";e.textContent="Enter the lab's IP address or host name.";return;}
   if(!seats.length){e.style.display="block";e.textContent="Add at least one seat.";return;}
   WIZ.labs.push({name:name,host:host,seats:seats,map:map});
   wizRender();

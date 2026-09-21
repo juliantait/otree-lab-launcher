@@ -165,22 +165,71 @@ def available_maps():
     return sorted(names)
 
 
+def validate_wizard_labs(labs):
+    """Validate a wizard's list of labs with the SAME rule the Lab Settings path
+    uses (:func:`validate_lab_preset_fields`): each lab needs a name, a non-empty
+    Host/IP and at least one valid, non-duplicate seat label; and no two labs may
+    resolve to the same id. Returns ``(ok, message)``.
+
+    Both wizard faces (the Tk FirstRunWizard and the web setup wizard) call this
+    before writing lab_info.json, so the first-run path can no longer save a lab
+    with an EMPTY host -- which used to render ``<host>`` in the participant links
+    and then hide the wizard on every future start. There is deliberately ONE
+    validator (this delegates to ``validate_lab_preset_fields``); the wizards do
+    not invent their own.
+    """
+    labs = labs or []
+    if not labs:
+        return False, "Add at least one lab first."
+    seen = set()
+    for raw in labs:
+        name = str(raw.get("name") or "")
+        host = str(raw.get("host") or "")
+        seats = raw.get("seats") or []
+        ok, message, _ = validate_lab_preset_fields(name, host, seats)
+        if not ok:
+            label = name.strip() or "(unnamed lab)"
+            return False, "%s: %s" % (label, message)
+        lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(name)
+        if lab_id in seen:
+            return False, ("Two labs resolve to the same id (%s). Give them "
+                           "distinct names." % lab_id)
+        seen.add(lab_id)
+    return True, ""
+
+
 def build_lab_info(labs, database, admin, default_lab=None):
     """Assemble a lab_info dict from wizard inputs.
 
     ``labs`` is a list of {"id"?, "name", "host", "seats": [...], "map": <name or "">}.
     A blank id is slugified from the name. ``database`` and ``admin`` are dicts.
+
+    Each lab is checked with the shared :func:`validate_lab_preset_fields` rule
+    (the same one the Lab Settings path uses); a lab that fails it -- an empty
+    Host/IP, no/invalid seats, or a duplicate id -- is SKIPPED rather than written
+    as a broken default. Callers should gate the save on
+    :func:`validate_wizard_labs` so a rejection is a clear error, not a silent
+    drop, but this is the backstop that keeps a broken lab out of the file.
     """
     out_labs = {}
     first_id = None
     for raw in labs:
-        lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(raw.get("name", ""))
-        if not lab_id:
+        name = str(raw.get("name") or "")
+        host = str(raw.get("host") or "")
+        seats = raw.get("seats") or []
+        ok, _message, parsed = validate_lab_preset_fields(name, host, seats)
+        if not ok:
+            # Skip invalid labs (empty host / bad or missing seats): never write a
+            # broken default. The wizard front-ends validate first, so a valid run
+            # never reaches this branch.
+            continue
+        lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(name)
+        if not lab_id or lab_id in out_labs:
             continue
         entry = {
-            "name": str(raw.get("name") or lab_id),
-            "host": str(raw.get("host") or ""),
-            "seats": [str(s) for s in (raw.get("seats") or [])],
+            "name": name.strip() or lab_id,
+            "host": host.strip(),
+            "seats": [str(s) for s in parsed],
         }
         if str(raw.get("map") or "").strip():
             entry["map"] = str(raw["map"]).strip()
@@ -2527,12 +2576,21 @@ def open_dashboard(url):
 # ---------------------------------------------------------------------------
 
 # The oTree session cookie is host-scoped (no Domain) and not isolated by port,
-# so a cookie set from localhost:<relay port> is sent to localhost:<server port>.
+# so a cookie set from 127.0.0.1:<relay port> is sent to 127.0.0.1:<server port>.
 # Pick ONE host string and use it for the form-login target, the Set-Cookie host
 # (the relay URL the browser opens) and the redirect target, so the cookie scope
-# lines up. The auto-open is on the operator's OWN machine, so localhost is right;
-# the participant per-seat links keep the configured lab host, unchanged.
-AUTOLOGIN_HOST = LOCAL_HOST  # "localhost"
+# lines up. The auto-open is on the operator's OWN machine, so a loopback host is
+# right; the participant per-seat links keep the configured lab host, unchanged.
+#
+# It is the LITERAL IPv4 loopback 127.0.0.1, NOT the name "localhost", on purpose:
+# the one-shot cookie relay binds 127.0.0.1 only (IPv4), but on many hosts/browsers
+# "localhost" resolves to the IPv6 ::1 first, so a browser sent to
+# http://localhost:<relay port>/ would try ::1, find nothing listening, and report
+# "cannot connect to localhost:<port>" -- the intermittent auto-login failure. Using
+# 127.0.0.1 for BOTH the relay URL AND the monitor URL keeps the browser on the same
+# family the relay listens on, and (same host) the planted session cookie still rides
+# from the relay to the monitor. See _ai/web_wizard_build.md (Pass 2, Job 2).
+AUTOLOGIN_HOST = "127.0.0.1"
 
 _LOGIN_PATH = "/login"
 _DEMO_PATH = "/demo"
@@ -2700,9 +2758,10 @@ def open_dashboard_authenticated(host, port, room, username, password,
     auto-login is off, or the login fails for any reason, it opens the plain
     monitor URL and the operator logs in once (``method == "manual"``).
 
-    The monitor host is always localhost (``AUTOLOGIN_HOST``): the auto-open is on
-    the operator's own machine. The participant per-seat links keep the configured
-    lab host and are unchanged by this function.
+    The monitor host is always the loopback (``AUTOLOGIN_HOST`` = 127.0.0.1): the
+    auto-open is on the operator's own machine, and the relay binds the same IPv4
+    loopback so the cookie rides. The participant per-seat links keep the
+    configured lab host and are unchanged by this function.
 
     Returns a dict::
 
@@ -2710,10 +2769,16 @@ def open_dashboard_authenticated(host, port, room, username, password,
          "method": "cookie"|"manual",
          "reason": str,         # plain-language what-happened, for the log/popup
          "monitor_url": str,    # the plain monitor URL (manual login lands here)
-         "opened_url": str}     # the URL actually handed to the browser
+         "opened_url": str,     # the URL actually handed to the browser
+         "server_ready": bool}  # the server answered the readiness poll
 
     ``ok`` is True whenever a page opened, because the manual fallback still lets
-    the operator finish by hand. ``open_url``/``login``/``start_relay``/``wait``
+    the operator finish by hand. ``server_ready`` is the ACTUAL readiness result
+    (from ``wait``/:func:`wait_for_server`): it is ``True`` only when the server
+    answered within ``ready_timeout``. Callers must gate "Launched" success and
+    the ``last_run`` stamp on ``server_ready`` -- a page can open (``ok`` True)
+    onto a server that never came up (``server_ready`` False), which means the
+    launch really failed and the terminal window holds the traceback. ``open_url``/``login``/``start_relay``/``wait``
     are injection points for tests; by default they are the real
     browser/login/relay and ``wait_for_server``. ``ready_timeout`` caps the
     readiness poll. Never raises.
@@ -2739,15 +2804,20 @@ def open_dashboard_authenticated(host, port, room, username, password,
     wait = wait or wait_for_server
 
     # Readiness gate: wait (only) as long as the server actually needs to boot,
-    # then continue immediately. Replaces the old fixed pre-open sleep.
+    # then continue immediately. Replaces the old fixed pre-open sleep. We now
+    # CAPTURE the result (the old code ignored it) so the caller can tell a real
+    # startup from a crash: a page still opens either way, but only a ready
+    # server is a real launch.
+    server_ready = False
     try:
-        wait(host, port, timeout=ready_timeout)
+        server_ready = bool(wait(host, port, timeout=ready_timeout))
     except Exception:
-        pass
+        server_ready = False
 
     monitor_url = "http://%s:%s%s" % (host, port, room_monitor_path(room))
     result = {"ok": False, "method": "manual", "reason": "",
-              "monitor_url": monitor_url, "opened_url": monitor_url}
+              "monitor_url": monitor_url, "opened_url": monitor_url,
+              "server_ready": server_ready}
 
     def _open(url):
         try:
