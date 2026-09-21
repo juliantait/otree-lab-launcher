@@ -37,7 +37,7 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```
 
-**Updating.** Copy the new version over the top and keep your `data/` folder. Labs, saved configs, the database registry and this machine's identity all carry over. Old layouts migrate automatically on first launch.
+**Updating.** Copy the new version over the top and keep your `data/` folder. Labs, saved configs, the database registry and this machine's identity all carry over.
 
 **Requirements.** Python 3 (the Simple app uses the standard-library `tkinter`). Your oTree project, runnable with `otree`. To use the create-a-database button: PostgreSQL reachable from the machine and `psycopg2` (`pip install psycopg2-binary`); an existing database needs only its connection details.
 

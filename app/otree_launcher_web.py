@@ -1189,9 +1189,6 @@ def main():
     LOG.info("startup: otree_launcher_web on %s, python %s",
              sys.platform, sys.version.split()[0])
     LOG.info("log file: %s", LOG_PATH)
-    # Pull any pre-data/ files (lab.local, lab_info.json, presets.json, seats/)
-    # into data/ before anything reads them, then refresh lab_info.
-    core.migrate_legacy_data()
     core.reload_lab_info()
     try:
         import webview

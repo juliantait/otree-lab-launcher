@@ -55,7 +55,6 @@ import webbrowser
 # ---------------------------------------------------------------------------
 
 APP_NAME = "oTree Lab Launcher"
-APP_DIR_NAME = "oTreeLabLauncher"
 PRESETS_FILENAME = "presets.json"
 # A gitignored, one-word per-machine marker ("large"/"small") that identifies
 # which lab this computer is. It sits next to the launcher checkout, not in a
@@ -1081,85 +1080,11 @@ def config_dir():
     return data_dir()
 
 
-def _legacy_config_dir():
-    """The pre-data/ OS per-user config dir. Kept ONLY for the one-time copy
-    migration of an existing install's presets.json + seats/ into data/."""
-    if sys.platform.startswith("win"):
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, APP_DIR_NAME)
-    if sys.platform == "darwin":
-        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", APP_DIR_NAME)
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, APP_DIR_NAME)
-
-
 def presets_path():
     override = os.environ.get("OTREE_LAB_LAUNCHER_PRESETS")
     if override:
         return override
     return os.path.join(config_dir(), PRESETS_FILENAME)
-
-
-def _copy_file_if_missing(src, dest):
-    """Copy src -> dest only when dest is absent and src is a readable file.
-
-    The original is left in place (copy, not move), so migration is harmless and
-    a second run is a no-op. Same-path copies are skipped."""
-    if not src or not os.path.isfile(src):
-        return False
-    if os.path.abspath(src) == os.path.abspath(dest) or os.path.exists(dest):
-        return False
-    folder = os.path.dirname(dest) or "."
-    os.makedirs(folder, exist_ok=True)
-    shutil.copy2(src, dest)
-    return True
-
-
-def _copy_dir_files_if_missing(src_dir, dest_dir):
-    """Copy each file in src_dir into dest_dir when the destination is absent."""
-    if not os.path.isdir(src_dir) or os.path.abspath(src_dir) == os.path.abspath(dest_dir):
-        return
-    for name in os.listdir(src_dir):
-        src = os.path.join(src_dir, name)
-        if os.path.isfile(src):
-            _copy_file_if_missing(src, os.path.join(dest_dir, name))
-
-
-def migrate_legacy_data():
-    """Best-effort, one-time COPY of pre-data/ files into data/.
-
-    If data/ is missing a file that exists in its OLD location, copy it in
-    (leaving the original untouched). This lets an existing install keep its
-    configs, database registry, researchers and lab identity after the switch to
-    data/, with no manual moves. An env override that redirects a file elsewhere
-    is respected (that file is not migrated into data/). Never raises: any hiccup
-    is swallowed so it can never block startup.
-    """
-    try:
-        old_root = repo_root()
-        # <root>/lab.local  ->  data/lab.local
-        if not os.environ.get("OTREE_LAB_MARKER"):
-            _copy_file_if_missing(
-                os.path.join(old_root, LAB_MARKER_FILENAME), lab_marker_path())
-        # <root>/lab_info.json  ->  data/lab_info.json
-        if not os.environ.get("OTREE_LAB_INFO"):
-            _copy_file_if_missing(
-                os.path.join(old_root, LAB_INFO_FILENAME), lab_info_path())
-        # OS per-user config dir presets.json  ->  data/presets.json
-        legacy = _legacy_config_dir()
-        if not os.environ.get("OTREE_LAB_LAUNCHER_PRESETS"):
-            _copy_file_if_missing(
-                os.path.join(legacy, PRESETS_FILENAME), presets_path())
-        # OS per-user config dir seats/  ->  data/seats/
-        _copy_dir_files_if_missing(os.path.join(legacy, "seats"), seats_dir())
-        # An old top-level <root>/maps/ (from before maps moved under data/)
-        # -> data/maps/, only when data/maps is not already there.
-        old_maps = os.path.join(old_root, MAPS_DIRNAME)
-        if os.path.isdir(old_maps) and not os.path.isdir(maps_dir()):
-            _copy_dir_files_if_missing(old_maps, maps_dir())
-    except Exception:
-        # Migration is a convenience, never a gate: swallow anything.
-        pass
 
 
 # --- Per-machine lab identity (lab.local) ----------------------------------

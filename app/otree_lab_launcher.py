@@ -38,7 +38,6 @@ import webbrowser
 import otree_core as core
 
 APP_NAME = "oTree Lab Launcher"
-APP_DIR_NAME = "oTreeLabLauncher"
 PRESETS_FILENAME = "presets.json"
 # A gitignored, one-word per-machine marker ("large"/"small") that identifies
 # which lab this computer is. It lives next to the launcher, not in a
@@ -7427,9 +7426,6 @@ def headless_run(config_name, store_path=None):
     config name is a loud, non-zero failure (so a broken shortcut is obvious, not
     a silent no-op): it lists the available config names on stderr and returns 2.
     """
-    # Bring any pre-data/ presets.json + seats/ into data/ before loading them,
-    # so an existing install's saved configs survive the switch to data/.
-    core.migrate_legacy_data()
     store_path = store_path or presets_path()
     presets, store_extra = load_store(store_path)
     # This machine's lab identity configures the built-in default's lab, exactly
@@ -7533,10 +7529,6 @@ def headless_run(config_name, store_path=None):
 
 
 def main():
-    # Pull any pre-data/ files (lab.local, lab_info.json, presets.json, seats/)
-    # into data/ before anything reads them, then refresh so a just-migrated
-    # lab_info.json is seen as present (no spurious first-run wizard).
-    core.migrate_legacy_data()
     core.reload_lab_info()
     refresh_defaults_from_core()
     root = tk.Tk()
