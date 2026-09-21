@@ -1,141 +1,94 @@
 # oTree Lab Launcher
 
-**Make any working oTree project run in your lab with one click.** Point it at
-your project and it wires up Postgres, participant label lists, and the
-experiment room, then starts the server ready for participants to join.
-
-Each lab PC opens its own per-seat link
-(`http://HOST:8000/room/study?participant_label=SEAT`). You place the correct
-link on each desktop once, and arrivals then show up on the monitor.
-
----
+**Make any working oTree project run in your lab with one click.** Point it at your project and it wires up Postgres, per-seat participant links, and the experiment room, then starts the server ready for participants.
 
 ## What it does
 
-- **Postgres, wired for you.** Enter your database once (or let the launcher
-  create a fresh database and user for you); it builds the `DATABASE_URL` and
-  hands it to oTree.
-- **Seats and rooms, ready to go.** It generates the participant label file and
-  points the experiment at the lab room, so every seat has a stable link.
-- **One button to launch.** A confirmation screen names the lab, the host, and
-  the exact per-seat link before the server starts. Nothing runs until you say
-  so.
-- **It never edits your experiment code.** It only writes its own files. (The
-  one exception is an explicit, clearly-marked, fully-revertible "Add block to
-  settings.py" button you choose to click.)
+- **Select your database once.** Postgres, wired for you: the launcher builds the `DATABASE_URL` and hands it to oTree.
+- **Consistent per-seat links.** Each lab PC opens the same link every session, so you always know who's who.
+- **One button to launch.** Save experimental configs to relaunch them quickly in follow-up sessions.
+- **Lab defaults.** Once the launcher is set up, any oTree project is lab-ready in one click.
 
 ## Which launcher to run
 
-Pick by your operating system and which version of the app you want.
+Two versions, same app:
 
-- **On Windows, double-click the `.vbs` file.** It starts the app windowless:
-  no black console box is left sitting behind the GUI. (The old `.bat`
-  launchers have been removed; the `.vbs` replaces them.)
-- **On macOS, double-click the `.command` file.** A Terminal window opens and
-  stays behind the app while it runs. That is normal and can be ignored.
-- **Two versions, same app.** Both versions do exactly the same thing, with the
-  same features and the same logic. They only look different.
-  - **`Start oTree Lab Launcher`** is the **main app**: the standard Tkinter
-    desktop launcher. This is the primary, most reliable one, so use it if you
-    are not sure which to pick.
-  - **`Start oTree Lab Launcher (web)`** is a **prettier version of the same
-    app**: identical features and behaviour, just a nicer-looking UI.
+- **Simple** - Tkinter launcher.
+- **Web** - a prettier UI over the same app.
 
-So the four start files, all at the repo root, are:
-
-- `Start oTree Lab Launcher.vbs`: main app, Windows (windowless)
-- `Start oTree Lab Launcher.command`: main app, macOS
-- `Start oTree Lab Launcher (web).vbs`: web version, Windows (windowless)
-- `Start oTree Lab Launcher (web).command`: web version, macOS
-
-They run the app code in `app/`; a lab can use whichever it prefers.
-
-If the Windows app fails to start before its window appears, a crash log is
-written to `data\otree-lab-launcher.log` (or, if the `data` folder cannot be
-written, `%USERPROFILE%\otree-lab-launcher.log`).
-
-## Folder layout
-
-```
-<repo root>/
-  Start oTree Lab Launcher.vbs / .command          (Tk, main app)
-  Start oTree Lab Launcher (web).vbs / .command     (web version)
-  app/    the app code (otree_lab_launcher.py, otree_launcher_web.py, web/, ...)
-  data/   your config and maps (lab_info.json, presets.json, maps/, ...)
-```
-
-The code lives in `app/`; everything you own lives in `data/` at the repo root.
+Runs on macOS (`.command`) and Windows (`.vbs`). Both run the app code in `app/`; use whichever you prefer.
 
 ## Quick start
 
-1. **Copy the template:** `data/lab_info.example.json` -> `data/lab_info.json`.
-2. **Edit `data/lab_info.json`:** set each lab's real `host`, and set the
-   database and admin passwords. (Your `data/lab_info.json` is git-ignored, along
-   with the other files you create in `data/`. It holds your real hosts and
-   passwords and must never be committed.)
-3. **Run the launcher (Windows):** double-click
-   **`Start oTree Lab Launcher.vbs`** (windowless), or the matching `.bat`.
+First launch opens the **setup wizard** (it appears whenever there is no `data/lab_info.json`). Two roles:
 
-   The first run with **no** `data/lab_info.json` opens a **setup wizard** that
-   walks you through creating one (in `data/`), so you can also just launch it
-   and follow along.
+1. **Lab manager - set up once.** In the wizard: set the Postgres admin password and create the default "easy-use" database everyone shares. Then, per lab, put each seat's link on its desktop so arrivals flip green on the monitor. Full steps in the appendix.
+2. **Any researcher - one click.** Use the shared default (or the buttons to create your own database), point the launcher at your oTree project, pick the room, and hit **Launch session**.
 
-Then point the launcher at your oTree project folder, pick the lab and room, and
-hit **Launch session**.
+## Technical
 
-## Updating
+**Folder layout**
 
-Everything the launcher reads and writes lives in one **`data/`** folder at the
-repo root (it holds `lab_info.json`, `presets.json`, `lab.local` and `seats/`;
-next to the app code in `app/`). To update, **copy the new version over the top
-and keep your `data/` folder.** Your labs, saved configs, database registry and
-this machine's lab identity all carry over untouched. (An existing install from
-an older layout is migrated automatically on first launch: the old files are
-copied into `data/` for you, and the originals are left in place.)
+```
+<repo root>/
+  Start oTree Lab Launcher.command / .vbs         (Simple, macOS / Windows)
+  Start oTree Lab Launcher (web).command / .vbs    (Web)
+  app/    the app code
+  data/   your config and maps (lab_info.json, presets.json, maps/, ...)
+```
 
-## Two roles: set it up once, then just launch
+**Updating.** Copy the new version over the top and keep your `data/` folder. Labs, saved configs, the database registry and this machine's identity all carry over. Old layouts migrate automatically on first launch.
 
-The setup only has to happen once. Whoever runs the lab machines (a lab manager,
-or anyone looking after the infrastructure) installs the launcher, fills in
-`lab_info.json` with the real hosts, seats, and room maps, and saves the configs
-for the studies that will run. That is a one-time job.
+**Requirements.** Python 3 (the Simple app uses the standard-library `tkinter`). Your oTree project, runnable with `otree`. To use the create-a-database button: PostgreSQL reachable from the machine and `psycopg2` (`pip install psycopg2-binary`); an existing database needs only its connection details.
 
-After that, individual experimenters do not touch any of that setup. They just
-use what is already in place: open the launcher, point it at their own oTree
-project (or double-click a saved one-click shortcut), and launch. The database,
-seats, rooms, and per-seat links are all handled for them by the setup the lab
-manager put in place, so getting a study running in the lab is quick and needs
-no technical fiddling.
+---
 
-## Labs, seats, and room maps
+## Appendix: lab manager guide
 
-- Your labs, their hosts, seat lists, database, and admin login all live in
-  **`data/lab_info.json`** (hand-edited JSON; see `data/lab_info.example.json`
-  for the shape). Hosts and passwords are also editable from inside the app.
-- Room layouts (the top-down seat maps the launcher draws) live in
-  **`data/maps/`**. Each lab points at a map by name. To add your own room, drop
-  a `data/maps/<name>.json` and reference it. Full instructions and the schema
-  are in [`data/maps/README.md`](data/maps/README.md).
+The detailed setup guide. This is a one-time job for whoever looks after the lab machines. Individual researchers do not do any of it: they open the launcher, point it at their oTree project, pick the room, and hit **Launch session**.
 
-**Rule of thumb:** seat lists and room maps are hand-edited JSON; hosts and
-credentials are entered in the app.
+### One-time setup in the wizard
 
-## What each lab PC opens
+1. Install the launcher: copy the whole folder onto the machine that will run sessions.
+2. Run it. On the first launch, with no `data/lab_info.json` yet, the **setup wizard** opens on its own.
+3. In the wizard, set the **Postgres admin password**.
+4. Create the default shared **"easy-use" database** that every researcher can then use in one click.
+5. Add your lab(s): name, host, and seat list.
 
-Every seat opens its own link:
+From then on, researchers pick the shared default database and launch. They can also create their own database at any time from the in-app buttons, so you do not have to make one per study.
+
+### lab_info.json
+
+Your hosts, seat lists, and room-map references live in `data/lab_info.json` (see `data/lab_info.example.json` for the shape). Hosts and passwords are also editable from inside the app (gear -> Lab Settings), so you rarely need to hand-edit the file.
+
+Room layouts (the top-down seat maps the launcher draws) live in `data/maps/`. Each lab points at a map by name. The schema and how to add your own room are in `data/maps/README.md`.
+
+### The per-seat links (the important part)
+
+Each lab PC opens its own fixed link:
 
 ```
 http://HOST:8000/room/study?participant_label=SEAT
 ```
 
-`HOST` is the launch machine, `study` is the room, and `SEAT` is that
-computer's seat. You set each desktop's link once; when a participant opens it,
-that seat turns green on the experimenter's monitor.
+- `HOST` is the machine that launches the session (the one running the launcher).
+- `study` is the room.
+- `SEAT` is that computer's seat label.
 
-## Requirements
+Each link is always active. Put the correct link on each desktop once: set it as the browser homepage, or save it as a bookmark, one seat per machine. Do this once per lab and you never touch it again.
 
-- Python 3 (the standard library `tkinter` GUI ships with it).
-- Your oTree project, runnable with `otree` on the launch machine.
-- To use the "create a database" button: PostgreSQL reachable from the launch
-  machine, and `psycopg2` (`pip install psycopg2-binary`). A database you have
-  already created needs no extra libraries, just the connection details.
+When a participant opens their machine's link, that seat flips from grey to green on the experimenter's monitor. That is how the consistent links track who's who in practice: one machine, one seat, always the same person's spot.
+
+### Room warning
+
+The desktop shortcuts point at the `study` room. If a study uses a different room, the links must point at that room instead:
+
+```
+http://HOST:8000/room/THEIRROOM?participant_label=SEAT
+```
+
+The launch confirmation popup warns you about this when the chosen room is not `study`, and shows the correct link to use.
+
+### Saving configs
+
+You can save a config per study. A saved config relaunches the study in one click in later sessions, so the common studies are always a double-click away.

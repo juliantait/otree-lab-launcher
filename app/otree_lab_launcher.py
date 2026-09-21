@@ -5036,6 +5036,28 @@ def _modal_close(top):
         pass
 
 
+def _wait_viewable(top, timeout=3.0):
+    """Wait until ``top`` is mapped, but never block forever.
+
+    ``top.wait_visibility()`` blocks until the window becomes viewable, which is
+    the normal, quick case for a modal whose master is on screen. But a
+    transient Toplevel of a *withdrawn* master never becomes viewable on
+    macOS/aqua, so wait_visibility() there would hang the whole app with no
+    window ever appearing. We poll ``winfo_viewable`` with a deadline instead:
+    for an ordinary modal this returns as soon as the window maps (same effect
+    as wait_visibility), and for one that is never going to map it simply falls
+    through after the timeout rather than freezing.
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if top.winfo_viewable():
+                return
+            top.update()
+        except tk.TclError:
+            return
+
+
 def _grab_modal(top):
     """Take the modal input grab reliably across platforms.
 
@@ -5047,11 +5069,16 @@ def _grab_modal(top):
 
     Every step is guarded, a modal that cannot grab is far better than a crash,
     and this is the single choke-point every launcher modal goes through, so no
-    dialog can leak a broken grab.
+    dialog can leak a broken grab. The visibility wait is bounded (see
+    ``_wait_viewable``) so a window that will never map cannot hang the app.
     """
     if sys.platform == "darwin":
-        for step in (top.update_idletasks, top.wait_visibility, top.lift,
-                     top.focus_force):
+        try:
+            top.update_idletasks()
+        except tk.TclError:
+            pass
+        _wait_viewable(top)
+        for step in (top.lift, top.focus_force):
             try:
                 step()
             except tk.TclError:
@@ -7041,7 +7068,17 @@ class FirstRunWizard(object):
         top = tk.Toplevel(root)
         self.top = top
         top.title("%s: first-time setup" % APP_NAME)
-        top.transient(root)
+        # First run withdraws the main root before showing this wizard. A
+        # transient Toplevel whose master is withdrawn never becomes viewable on
+        # macOS/aqua, so a later wait_visibility() on it would block forever (the
+        # frozen blank-Terminal, no-window symptom). Only tie it to the root when
+        # the root is actually on screen; otherwise the wizard stands alone and
+        # maps itself (see run_first_run_wizard).
+        try:
+            if root.winfo_viewable():
+                top.transient(root)
+        except tk.TclError:
+            pass
         top.protocol("WM_DELETE_WINDOW", self._cancel)
 
         pad = {"padx": 10, "pady": 4}
@@ -7210,9 +7247,31 @@ def run_first_run_wizard(root):
     """Show the first-run wizard modally. Returns True if lab_info.json was
     written, False if the user cancelled."""
     wizard = FirstRunWizard(root)
-    _grab_modal(wizard.top)
-    root.wait_window(wizard.top)
+    top = wizard.top
+    # The main root is withdrawn during first run, so the wizard cannot lean on a
+    # visible master to be mapped for it. Map and raise it itself: deiconify,
+    # bring it to the front, and flash -topmost so it is not born behind the
+    # Terminal on macOS. Without this the window could stay unmapped and the grab
+    # never take. Guarded so a platform that refuses -topmost still shows it.
+    try:
+        top.deiconify()
+        top.update_idletasks()
+        top.lift()
+        top.attributes("-topmost", True)
+        top.after(300, lambda: _clear_topmost(top))
+        top.focus_force()
+    except tk.TclError:
+        pass
+    _grab_modal(top)
+    root.wait_window(top)
     return wizard.ok
+
+
+def _clear_topmost(top):
+    try:
+        top.attributes("-topmost", False)
+    except tk.TclError:
+        pass
 
 
 # On Windows the windowless launcher runs under pythonw.exe (no console), so a
