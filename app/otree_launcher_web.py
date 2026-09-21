@@ -499,8 +499,10 @@ class Api(object):
 
     @api_call
     def list_project_rooms(self, project_path):
-        """The room names the project's own settings.py defines (Feature 3)."""
-        return core.enumerate_project_rooms(project_path)
+        """The room names the project's own settings.py defines, plus the lab room
+        when the project has a LIVE lab support block (which defines it at launch),
+        so a just-appended block lets the user pick "study" (Feature 3)."""
+        return core.enumerate_rooms_for_picker(project_path)
 
     # -- the global database registry + researcher roster (Round 3) --------
     # These map straight onto the shared core helpers so the web picker, create

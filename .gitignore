@@ -40,5 +40,8 @@ _ai/mockups/*.html
 # AI scaffolding (mockups, renders, notes, tests) - not deliverables
 _ai/
 
-# Local ideas backlog - internal notes, never ships to the public repo
+# Internal dev/ops docs - never ship to the public repo
 IDEAS.md
+CLAUDE.md
+PRINCIPLES.md
+TODO.md

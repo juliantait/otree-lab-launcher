@@ -624,14 +624,18 @@ def build_env(cfg, base_env=None, label_file=None):
     else:
         env.pop("OTREE_AUTH_LEVEL", None)
 
-    # With no participant list the seat variables are left unset, so the block
-    # in settings.py stays inert and the project behaves as it always did.
+    # A lab launch always opens /room/<room_name>, so always name that room for
+    # the block: the block creates it at runtime if the project does not already
+    # define it, so the room the launcher opens is guaranteed to exist (even a
+    # no-seats lab, which used to 500 with KeyError on a room nothing created).
+    # The seat list is exported ONLY when there are seats: with a seat file the
+    # block makes it the seat-board room; with none the room is left open (anyone
+    # joins). With NO lab environment at all the block stays inert off the lab.
+    env["OTREE_LAB_ROOM_NAME"] = c["room_name"]
     if c["seat_mode"] == SEAT_NONE or not label_file:
-        for key in SEAT_ENV_KEYS:
-            env.pop(key, None)
+        env.pop("OTREE_LAB_LABEL_FILE", None)
     else:
         env["OTREE_LAB_LABEL_FILE"] = label_file
-        env["OTREE_LAB_ROOM_NAME"] = c["room_name"]
 
     return env
 
@@ -648,8 +652,11 @@ def launcher_env_keys(cfg, label_file=None):
         keys.append("OTREE_PRODUCTION")
     if c["auth_level"] in ("STUDY", "DEMO"):
         keys.append("OTREE_AUTH_LEVEL")
+    # A lab launch always names the room it opens; the seat file only when
+    # there are seats. Mirrors build_env exactly.
+    keys.append("OTREE_LAB_ROOM_NAME")
     if c["seat_mode"] != SEAT_NONE and label_file:
-        keys.extend(SEAT_ENV_KEYS)
+        keys.append("OTREE_LAB_LABEL_FILE")
     return keys
 
 
@@ -858,12 +865,14 @@ LAB_BLOCK = '''# === oTree lab support (paste at the END of settings.py) ===
 # ---------------------------------------------------------------------------
 import os as _os
 
-# (a) ROOMS + participant_label_file: when the launcher has written a seat list
-#     for this run, expose it as an oTree room so the admin gets the per-seat
-#     presence board. Adds nothing if the launcher wrote no seat list.
-if _os.environ.get("OTREE_LAB_LABEL_FILE"):
-    # The launcher picked a room and wrote a seat list for this run.
-    _lab_room = _os.environ.get("OTREE_LAB_ROOM_NAME", "study")
+# (a) ROOMS + participant_label_file: a lab launch always names the room it
+#     opens, so make sure that room exists here. If the launcher also wrote a
+#     seat list, point the room at it so the admin gets the per-seat presence
+#     board; with no seat list the room is left OPEN (anyone joins). Adds
+#     nothing off the lab, where OTREE_LAB_ROOM_NAME is unset.
+if _os.environ.get("OTREE_LAB_ROOM_NAME"):
+    # The launcher picked the room it will open for this run.
+    _lab_room = _os.environ["OTREE_LAB_ROOM_NAME"]
 
     # ROOMS may not exist yet in this project.
     try:
@@ -876,11 +885,13 @@ if _os.environ.get("OTREE_LAB_LABEL_FILE"):
     if not any(r.get("name") == _lab_room for r in ROOMS):
         ROOMS = list(ROOMS) + [dict(name=_lab_room, display_name="oTree lab session")]
 
-    # Point that room at the seat list the launcher wrote. Mutating in place
-    # means any other keys the project set on the room survive.
-    for _room in ROOMS:
-        if _room.get("name") == _lab_room:
-            _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
+    # Point that room at the seat list ONLY when the launcher wrote one (seats).
+    # Mutating in place means any other keys the project set on the room survive.
+    # With no seat file the room stays open (no participant_label_file).
+    if _os.environ.get("OTREE_LAB_LABEL_FILE"):
+        for _room in ROOMS:
+            if _room.get("name") == _lab_room:
+                _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
 
 # (b) DATABASES: redirect the project at the lab's PostgreSQL database, rebuilt
 #     from the DB_* variables the launcher set. Because it is assigned here at
@@ -905,14 +916,11 @@ if _os.environ.get("DB_NAME"):
 
 # (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
 #     hardcodes the admin username, so without this line the launcher's admin
-#     username box would do nothing. With no variable set this keeps whatever
-#     the project already had, or "admin" if it had none, so off the lab it
-#     changes nothing.
-try:
-    _lab_admin_default = ADMIN_USERNAME
-except NameError:
-    _lab_admin_default = "admin"
-ADMIN_USERNAME = _os.environ.get("OTREE_ADMIN_USERNAME", _lab_admin_default)
+#     username box would do nothing. Only fires when the launcher set
+#     OTREE_ADMIN_USERNAME; off the lab the project's own username (or oTree's
+#     default) is left exactly as it was.
+if "OTREE_ADMIN_USERNAME" in _os.environ:
+    ADMIN_USERNAME = _os.environ["OTREE_ADMIN_USERNAME"]
 
 # (d) ADMIN_PASSWORD: take the admin password from the launcher, so a password
 #     hardcoded in the project cannot lock the experimenter out of the lab
@@ -3001,6 +3009,52 @@ def enumerate_project_rooms(project_path, timeout=8.0, python_exe=None):
     return result
 
 
+def project_has_live_lab_block(project_path):
+    """True when settings.py carries a COMPLETE, un-overridden lab support block.
+
+    "Live" means the block WILL define the launcher's chosen room at launch:
+    the start marker is present (``has_block``), both markers are present
+    (``complete``), and no later top-level ``ROOMS =`` reassignment throws the
+    block's room away (not ``rooms_after``). Those are exactly the cases
+    ``inspect_settings`` already distinguishes; this single predicate is shared
+    by the pre-launch room check and the room picker so they agree on when a
+    block-having project also supports the launcher's lab room.
+
+    An absent, cut-off (incomplete) or overridden block returns False, so the
+    genuine problems still surface. Unreadable settings.py -> False too.
+    """
+    state = inspect_settings(project_path)
+    return bool(state.get("has_block") and state.get("complete")
+                and not state.get("rooms_after"))
+
+
+def enumerate_rooms_for_picker(project_path, lab_room=None, timeout=8.0,
+                               python_exe=None):
+    """Block-aware room list for the room picker.
+
+    Returns the same dict as ``enumerate_project_rooms`` (the honest OFF-lab
+    rooms), but when the project has a LIVE lab block the launcher's lab room is
+    added to the offered list (de-duplicated), because the block WILL define that
+    room at launch. This lets a user who just appended the block actually pick
+    "study" (or the configured lab room) instead of being limited to the
+    project's own rooms.
+
+    ``enumerate_project_rooms`` itself is NOT changed: it still reports the true
+    off-lab rooms. The lab room is layered on here, at the picker, so both faces
+    (Tk + web) agree. ``lab_room`` defaults to the lab default room ("study").
+    """
+    lab_room = (lab_room or DEFAULT_ROOM_NAME).strip() or DEFAULT_ROOM_NAME
+    info = enumerate_project_rooms(project_path, timeout=timeout,
+                                   python_exe=python_exe)
+    if info["ok"] and lab_room not in info["rooms"] \
+            and project_has_live_lab_block(project_path):
+        info = dict(info)
+        info["rooms"] = list(info["rooms"]) + [lab_room]
+        info["empty"] = False
+        info["lab_room"] = lab_room
+    return info
+
+
 # ---------------------------------------------------------------------------
 # Pre-launch preflight gate (checks 1–4)
 #
@@ -3148,6 +3202,23 @@ def preflight_check_project(config, timeout=PREFLIGHT_ROOMS_TIMEOUT):
     info = enumerate_project_rooms(path, timeout=timeout)
     if info["ok"]:
         if room and room not in info["rooms"]:
+            # A COMPLETE, un-overridden lab support block WILL define whatever
+            # room the launcher selects at launch (its ROOMS clause fires when
+            # OTREE_LAB_ROOM_NAME is set), even though the static import above —
+            # run with the lab seat env STRIPPED, i.e. exactly as it runs OFF the
+            # lab — cannot see it. So a block-having project whose static ROOMS
+            # lack the chosen room is NOT a problem: pass with a note. We still
+            # warn for the genuine cases (no/incomplete block, or a later
+            # top-level ROOMS = that overrides the block) — project_has_live_lab_block
+            # is False for all of those.
+            if project_has_live_lab_block(path):
+                return _preflight_result(
+                    "project", True,
+                    "settings.py has the lab support block, which defines room "
+                    "'%s' at launch." % room,
+                    "Static ROOMS off the lab: %s (the block adds '%s' when the "
+                    "launcher sets the seat file)."
+                    % (", ".join(info["rooms"]) or "(none)", room))
             out = _preflight_result(
                 "project", False,
                 "Room '%s' is not defined in this project's ROOMS." % room,

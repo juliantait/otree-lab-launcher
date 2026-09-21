@@ -16,14 +16,23 @@ Two versions, same app:
 - **Simple** - Tkinter launcher.
 - **Web** - a prettier UI over the same app.
 
-Runs on macOS (`.command`) and Windows (`.vbs`). Both run the app code in `app/`; use whichever you prefer.
+Runs on macOS (the `Mac_...command` files) and Windows (the `Win_...vbs` files). Both run the app code in `app/`; use whichever you prefer.
 
 ## Quick start
 
 First launch opens the **setup wizard** (it appears whenever there is no `data/lab_info.json`). Two roles:
 
-1. **Lab manager - set up once.** In the wizard: set the Postgres admin password and create the default "easy-use" database everyone shares. Then, per lab, put each seat's link on its desktop so arrivals flip green on the monitor. Full steps in the appendix.
-2. **Any researcher - one click.** Use the shared default (or the buttons to create your own database), point the launcher at your oTree project, pick the room, and hit **Launch session**.
+**Lab manager - set up once:**
+
+1. Set up Postgres.
+2. Create the default database everyone shares.
+3. Create a shared room and prep the participant PCs with that room's link.
+
+**Any researcher - three clicks:**
+
+1. Point the oTree launcher at your project.
+2. Run or select the lab defaults.
+3. Hit **Launch session**.
 
 ## Technical
 
@@ -31,8 +40,10 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
 
 ```
 <repo root>/
-  Start oTree Lab Launcher.command / .vbs         (Simple, macOS / Windows)
-  Start oTree Lab Launcher (web).command / .vbs    (Web)
+  Mac_Start oTree Lab Launcher.command            (Simple, macOS)
+  Win_Start oTree Lab Launcher.vbs                (Simple, Windows)
+  Mac_Start oTree Lab Launcher (web).command      (Web, macOS)
+  Win_Start oTree Lab Launcher (web).vbs          (Web, Windows)
   app/    the app code
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```

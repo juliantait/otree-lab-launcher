@@ -954,6 +954,10 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 var NATIVE=false, API=null, booted=false;
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
 var lastSettings=null, defaultAuthor="", pendingDelete=null;
+/* The "get ready for the lab" popup fires at most once per project selection;
+   this remembers the path already offered so re-inspecting the same folder
+   (or a config load) does not nag again. Cleared implicitly by a new path. */
+var getReadyOfferedPath=null;
 var LABS=[], LAB_BY_ID={}, selectedLabId="";
 var LAB_PRESETS=[], PG_ADMIN={admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"};
 var PROJECT_ROOMS=null, roomSelIndex=0, labMarker="";
@@ -1030,7 +1034,9 @@ function copyLog(){try{navigator.clipboard.writeText(el("logBody").innerText);}c
 window.pywOnProjectPicked=function(p){if(!p||!p.path)return;
   currentProjectPath=p.path;setPath(p.path);applyProject(p.project);applySettings(p.settings);
   /* Picked from the Before-you-launch [Choose folder…] button: re-check in place. */
-  if(!el("infoModal").hidden&&el("blIssues")&&el("blActions"))blRecheck();};
+  if(!el("infoModal").hidden&&el("blIssues")&&el("blActions")){blRecheck();return;}
+  /* Normal folder pick: proactively offer the one-click lab setup if not ready. */
+  maybeOfferGetReady(p.settings);};
 window.pywOnFilePicked=function(p){if(!p||!p.path)return;currentSeatFile=p.path;setSeatFilePath(p.path);};
 window.pywOnBatResult=function(r){if(!r)return;
   if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file.");
@@ -1424,7 +1430,8 @@ function validateProjectPath(){
   var p=(val("projPathInput")||"").trim();if(!p)return;
   if(!NATIVE||!API){window.pywStatus("","Typing a path works in the app, not the static preview.");return;}
   currentProjectPath=p;setPath(p);
-  API.validate_project(p).then(function(r){if(!r)return;if(r.project)applyProject(r.project);if(r.settings)applySettings(r.settings);});
+  API.validate_project(p).then(function(r){if(!r)return;if(r.project)applyProject(r.project);
+    if(r.settings){applySettings(r.settings);maybeOfferGetReady(r.settings);}});
 }
 document.addEventListener("DOMContentLoaded",function(){
   var i=el("projPathInput");
@@ -1510,8 +1517,75 @@ function onAppendBlock(){
   if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
   API.append_settings_block(currentProjectPath).then(function(r){if(!r)return;applyLog(r);
     if(r.settings)applySettings(r.settings);
-    if(r.ok)window.pywStatus("ok","Added the lab support block. Backup: "+r.backup);
-    else window.pywStatus(r.already?"":"err",r.message||"Could not add the block.");});
+    if(r.ok){
+      /* Close whichever modal launched this (get-ready popup or the block viewer);
+         a no-op when the passive #blockWarn strip button triggered it. */
+      closeModal();
+      window.pywStatus("ok","Added the lab support block. Backup: "+r.backup);}
+    else{
+      /* Already-present or write error: keep the get-ready modal open and show it
+         inline there when present, otherwise fall back to the launch-bar status. */
+      var gm=el("getReadyMsg");
+      if(gm&&!el("infoModal").hidden){gm.style.display="block";
+        gm.style.color=r.already?"var(--warn)":"var(--err)";
+        gm.textContent=r.message||"Could not add the block.";}
+      else window.pywStatus(r.already?"":"err",r.message||"Could not add the block.");}
+  });
+}
+
+/* ---------------------------- get ready for the lab ---------------------------- */
+/* Proactive one-click lab setup, ported from the Tk GetReadyDialog. Fired right
+   after a not-lab-ready project folder is picked (see pywOnProjectPicked and
+   validateProjectPath). It offers to append the lab support block in one click,
+   reusing the same safe append path (timestamped .bak, refuse-if-present) as the
+   passive #blockWarn strip. Freely dismissible - some projects are deliberately
+   not lab projects - and shown at most once per selection. */
+function maybeOfferGetReady(s){
+  if(!s||!s.readable)return;
+  /* Do not stack over the launch flow or any other open modal. */
+  if(!el("infoModal").hidden)return;
+  var notReady=(!s.has_block||!s.complete||s.rooms_after);
+  if(!notReady)return;
+  if(getReadyOfferedPath===currentProjectPath)return; /* one offer per folder */
+  getReadyOfferedPath=currentProjectPath;
+  showGetReadyModal(s);
+}
+function showGetReadyModal(s){
+  /* A ROOMS = reassigned AFTER the block silently kills the lab room; appending
+     alone will not fix that, so call it out specifically. */
+  var warnHtml=(s&&s.rooms_after)
+    ?('<div class="statusline warn" style="margin:2px 0 12px"><span class="dot">&#9650;</span><span>'+
+        escapeHtml(s.message||"settings.py assigns ROOMS after the block, which replaces the lab room. Move the block to the end of the file.")+
+      '</span></div>')
+    :"";
+  var info=
+    '<p style="margin:0 0 8px">It appends a clearly-marked block to the <strong>END</strong> of settings.py that '+
+    're-asserts what the lab needs, each value taken from the launcher at launch:</p>'+
+    '<ul style="margin:0 0 10px;padding-left:18px">'+
+      '<li>the lab room + seat board&nbsp;&nbsp;(<code>ROOMS</code> + <code>participant_label_file</code>)</li>'+
+      '<li>the lab database&nbsp;&nbsp;(<code>DATABASES</code>, the lab Postgres from the DB vars)</li>'+
+      '<li>the admin login&nbsp;&nbsp;(<code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code>)</li>'+
+      '<li>the access level&nbsp;&nbsp;(<code>AUTH_LEVEL</code>) and <code>DEBUG</code> / production</li>'+
+    '</ul>'+
+    '<p style="margin:0">A timestamped <code>.bak</code> copy of your settings.py is saved first. Every override is '+
+    'guarded by the launcher&rsquo;s environment variables, so with no lab environment set your project is '+
+    'byte-for-byte unchanged. <code>SECRET_KEY</code> and unrelated settings are left alone. It is fully '+
+    'revertible: delete from the banner line to the end of settings.py.';
+  openModal("This project is not set up for this lab yet.",
+    '<p class="modal-desc">It needs the lab-support block to run in this lab: the lab room and per-seat '+
+      'seat board, the database, the admin login, and production mode. One click gets it ready.</p>'+
+    warnHtml+
+    '<button type="button" id="getReadyMore" onclick="toggleGetReadyInfo()" '+
+      'style="background:none;border:0;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0;margin:2px 0 0">'+
+      'What this changes&nbsp;&nbsp;&#9662;</button>'+
+    '<div class="info-panel" id="getReadyInfo" hidden style="margin:10px 0 0">'+info+'</div>'+
+    '<div class="modal-err" id="getReadyMsg"></div>'+
+    '<div class="cta"><button class="btn ghost" onclick="closeModal()">Not now</button>'+
+    '<button class="btn accent" onclick="onAppendBlock()">Get ready for the lab</button></div>');
+}
+function toggleGetReadyInfo(){
+  var p=el("getReadyInfo");if(!p)return;p.hidden=!p.hidden;
+  var b=el("getReadyMore");if(b)b.innerHTML=p.hidden?"What this changes&nbsp;&nbsp;&#9662;":"What this changes&nbsp;&nbsp;&#9652;";
 }
 
 /* ======================================================================

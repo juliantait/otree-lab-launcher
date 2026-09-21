@@ -16,12 +16,14 @@
 # ---------------------------------------------------------------------------
 import os as _os
 
-# (a) ROOMS + participant_label_file: when the launcher has written a seat list
-#     for this run, expose it as an oTree room so the admin gets the per-seat
-#     presence board. Adds nothing if the launcher wrote no seat list.
-if _os.environ.get("OTREE_LAB_LABEL_FILE"):
-    # The launcher picked a room and wrote a seat list for this run.
-    _lab_room = _os.environ.get("OTREE_LAB_ROOM_NAME", "study")
+# (a) ROOMS + participant_label_file: a lab launch always names the room it
+#     opens, so make sure that room exists here. If the launcher also wrote a
+#     seat list, point the room at it so the admin gets the per-seat presence
+#     board; with no seat list the room is left OPEN (anyone joins). Adds
+#     nothing off the lab, where OTREE_LAB_ROOM_NAME is unset.
+if _os.environ.get("OTREE_LAB_ROOM_NAME"):
+    # The launcher picked the room it will open for this run.
+    _lab_room = _os.environ["OTREE_LAB_ROOM_NAME"]
 
     # ROOMS may not exist yet in this project.
     try:
@@ -34,11 +36,13 @@ if _os.environ.get("OTREE_LAB_LABEL_FILE"):
     if not any(r.get("name") == _lab_room for r in ROOMS):
         ROOMS = list(ROOMS) + [dict(name=_lab_room, display_name="oTree lab session")]
 
-    # Point that room at the seat list the launcher wrote. Mutating in place
-    # means any other keys the project set on the room survive.
-    for _room in ROOMS:
-        if _room.get("name") == _lab_room:
-            _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
+    # Point that room at the seat list ONLY when the launcher wrote one (seats).
+    # Mutating in place means any other keys the project set on the room survive.
+    # With no seat file the room stays open (no participant_label_file).
+    if _os.environ.get("OTREE_LAB_LABEL_FILE"):
+        for _room in ROOMS:
+            if _room.get("name") == _lab_room:
+                _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
 
 # (b) DATABASES: redirect the project at the lab's PostgreSQL database, rebuilt
 #     from the DB_* variables the launcher set. Because it is assigned here at
@@ -63,14 +67,11 @@ if _os.environ.get("DB_NAME"):
 
 # (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
 #     hardcodes the admin username, so without this line the launcher's admin
-#     username box would do nothing. With no variable set this keeps whatever
-#     the project already had, or "admin" if it had none, so off the lab it
-#     changes nothing.
-try:
-    _lab_admin_default = ADMIN_USERNAME
-except NameError:
-    _lab_admin_default = "admin"
-ADMIN_USERNAME = _os.environ.get("OTREE_ADMIN_USERNAME", _lab_admin_default)
+#     username box would do nothing. Only fires when the launcher set
+#     OTREE_ADMIN_USERNAME; off the lab the project's own username (or oTree's
+#     default) is left exactly as it was.
+if "OTREE_ADMIN_USERNAME" in _os.environ:
+    ADMIN_USERNAME = _os.environ["OTREE_ADMIN_USERNAME"]
 
 # (d) ADMIN_PASSWORD: take the admin password from the launcher, so a password
 #     hardcoded in the project cannot lock the experimenter out of the lab
