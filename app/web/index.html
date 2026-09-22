@@ -1012,6 +1012,10 @@ function togglePw(btn){var i=el(btn.dataset.target);
   if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
 function labById(id){return LAB_BY_ID[id]||null;}
 function currentLab(){if(selectedLabId&&LAB_BY_ID[selectedLabId])return selectedLabId;return LABS.length?LABS[0].id:"";}
+/* The active lab's default room ("study" fallback), used to pin the room picker
+   and read the lab's shortcut label. Python is the source of truth; this only
+   drives client-side seeding/highlighting. */
+function labRoom(){var l=labById(currentLab());return (l&&l.default_room)||"study";}
 
 /* ---------------------------- log + status ---------------------------- */
 window.pywLog=function(cls,text){appendLog(cls,text);};
@@ -1257,7 +1261,8 @@ function refreshDbSummary(){
    ====================================================================== */
 function setLabs(labs){
   LABS=(labs||[]).map(function(l){return {id:l.id,name:l.name||l.id,host:l.host||"localhost",
-    seats:(l.seats||[]).slice(),map:(l.map&&typeof l.map==="object")?l.map:null};});
+    seats:(l.seats||[]).slice(),map:(l.map&&typeof l.map==="object")?l.map:null,
+    default_room:l.default_room||"study",shortcut_label:l.shortcut_label||""};});
   LAB_BY_ID={};LABS.forEach(function(l){LAB_BY_ID[l.id]=l;});buildLabTiles();
 }
 function buildLabTiles(){
@@ -1546,13 +1551,18 @@ function maybeOfferGetReady(s){
   if(!s||!s.readable)return;
   /* Do not stack over the launch flow or any other open modal. */
   if(!el("infoModal").hidden)return;
-  var notReady=(!s.has_block||!s.complete||s.rooms_after);
+  /* Offer a REFRESH when the block is present but outdated (stale / cut off), an
+     APPEND when it is missing, and also for a later ROOMS = override. */
+  var notReady=(!s.has_block||!s.complete||s.rooms_after||s.needs_refresh);
   if(!notReady)return;
   if(getReadyOfferedPath===currentProjectPath)return; /* one offer per folder */
   getReadyOfferedPath=currentProjectPath;
   showGetReadyModal(s);
 }
 function showGetReadyModal(s){
+  /* A present-but-outdated block (stale / cut off) -> REFRESH replaces it in
+     place; append_settings_block refuses when a marker is already present. */
+  var refresh=(s&&s.needs_refresh&&s.has_block&&!s.rooms_after);
   /* A ROOMS = reassigned AFTER the block silently kills the lab room; appending
      alone will not fix that, so call it out specifically. */
   var warnHtml=(s&&s.rooms_after)
@@ -1573,9 +1583,16 @@ function showGetReadyModal(s){
     'guarded by the launcher&rsquo;s environment variables, so with no lab environment set your project is '+
     'byte-for-byte unchanged. <code>SECRET_KEY</code> and unrelated settings are left alone. It is fully '+
     'revertible: delete from the banner line to the end of settings.py.';
-  openModal("This project is not set up for this lab yet.",
-    '<p class="modal-desc">It needs the lab-support block to run in this lab: the lab room and per-seat '+
-      'seat board, the database, the admin login, and production mode. One click gets it ready.</p>'+
+  var title=refresh?"This project's lab support block is out of date."
+                   :"This project is not set up for this lab yet.";
+  var desc=refresh
+    ?'<p class="modal-desc">It has an older lab-support block. Refreshing replaces it in place with the current block (which fixes the lab room, including with no seats). One click updates it.</p>'
+    :'<p class="modal-desc">It needs the lab-support block to run in this lab: the lab room and per-seat seat board, the database, the admin login, and production mode. One click gets it ready.</p>';
+  var action=refresh
+    ?'<button class="btn accent" onclick="onRefreshBlock()">Refresh lab block</button>'
+    :'<button class="btn accent" onclick="onAppendBlock()">Get ready for the lab</button>';
+  openModal(title,
+    desc+
     warnHtml+
     '<button type="button" id="getReadyMore" onclick="toggleGetReadyInfo()" '+
       'style="background:none;border:0;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0;margin:2px 0 0">'+
@@ -1583,7 +1600,20 @@ function showGetReadyModal(s){
     '<div class="info-panel" id="getReadyInfo" hidden style="margin:10px 0 0">'+info+'</div>'+
     '<div class="modal-err" id="getReadyMsg"></div>'+
     '<div class="cta"><button class="btn ghost" onclick="closeModal()">Not now</button>'+
-    '<button class="btn accent" onclick="onAppendBlock()">Get ready for the lab</button></div>');
+    action+'</div>');
+}
+function onRefreshBlock(){
+  if(!NATIVE||!API){window.pywStatus("","Refresh works in the app, not the static preview.");return;}
+  if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
+  API.refresh_settings_block(currentProjectPath).then(function(r){if(!r)return;applyLog(r);
+    if(r.settings)applySettings(r.settings);
+    if(r.ok){closeModal();window.pywStatus("ok","Refreshed the lab support block. Backup: "+r.backup);}
+    else{
+      var gm=el("getReadyMsg");
+      if(gm&&!el("infoModal").hidden){gm.style.display="block";gm.style.color="var(--err)";
+        gm.textContent=r.message||"Could not refresh the block.";}
+      else window.pywStatus("err",r.message||"Could not refresh the block.");}
+  });
 }
 function toggleGetReadyInfo(){
   var p=el("getReadyInfo");if(!p)return;p.hidden=!p.hidden;
@@ -1594,12 +1624,13 @@ function toggleGetReadyInfo(){
    ROOM PICKER  ("Choose the room to serve")
    ====================================================================== */
 function openRoomPicker(){
-  var rooms=NATIVE?["study"]:PREVIEW_ROOMS.slice();
+  var labDefault=labRoom();
+  var rooms=NATIVE?[labDefault]:PREVIEW_ROOMS.slice();
   roomSelIndex=0;
   renderRoomPicker(rooms,NATIVE);
   if(NATIVE&&API&&currentProjectPath){
     API.list_project_rooms(currentProjectPath).then(function(r){
-      var names=["study"];
+      var names=[labDefault];
       if(r&&r.ok&&r.rooms)r.rooms.forEach(function(n){if(names.indexOf(n)<0)names.push(n);});
       renderRoomPicker(names,false,r&&!r.ok?(r.error||""):"");
     });
@@ -1764,25 +1795,32 @@ function toggleLabShown(id){
 function labPresetEdit(id){
   var p=id?(LAB_PRESETS.filter(function(x){return x.id===id;})[0]||null):null;
   var name=p?(p.name||""):"", ip=p?(p.ip||p.host||""):"", seats=p?((p.seats||[]).join("\n")):"", cols=(p&&p.cols)?p.cols:"";
+  var room=p?(p.default_room||"study"):"study", shortcut=p?(p.shortcut_label||""):"";
   openModal(id?"Edit lab":"Add a lab",
     '<div class="mfield"><label>Lab name</label><input id="lpName" type="text" value="'+escapeHtml(name)+'"></div>'+
     '<div class="mfield"><label>IP address or host</label><input id="lpIp" type="text" value="'+escapeHtml(ip)+'"></div>'+
     '<div class="mfield" style="align-items:start"><label>Seat labels</label><textarea id="lpSeats" rows="4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--bg-deep);color:var(--text);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px" placeholder="one per line, or spaces/commas">'+escapeHtml(seats)+'</textarea></div>'+
+    '<div class="mfield"><label>Default room <span class="info-i" title="'+escapeHtml(ROOM_HELP)+'" style="cursor:help;color:var(--accent)">&#9432;</span></label><input id="lpRoom" type="text" placeholder="study" value="'+escapeHtml(room)+'"></div>'+
+    '<div class="mfield"><label>Shortcut label</label><input id="lpShortcut" type="text" placeholder="(optional) name of the participant-PC desktop shortcuts" value="'+escapeHtml(shortcut)+'"></div>'+
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
     '<div class="ls-status" id="lpStatus"></div>'+
     '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
 }
 function saveLabPreset(id){
   var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
+  var room=(val("lpRoom")||"").trim()||"study",shortcut=(val("lpShortcut")||"").trim();
   function fail(m){var s=el("lpStatus");if(s){s.className="ls-status warn";s.textContent=m;}}
   if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
   var colsNum=cols?(parseInt(cols,10)||0):0;
   var done=function(r){
-    if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);openLabSettings();
+    if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
+      /* A changed default_room re-derives the built-in Lab default live. */
+      if(r.configs)renderConfigList(r.configs,currentConfigName);
+      openLabSettings();
       var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}}
     else fail((r&&r.message)||"Could not save the lab.");};
-  if(id)API.update_lab(id,name,ip,seats,colsNum).then(done);
-  else API.add_lab(name,ip,seats,colsNum).then(done);
+  if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut).then(done);
+  else API.add_lab(name,ip,seats,colsNum,room,shortcut).then(done);
 }
 function deleteLabPreset(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;
@@ -1888,9 +1926,12 @@ function briefingSummaryHtml(b){
   if(hasShortcut){
     /* Study room: the shortcut is already on the PCs, so the link is HIDDEN and
        only appears while the chip is hovered (or keyboard-focused). */
+    /* When the lab named its participant-PC desktop shortcuts (shortcut_label),
+       the chip shows that exact name; otherwise the "Study Room <Lab>" default. */
+    var chipName=b.shortcut_label||b.shortcut_name||shortcutName(b.lab_label);
     html+='<div class="open-line">Open <span class="bl-chipwrap" id="blChipWrap" onmouseenter="blPlaceLinkPop()" onfocusin="blPlaceLinkPop()"><span class="room-chip" id="blRoomChip" tabindex="0">'+
-      escapeHtml(b.shortcut_name||shortcutName(b.lab_label))+'</span>'+
-      '<span class="bl-linkpop" id="blLinkPop"><span class="bl-linkpop-in" style="display:block"><strong>Open this desktop shortcut on each PC.</strong>'+
+      escapeHtml(chipName)+'</span>'+
+      '<span class="bl-linkpop" id="blLinkPop"><span class="bl-linkpop-in" style="display:block"><strong>Open the &ldquo;'+escapeHtml(chipName)+'&rdquo; shortcut on each PC.</strong>'+
       linkRow(linkLabel+", for reference",link)+'</span></span></span> on each participant computer.</div>';
   }else{
     /* Non-study room: no shortcut exists, so the link IS shown. State the room,
@@ -1958,6 +1999,8 @@ function renderBlIssues(issues){
     else if(it.fix==="add_block")fixBtn='<button class="btn accent tiny" onclick="blFix(\'add_block\')">'+escapeHtml(it.fix_label||"Fix")+'</button>';
     else if(it.fix==="change_to_sqlite")fixBtn='<button class="btn accent tiny" onclick="blChangeToSqlite()">'+escapeHtml(it.fix_label||"Change to SQLite")+'</button>';
     else if(it.fix==="recheck")fixBtn='<button class="btn accent tiny" onclick="blRecheck()">'+escapeHtml(it.fix_label||"Re-check")+'</button>';
+    else if(it.fix==="refresh_block")fixBtn='<button class="btn accent tiny" onclick="blRefreshBlock()">'+escapeHtml(it.fix_label||"Refresh lab block")+'</button>';
+    else if(it.fix==="use_lab_room")fixBtn='<button class="btn accent tiny" onclick="blUseLabRoom('+jsQuote(it.lab_room||"study")+')">'+escapeHtml(it.fix_label||"Use new default")+'</button>';
     else if(it.fix==="pick_room"){
       var rooms=(it.rooms||[]);
       if(rooms.length){
@@ -2006,6 +2049,26 @@ function blPickRoom(idx){
   setRoom(room);
   window.pywStatus&&window.pywStatus("ok","Room set to "+room+" for this launch.");
   blRecheck();
+}
+/* JOB 4: switch this config to the lab's current default room (non-blocking; the
+   config was launchable as-is). Writes back to the on-screen config like any edit. */
+function blUseLabRoom(room){
+  if(!room)return;
+  setRoom(room);updateDirtyState&&updateDirtyState();
+  window.pywStatus&&window.pywStatus("ok","Room set to "+room+" (the lab default).");
+  blRecheck();
+}
+/* JOB 3: refresh an outdated lab support block in place (refuse-safe append can't).
+   Same safe writer semantics: timestamped .bak, atomic, revertible. */
+function blRefreshBlock(){
+  if(!NATIVE||!API){window.pywStatus&&window.pywStatus("","Refresh works in the app, not the static preview.");return;}
+  if(!currentProjectPath){window.pywStatus("err","Pick a project folder first.");return;}
+  API.refresh_settings_block(currentProjectPath).then(function(r){
+    if(r){applyLog(r);if(r.settings)applySettings(r.settings);
+      if(r.ok)window.pywStatus("ok","Refreshed the lab support block. Backup: "+r.backup);
+      else window.pywStatus("err",r.message||"Could not refresh the block.");}
+    blRecheck();
+  });
 }
 /* Define the chosen room in the project by appending the lab support block (the
    SAME safe writer as "Add block to settings.py": timestamped .bak, refuse if
@@ -2299,28 +2362,35 @@ function wizStepLabs(){
   var rows=WIZ.labs.length?WIZ.labs.map(function(l,i){
     return '<div class="wiz-row"><span class="nm">'+escapeHtml(l.name)+'</span>'+
       '<span class="meta">'+escapeHtml(l.host||"(no host)")+' · '+l.seats.length+' seats'+
-      (l.map?' · map: '+escapeHtml(l.map):'')+'</span>'+
+      (l.map?' · map: '+escapeHtml(l.map):'')+' · room: '+escapeHtml(l.default_room||"study")+
+      (l.shortcut_label?' · shortcut: '+escapeHtml(l.shortcut_label):'')+'</span>'+
       '<button class="x" onclick="wizRemoveLab('+i+')" title="Remove">×</button></div>';
   }).join(""):'<div class="wiz-empty">No labs yet &mdash; fill the row below and click Add lab.</div>';
   return '<div>'+rows+'</div>'+
     '<div class="ls-card" style="margin-top:12px"><h4>Add a lab</h4>'+
     '<div class="mfield"><label>Name</label><input type="text" id="wlName" placeholder="e.g. Small lab"></div>'+
     '<div class="mfield"><label>Host / IP</label><input type="text" id="wlHost" placeholder="host or IP the seats connect to"></div>'+
+    '<div class="mfield"><label>Default room <span class="info-i" title="'+escapeHtml(ROOM_HELP)+'" style="cursor:help;color:var(--accent)">&#9432;</span></label>'+
+      '<input type="text" id="wlRoom" placeholder="study" value="study"></div>'+
+    '<div class="mfield"><label>Shortcut label</label><input type="text" id="wlShortcut" placeholder="(optional) name of the participant-PC desktop shortcuts"></div>'+
     '<div class="mfield"><label>Map</label><select id="wlMap">'+wizMapOptions("")+'</select></div>'+
     '<div class="mfield" style="align-items:start"><label>Seats</label>'+
       '<textarea id="wlSeats" rows="3" placeholder="one per line, or space / comma separated" style="font-family:var(--mono);font-size:12px"></textarea></div>'+
     '<div style="text-align:right"><button class="btn" onclick="wizAddLab()">Add lab</button></div>'+
     '<div class="modal-err" id="wlErr"></div></div>';
 }
+var ROOM_HELP="If the lab PCs already have shortcuts that open a room, put that room's name here so participants land in it; otherwise leave it as study.";
 function wizAddLab(){
   var name=(val("wlName")||"").trim(),host=(val("wlHost")||"").trim();
   var seats=(val("wlSeats")||"").trim().split(/[\s,]+/).filter(Boolean);
   var map=val("wlMap")||"";
+  var room=(val("wlRoom")||"").trim()||"study";
+  var shortcut=(val("wlShortcut")||"").trim();
   var e=el("wlErr");
   if(!name){e.style.display="block";e.textContent="Give the lab a name.";return;}
   if(!host){e.style.display="block";e.textContent="Enter the lab's IP address or host name.";return;}
   if(!seats.length){e.style.display="block";e.textContent="Add at least one seat.";return;}
-  WIZ.labs.push({name:name,host:host,seats:seats,map:map});
+  WIZ.labs.push({name:name,host:host,seats:seats,map:map,default_room:room,shortcut_label:shortcut});
   wizRender();
 }
 function wizRemoveLab(i){WIZ.labs.splice(i,1);wizRender();}

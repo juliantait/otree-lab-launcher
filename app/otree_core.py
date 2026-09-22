@@ -391,9 +391,16 @@ def build_lab_info(labs, database, admin, default_lab=None):
             "name": name.strip() or lab_id,
             "host": host.strip(),
             "seats": [str(s) for s in parsed],
+            # Per-lab default room (missing/blank -> "study"); drives the built-in
+            # Lab default config + new configs on this machine.
+            "default_room": sanitize_room_name(raw.get("default_room")),
         }
         if str(raw.get("map") or "").strip():
             entry["map"] = str(raw["map"]).strip()
+        # Optional: the human name the participant-PC desktop shortcuts are saved
+        # as, shown in the launch briefing. Only written when set.
+        if str(raw.get("shortcut_label") or "").strip():
+            entry["shortcut_label"] = str(raw["shortcut_label"]).strip()
         out_labs[lab_id] = entry
         if first_id is None:
             first_id = lab_id
@@ -480,6 +487,20 @@ AUTH_LEVELS = ["STUDY", "DEMO", "none"]
 
 # The room name is static: it must match the room the shortcuts point at.
 DEFAULT_ROOM_NAME = "study"
+
+
+def sanitize_room_name(name, default=DEFAULT_ROOM_NAME):
+    """A lab's default room name, coerced to a non-empty single token.
+
+    Whitespace is trimmed and any internal whitespace collapsed to underscores
+    (an oTree room name is a single token). A blank/None value falls back to
+    ``default`` ("study"). Other characters are left as-is -- this only keeps the
+    value a single non-empty token, it does NOT over-restrict, so an existing
+    room name a lab already uses is preserved verbatim.
+    """
+    token = re.sub(r"\s+", "_", str(name or "").strip())
+    return token or default
+
 
 SEAT_DEFAULT = "lab_default"
 SEAT_EDIT = "edit"
@@ -1158,8 +1179,20 @@ def settings_path_for(project_path):
     return os.path.join((project_path or "").strip(), "settings.py")
 
 
-def inspect_settings(project_path):
+def _normalize_block_text(text):
+    """The lab block text with per-line trailing whitespace and surrounding blank
+    lines dropped, so two copies that differ only in trailing whitespace / a
+    trailing newline compare equal (used to spot a STALE, drifted block body)."""
+    lines = [line.rstrip() for line in str(text).splitlines()]
+    return "\n".join(lines).strip("\n")
+
+
+def inspect_settings(project_path, lab_room=None):
     """Look for the lab support block in a project's settings.py.
+
+    ``lab_room`` is this lab's default room (defaults to "study"); the room
+    comparison (``own_room`` / ``uses_lab_room``) is made against IT, not a
+    hardcoded "study", so a lab that runs a different room is judged correctly.
 
     Returns a dict:
       readable       could settings.py be read at all
@@ -1167,11 +1200,21 @@ def inspect_settings(project_path):
       complete       both markers are present
       rooms_after    a top level `ROOMS =` line appears after the block
       rooms_line     the line number of that assignment, or 0
+      own_room       the project itself defines a room named like the lab room
+      uses_lab_room  the lab room will exist at launch (own room or a live block)
+      stale          the block IS present but its body is an OLD version (differs
+                     from the current core.LAB_BLOCK, e.g. the pre-no-seats-fix
+                     block that guards the room on OTREE_LAB_LABEL_FILE); a
+                     refresh_block() would bring it up to date
+      needs_refresh  the block is present but outdated/cut-off, so refresh_block()
+                     would fix it (stale, or complete markers missing)
       message        one line of plain language for the GUI
     """
+    lab_room = sanitize_room_name(lab_room)
     result = {"readable": False, "has_block": False, "complete": False,
               "rooms_after": False, "rooms_line": 0, "path": settings_path_for(project_path),
-              "own_room": False, "uses_lab_room": False, "message": ""}
+              "own_room": False, "uses_lab_room": False, "stale": False,
+              "needs_refresh": False, "lab_room": lab_room, "message": ""}
     try:
         with open(result["path"], "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()
@@ -1200,12 +1243,27 @@ def inspect_settings(project_path):
                 result["rooms_line"] = index + 1
                 break
 
+    # STALE: the block is complete but its body no longer matches the current
+    # core.LAB_BLOCK (a drifted / pre-no-seats-fix copy). Compared with trailing
+    # whitespace ignored so cosmetics never trip it. A refresh_block() replaces
+    # it in place with the current block.
+    if result["complete"]:
+        region = "\n".join(lines[start:end + 1])
+        result["stale"] = (_normalize_block_text(region)
+                           != _normalize_block_text(LAB_BLOCK))
+    result["needs_refresh"] = bool(result["has_block"]
+                                   and (result["stale"] or not result["complete"]))
+
     # Does the project already wire up the lab's experimental room? Either the
     # lab support block does it, or the project defines a room named like ours itself.
     own_room = bool(re.search(
-        r"""name\s*=\s*['"]%s['"]""" % re.escape(DEFAULT_ROOM_NAME), text))
+        r"""name\s*=\s*['"]%s['"]""" % re.escape(lab_room), text))
     result["own_room"] = own_room
-    result["uses_lab_room"] = (result["complete"] and not result["rooms_after"]) or own_room
+    # A STALE block cannot be trusted to define the lab room at launch (the old
+    # body guarded the room on the seat-file variable), so it does not count.
+    result["uses_lab_room"] = (
+        (result["complete"] and not result["rooms_after"] and not result["stale"])
+        or own_room)
 
     if not result["has_block"]:
         result["message"] = ("settings.py does not have the oTree lab support block, so the "
@@ -1217,6 +1275,9 @@ def inspect_settings(project_path):
     elif not result["complete"]:
         result["message"] = ("The oTree lab support block in settings.py looks cut off: its end "
                              "marker is missing.")
+    elif result["stale"]:
+        result["message"] = ("settings.py has an OUTDATED oTree lab support block. Refresh it so "
+                             "it picks up the latest lab room and no-seats fixes.")
     else:
         result["message"] = "settings.py has the oTree lab support block."
     return result
@@ -1290,6 +1351,82 @@ def append_block(project_path):
             except OSError:
                 pass
             raise
+    return backup, path
+
+
+def _write_settings_atomically(path, folder, new_text):
+    """Fsync ``new_text`` to a same-dir temp file and os.replace it onto ``path``,
+    preserving the original file mode. Shared by append_block/refresh_block."""
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=folder, prefix=".settings-", suffix=".tmp", delete=False
+    )
+    tmp_name = handle.name
+    try:
+        handle.write(new_text)
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        try:
+            os.chmod(tmp_name, stat.S_IMODE(os.stat(path).st_mode))
+        except OSError:
+            pass
+        os.replace(tmp_name, path)
+    except Exception:
+        handle.close()
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def refresh_block(project_path):
+    """Atomically replace an OUTDATED lab support block with the current one.
+
+    ``append_block`` refuses (``BlockAlreadyPresent``) when a marker is present,
+    so it cannot fix a project stuck on an old block (e.g. Micro 1 on the
+    pre-no-seats-fix body). This is the sanctioned refresh: under the SAME
+    exclusive lock + timestamped ``.bak`` + temp-file/fsync/os.replace machinery
+    as :func:`append_block`, it removes the existing block region -- from the
+    ``BLOCK_MARKER`` banner line to the ``BLOCK_END_MARKER`` line (or to EOF when
+    the end marker is missing, matching the block's own "delete from this banner
+    to the END of the file" contract) -- and appends the current
+    :data:`LAB_BLOCK`. One atomic op, fully revertible from the backup.
+
+    When no block is present it simply appends the current block (so it is safe to
+    call in either state). Returns ``(backup, settings_path)``; raises OSError on a
+    read/write problem.
+    """
+    path = settings_path_for(project_path)
+    folder = os.path.dirname(path) or "."
+    with exclusive_file_lock(path + ".lock"):
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        lines = text.splitlines(keepends=True)
+        start = end = -1
+        for index, line in enumerate(lines):
+            if BLOCK_MARKER in line and start < 0:
+                start = index
+            if BLOCK_END_MARKER in line:
+                end = index
+        # A microsecond-stamped, collision-proof backup name (as append_block).
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = path + "." + stamp + ".bak"
+        while os.path.exists(backup):
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            backup = path + "." + stamp + ".bak"
+        shutil.copy2(path, backup)
+        if start >= 0:
+            # Remove the old region: banner..end-marker inclusive, or banner..EOF
+            # when the end marker is missing (the block's documented removal span).
+            last = end if end >= start else len(lines) - 1
+            kept = "".join(lines[:start] + lines[last + 1:])
+        else:
+            kept = text
+        kept = kept.rstrip("\n")
+        separator = "" if not kept else "\n\n"
+        new_text = kept + separator + LAB_BLOCK
+        _write_settings_atomically(path, folder, new_text)
     return backup, path
 
 
@@ -1437,21 +1574,29 @@ def write_lab_marker(lab, path=None):
 _MARKER_UNSET = object()
 
 
-def apply_lab_marker(presets, marker=_MARKER_UNSET):
+def apply_lab_marker(presets, marker=_MARKER_UNSET, lab_presets=None):
     """Point the built-in Lab default's lab at this machine's lab, in place.
 
     The built-in default is app-owned, so its lab tracks lab.local. User configs
     are never touched. A no-op when the marker is unset (first launch), which
     leaves the built-in on its code default. Any non-empty lab id is honoured,
     so a machine identified as an added lab points the default there too.
+
+    When ``lab_presets`` is given, the built-in default's ``room_name`` is also
+    re-derived from that lab's ``default_room`` (the LIVE source of truth, so a
+    room edited in Lab Settings updates the Lab default at once). Without
+    ``lab_presets`` the room is left as :func:`default_preset` set it.
     """
     if marker is _MARKER_UNSET:
         marker = read_lab_marker()
     if not marker:
         return presets
+    room = lab_default_room(lab_presets, marker) if lab_presets is not None else None
     for preset in presets:
         if is_builtin(preset):
             preset["lab"] = marker
+            if room:
+                preset["room_name"] = room
     return presets
 
 
@@ -1487,6 +1632,11 @@ def default_preset():
     marker = read_lab_marker()
     if marker:
         preset["lab"] = marker
+        # ...and the default config's room follows THAT lab's default_room, so on
+        # a lab PC the Lab default opens the room the lab actually uses (falls
+        # back to "study"). The base is lab_info.json; a room later edited in Lab
+        # Settings is re-applied live via apply_lab_marker(..., lab_presets=...).
+        preset["room_name"] = lab_default_room(default_lab_presets(), marker)
     return preset
 
 
@@ -2148,6 +2298,8 @@ def default_lab_presets():
             "display": raw.get("display", True),
             "geometry": raw.get("geometry", LAB_GEO_GRID),
             "map": resolve_lab_map(raw.get("map"), maps_table),
+            "default_room": raw.get("default_room"),
+            "shortcut_label": raw.get("shortcut_label", ""),
             "builtin": True,
         }))
     return presets
@@ -2236,7 +2388,35 @@ def normalize_lab_preset(preset):
         out["cols"] = max(0, int(out.get("cols", 0)))
     except (TypeError, ValueError):
         out["cols"] = 0
+    # Per-lab default room name (drives the built-in Lab default config + new
+    # configs). Missing/blank -> "study", so an older lab_info.json / store with
+    # no room field keeps working unchanged.
+    out["default_room"] = sanitize_room_name(out.get("default_room"))
+    # Optional human name of the participant-PC desktop shortcuts (e.g.
+    # "Experiment"). Surfaced only in the launch briefing; blank is fine.
+    out["shortcut_label"] = str(out.get("shortcut_label", "") or "").strip()
     return out
+
+
+def lab_default_room(lab_presets, lab_id):
+    """The default room for ``lab_id`` among ``lab_presets`` ("study" fallback).
+
+    Backward compatible: a lab preset with no ``default_room`` (an older store or
+    lab_info.json) yields :data:`DEFAULT_ROOM_NAME`, and an unknown lab id does
+    too, so nothing that resolves a room can break.
+    """
+    preset = find_lab_preset(lab_id, lab_presets)
+    if preset is None:
+        return DEFAULT_ROOM_NAME
+    return sanitize_room_name(preset.get("default_room"))
+
+
+def lab_shortcut_label(lab_presets, lab_id):
+    """The participant-PC desktop-shortcut label for ``lab_id`` ("" when unset)."""
+    preset = find_lab_preset(lab_id, lab_presets)
+    if preset is None:
+        return ""
+    return str(preset.get("shortcut_label", "") or "").strip()
 
 
 def lab_presets_from_store(extra):
@@ -2382,11 +2562,14 @@ def validate_lab_preset_fields(name, ip, seats):
     return True, "", labels
 
 
-def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_GRID, cols=0):
+def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_GRID, cols=0,
+                   default_room=None, shortcut_label=None):
     """Validate and append a new lab preset. Returns (ok, message, new_list, preset).
 
     ``cols`` is an optional column count for the plain-grid seat map, so an added
-    lab can be drawn to roughly match the room's shape (0 = auto).
+    lab can be drawn to roughly match the room's shape (0 = auto). ``default_room``
+    is the per-lab room (blank/None -> "study") and ``shortcut_label`` the optional
+    participant-PC desktop-shortcut name.
     """
     ok, message, labels = validate_lab_preset_fields(name, ip, seats)
     if not ok:
@@ -2400,6 +2583,8 @@ def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_
         "display": bool(display),
         "geometry": geometry,
         "cols": cols,
+        "default_room": default_room,
+        "shortcut_label": shortcut_label or "",
         "builtin": False,
     })
     presets.append(preset)
@@ -2407,8 +2592,13 @@ def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_
 
 
 def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, display=None,
-                      cols=None):
-    """Edit an existing lab preset in place (by id). Returns (ok, message, new_list, preset)."""
+                      cols=None, default_room=None, shortcut_label=None):
+    """Edit an existing lab preset in place (by id). Returns (ok, message, new_list, preset).
+
+    ``default_room`` / ``shortcut_label`` are only changed when passed (None leaves
+    the stored value); an empty string is a real value and clears the shortcut
+    label, while a blank room name coerces back to "study".
+    """
     presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
     target = None
     for preset in presets:
@@ -2433,6 +2623,10 @@ def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, displ
             target["cols"] = max(0, int(cols))
         except (TypeError, ValueError):
             target["cols"] = 0
+    if default_room is not None:
+        target["default_room"] = sanitize_room_name(default_room)
+    if shortcut_label is not None:
+        target["shortcut_label"] = str(shortcut_label or "").strip()
     return True, "Updated the lab %r." % target["name"], presets, target
 
 
@@ -3187,15 +3381,22 @@ CAUTION_TEXT = ("Caution: shared lab database. It may be reset between sessions.
 
 
 # Rooms whose per-seat participant links the lab PCs' desktop shortcuts open
-# (http://HOST:PORT/room/ROOM?participant_label=SEAT). For now this is just the
-# one lab-shortcut default room; see _ai/ROOM_PARTICIPANT_LINKS_NOTE.md for how
-# to generalise it to a per-lab list later.
+# (http://HOST:PORT/room/ROOM?participant_label=SEAT). The lab-shortcut room is
+# per-lab now (a lab's ``default_room``); this tuple is only the fallback used
+# when no lab room is supplied. See _ai/ROOM_PARTICIPANT_LINKS_NOTE.md.
 PARTICIPANT_LINK_ROOMS = (DEFAULT_ROOM_NAME,)
 
 
-def room_has_participant_links(name):
+def room_has_participant_links(name, lab_room=None):
     """True when the lab PC desktop shortcuts already open this room's per-seat
-    links (so participants can join straight from the lab computers)."""
+    links (so participants can join straight from the lab computers).
+
+    ``lab_room`` is the lab's own default room; when given, the shortcuts open
+    exactly that room. Without it we fall back to the built-in default room, so
+    older callers keep their behaviour.
+    """
+    if lab_room:
+        return str(name).strip() == sanitize_room_name(lab_room)
     return str(name).strip() in PARTICIPANT_LINK_ROOMS
 
 
@@ -3224,7 +3425,8 @@ def launch_briefing(cfg, lab_presets=None):
     c = normalize_config(cfg)
     host = resolve_host(c, lab_presets)
     lab = c["lab"]
-    preset = find_lab_preset(lab, _presets_or_default(lab_presets))
+    resolved_presets = _presets_or_default(lab_presets)
+    preset = find_lab_preset(lab, resolved_presets)
     if lab == LAB_LOCAL:
         lab_label = LOCAL_LAB_LABEL
     elif lab == LAB_CUSTOM:
@@ -3234,9 +3436,15 @@ def launch_briefing(cfg, lab_presets=None):
     else:
         lab_label = lab or "Custom host"
 
+    # This lab's own default room + the human name of its participant-PC desktop
+    # shortcuts (both blank-safe): the briefing names the right room and shortcut
+    # automatically instead of hardcoding "study".
+    lab_room = lab_default_room(resolved_presets, lab)
+    shortcut_label = lab_shortcut_label(resolved_presets, lab)
+
     port = (c["port"] or "8000").strip()
     room = c["room_name"].strip() or DEFAULT_ROOM_NAME
-    is_study = (room == DEFAULT_ROOM_NAME)
+    is_study = (room == lab_room)
     # The mode a launch will REALLY use: no seats (absent/empty file, no default
     # seats) falls back to the open room, so the briefing shows the open-room
     # summary rather than a phantom seat board.
@@ -3259,15 +3467,16 @@ def launch_briefing(cfg, lab_presets=None):
     # A room with participant PC links has a lab desktop shortcut (which encodes
     # both the room and which server); the briefing names that shortcut instead
     # of a raw link. A room without one has no shortcut, so the briefing gives
-    # the manual per-seat link to open on each computer.
-    has_participant_links = room_has_participant_links(room)
+    # the manual per-seat link to open on each computer. The shortcut room is the
+    # lab's OWN default_room now, not a hardcoded "study".
+    has_participant_links = room_has_participant_links(room, lab_room)
     return {
         "lab_label": lab_label,
         "host": host,
         "port": port,
         "room": room,
         "is_study": is_study,
-        "default_room": DEFAULT_ROOM_NAME,
+        "default_room": lab_room,
         "open_room": open_room,
         "seat_mode": seat_mode,
         "seat_count": len(seats),
@@ -3276,8 +3485,48 @@ def launch_briefing(cfg, lab_presets=None):
         "link_template": link("SEAT"),
         "has_participant_links": has_participant_links,
         "shortcut_name": study_shortcut_name(lab_label),
+        # The human name of THIS lab's participant-PC desktop shortcuts (blank
+        # when the lab did not set one). When set, the briefing tells the user to
+        # open the "<label>" shortcut on each participant PC.
+        "shortcut_label": shortcut_label,
         "caution": caution,
         "caution_text": CAUTION_TEXT if caution else "",
+    }
+
+
+def lab_room_mismatch(cfg, lab_presets=None):
+    """Non-blocking launch warning when a config's room lags the lab's room.
+
+    Existing SAVED configs keep their own room when a lab's default_room is later
+    changed, but the launch screen should point it out. Returns ``None`` when the
+    config's room already matches its lab's CURRENT default room (or the lab has
+    no lab room -- Custom / Local / an unknown id), otherwise a dict::
+
+        {config_room, lab_room, lab_label, message}
+
+    describing a YELLOW, non-blocking warning with a one-click "Use new default".
+    The config stays fully runnable as-is; both faces call this so they agree on
+    when the warning fires (only on a real difference, silent when they match).
+    """
+    c = normalize_config(cfg)
+    lab = c["lab"]
+    if lab in (LAB_CUSTOM, LAB_LOCAL):
+        return None
+    resolved = _presets_or_default(lab_presets)
+    preset = find_lab_preset(lab, resolved)
+    if preset is None:
+        return None
+    lab_room = lab_default_room(resolved, lab)
+    config_room = c["room_name"].strip() or DEFAULT_ROOM_NAME
+    if config_room == lab_room:
+        return None
+    lab_label = preset.get("name") or lab
+    return {
+        "config_room": config_room,
+        "lab_room": lab_room,
+        "lab_label": lab_label,
+        "message": ("The lab default room is now '%s' (this config uses '%s'). Use it?"
+                    % (lab_room, config_room)),
     }
 
 
@@ -3392,12 +3641,14 @@ def project_has_live_lab_block(project_path):
     by the pre-launch room check and the room picker so they agree on when a
     block-having project also supports the launcher's lab room.
 
-    An absent, cut-off (incomplete) or overridden block returns False, so the
-    genuine problems still surface. Unreadable settings.py -> False too.
+    An absent, cut-off (incomplete), overridden or STALE block returns False, so
+    the genuine problems still surface (a stale pre-no-seats-fix block guarded the
+    room on the seat file, so it would NOT define an open room at launch).
+    Unreadable settings.py -> False too.
     """
     state = inspect_settings(project_path)
     return bool(state.get("has_block") and state.get("complete")
-                and not state.get("rooms_after"))
+                and not state.get("rooms_after") and not state.get("stale"))
 
 
 def enumerate_rooms_for_picker(project_path, lab_room=None, timeout=8.0,

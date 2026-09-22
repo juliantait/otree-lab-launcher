@@ -73,8 +73,14 @@ LAB_LOCAL = core.LAB_LOCAL
 
 AUTH_LEVELS = ["STUDY", "DEMO", "none"]
 
-# The room name is static: it must match the room the shortcuts point at.
+# The default room a lab uses. Editable per lab (wizard + Lab Settings); this is
+# only the fallback when a lab sets none.
 DEFAULT_ROOM_NAME = "study"
+
+# Shared help text for the per-lab "Default room" field (wizard + Lab Settings).
+ROOM_TOOLTIP_TEXT = (
+    "If the lab PCs already have shortcuts that open a room, put that room's name "
+    "here so participants land in it; otherwise leave it as study.")
 
 SEAT_DEFAULT = "lab_default"
 SEAT_EDIT = "edit"
@@ -499,61 +505,16 @@ def settings_path_for(project_path):
     return os.path.join((project_path or "").strip(), "settings.py")
 
 
-def inspect_settings(project_path):
+def inspect_settings(project_path, lab_room=None):
     """Look for the lab support block in a project's settings.py.
 
-    Returns a dict:
-      readable       could settings.py be read at all
-      has_block      the start marker is present
-      complete       both markers are present
-      rooms_after    a top level `ROOMS =` line appears after the block
-      rooms_line     the line number of that assignment, or 0
-      message        one line of plain language for the GUI
+    De-duplicated: delegates to the single implementation in
+    :func:`otree_core.inspect_settings`, so the Tk and web faces share one
+    detector (including the ``lab_room`` comparison and the ``stale`` /
+    ``needs_refresh`` signals). ``lab_room`` is this lab's default room ("study"
+    fallback).
     """
-    result = {"readable": False, "has_block": False, "complete": False,
-              "rooms_after": False, "rooms_line": 0, "path": settings_path_for(project_path),
-              "message": ""}
-    try:
-        with open(result["path"], "r", encoding="utf-8", errors="replace") as handle:
-            text = handle.read()
-    except OSError:
-        result["message"] = "No settings.py to check yet."
-        return result
-
-    result["readable"] = True
-    lines = text.splitlines()
-    start = end = -1
-    for index, line in enumerate(lines):
-        if BLOCK_MARKER in line and start < 0:
-            start = index
-        if BLOCK_END_MARKER in line:
-            end = index
-    result["has_block"] = start >= 0
-    result["complete"] = start >= 0 and end > start
-
-    if start >= 0:
-        # A top level rebinding of ROOMS after the block silently throws the
-        # room away. Indented ROOMS lines inside the block itself are fine.
-        after = end if end > start else start
-        for index in range(after + 1, len(lines)):
-            if re.match(r"^ROOMS\s*=", lines[index]):
-                result["rooms_after"] = True
-                result["rooms_line"] = index + 1
-                break
-
-    if not result["has_block"]:
-        result["message"] = ("settings.py does not have the oTree lab support block, so the "
-                             "lab room and the seat board will not work.")
-    elif result["rooms_after"]:
-        result["message"] = ("settings.py assigns ROOMS on line %d, after the oTree lab support "
-                             "block. That replaces the lab room. Move the block to the end of "
-                             "the file." % result["rooms_line"])
-    elif not result["complete"]:
-        result["message"] = ("The oTree lab support block in settings.py looks cut off: its end "
-                             "marker is missing.")
-    else:
-        result["message"] = "settings.py has the oTree lab support block."
-    return result
+    return core.inspect_settings(project_path, lab_room)
 
 
 def append_block(project_path):
@@ -566,6 +527,18 @@ def append_block(project_path):
     own code. Raises ``core.BlockAlreadyPresent`` if the block is already there.
     """
     return core.append_block(project_path)
+
+
+def refresh_block(project_path):
+    """Atomically replace an outdated lab support block with the current one.
+
+    Delegates to :func:`otree_core.refresh_block` (same lock + timestamped .bak +
+    temp/fsync/os.replace machinery as append_block): it removes the old block
+    region and appends the current ``core.LAB_BLOCK``. Fixes a project stuck on an
+    old/stale block, which ``append_block`` cannot (it refuses when a marker is
+    present). Returns ``(backup, settings)``.
+    """
+    return core.refresh_block(project_path)
 
 
 # ---------------------------------------------------------------------------
@@ -735,20 +708,26 @@ def write_lab_marker(lab, path=None):
 _MARKER_UNSET = object()
 
 
-def apply_lab_marker(presets, marker=_MARKER_UNSET):
+def apply_lab_marker(presets, marker=_MARKER_UNSET, lab_presets=None):
     """Point the built-in Lab default's lab at this machine's lab, in place.
 
     The built-in default is app-owned, so its lab tracks lab.local. User configs
     are never touched. A no-op when the marker is unset (first launch). Any
-    non-empty lab id is honoured. (Mirror of otree_core.)
+    non-empty lab id is honoured. When ``lab_presets`` is given the built-in
+    default's ``room_name`` also follows that lab's default_room (live, so a room
+    edited in Lab Settings updates the Lab default at once). (Mirror of
+    otree_core.)
     """
     if marker is _MARKER_UNSET:
         marker = read_lab_marker()
     if not marker:
         return presets
+    room = core.lab_default_room(lab_presets, marker) if lab_presets is not None else None
     for preset in presets:
         if is_builtin(preset):
             preset["lab"] = marker
+            if room:
+                preset["room_name"] = room
     return presets
 
 
@@ -794,6 +773,10 @@ def default_preset():
     marker = read_lab_marker()
     if marker:
         preset["lab"] = marker
+        # The default config's room follows the machine lab's default_room (falls
+        # back to "study"). Base is lab_info.json; a room edited later in Lab
+        # Settings is re-applied live via apply_lab_marker(..., lab_presets=...).
+        preset["room_name"] = core.lab_default_room(core.default_lab_presets(), marker)
     return preset
 
 
@@ -1628,14 +1611,15 @@ class LauncherApp(object):
         # on the same thread does not deadlock. See _mutate_store / _persist.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = load_store(self.store_path)
-        # This machine's lab identity (lab.local) configures the built-in
-        # default's lab. Applied in memory to the built-in only; user configs
-        # untouched. A no-op on first launch (marker unset).
-        apply_lab_marker(self.presets)
         # Lab presets (Feature 4): the lab selector reads these instead of the
         # hardcoded tiles. Seeded from the constants for a fresh store, so the
         # two built-in labs are always present and old configs still resolve.
         self.lab_presets = core.lab_presets_from_store(self.store_extra)
+        # This machine's lab identity (lab.local) configures the built-in
+        # default's lab AND its room (from that lab's default_room). Applied in
+        # memory to the built-in only; user configs untouched. A no-op on first
+        # launch (marker unset).
+        apply_lab_marker(self.presets, lab_presets=self.lab_presets)
         if not os.path.exists(self.store_path):
             try:
                 save_store(self.presets, self.store_extra, self.store_path)
@@ -3507,6 +3491,14 @@ class LauncherApp(object):
     def new_blank(self):
         blank = dict(DEFAULT_CONFIG)
         blank["project_path"] = ""
+        # A new config's room follows the ACTIVE lab's default_room (the selector's
+        # lab, else this machine's lab), not the hardcoded "study".
+        try:
+            ref_lab = self.var["lab"].get().strip()
+        except (KeyError, tk.TclError, AttributeError):
+            ref_lab = ""
+        ref_lab = ref_lab or read_lab_marker() or blank.get("lab", "")
+        blank["room_name"] = core.lab_default_room(self.lab_presets, ref_lab)
         # Start a new blank config on the lab's chosen default database (set in
         # Lab Settings > Default database); falls back to the code default.
         default_db = str(self.store_extra.get("default_database", "")).strip()
@@ -3587,9 +3579,10 @@ class LauncherApp(object):
     def _create_lab_for_identity(self, dialog):
         """From the first-run chooser: run the same add-a-lab flow as Lab
         Settings, then adopt the new lab as this machine's identity."""
-        def on_save(name, ip, seats, cols=0):
+        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None):
             ok, message, new_list, preset = core.add_lab_preset(
-                self.lab_presets, name, ip, seats, cols=cols)
+                self.lab_presets, name, ip, seats, cols=cols,
+                default_room=default_room, shortcut_label=shortcut_label)
             if ok:
                 with self._store_lock:
                     self.store_extra["lab_presets"] = new_list
@@ -3629,8 +3622,8 @@ class LauncherApp(object):
             if ok:
                 self.store_extra["lab_presets"] = new_list
                 self.lab_presets = core.lab_presets_from_store(self.store_extra)
-            # Point the built-in default's lab at this machine's lab.
-            apply_lab_marker(self.presets, lab_id)
+            # Point the built-in default's lab (and room) at this machine's lab.
+            apply_lab_marker(self.presets, lab_id, lab_presets=self.lab_presets)
             self._persist_store()
         if dialog is not None:
             try:
@@ -3735,16 +3728,35 @@ class LauncherApp(object):
     def _maybe_offer_get_ready(self, path):
         """After a folder is chosen, offer a one-click lab setup if it is not
         lab-ready. Only when settings.py is present and the lab support block is
-        missing, cut off, or overridden by a later ROOMS line; shown at most
-        once per selection because this is the only place that calls it."""
-        state = inspect_settings(path)
+        missing, cut off, overridden by a later ROOMS line, or STALE (an outdated
+        block body); shown at most once per selection because this is the only
+        place that calls it. A stale/outdated block offers a REFRESH (which
+        replaces it in place) instead of an append."""
+        state = inspect_settings(path, self._lab_room())
         if not state["readable"]:
+            return
+        # A present-but-outdated block (stale, or cut-off) -> REFRESH replaces it.
+        if state.get("needs_refresh"):
+            GetReadyDialog(
+                self.root, self.fonts, self._refresh_block_for_lab,
+                headline="This project's oTree lab support block is out of date.",
+                subline="One click refreshes it to the current block.",
+                button_label="Refresh lab block")
             return
         not_ready = (not state["has_block"] or not state["complete"]
                      or state["rooms_after"])
         if not not_ready:
             return
         GetReadyDialog(self.root, self.fonts, self._get_ready_for_lab)
+
+    def _lab_room(self):
+        """This machine/config lab's default room, for the settings inspector."""
+        try:
+            lab = self.var["lab"].get().strip()
+        except (KeyError, tk.TclError, AttributeError):
+            lab = ""
+        lab = lab or read_lab_marker() or ""
+        return core.lab_default_room(self.lab_presets, lab)
 
     def _get_ready_for_lab(self):
         """Append the block on behalf of the Get-ready popup.
@@ -3771,6 +3783,30 @@ class LauncherApp(object):
         self.log("Appended the oTree lab support block to %s" % path, "ok")
         self.refresh_block_status()
         return True, "Done. Now press Launch, pick your lab, and go."
+
+    def _refresh_block_for_lab(self):
+        """Replace an OUTDATED lab support block with the current one.
+
+        Uses core.refresh_block (same lock/atomic/backup machinery as append):
+        it removes the old block region and appends the current block, one atomic
+        op with a timestamped .bak. Fixes a project stuck on an old block (the
+        Micro 1 case). Returns (ok, message) for the popup to show inline."""
+        cfg = self.form_values()
+        state = inspect_settings(cfg["project_path"], self._lab_room())
+        if not state["readable"]:
+            return False, "Could not read settings.py, so nothing was changed."
+        if not state["has_block"]:
+            # No block to refresh -> fall back to a normal append.
+            return self._get_ready_for_lab()
+        try:
+            backup, path = refresh_block(cfg["project_path"])
+        except OSError as error:
+            self.log("Could not refresh the block: %s" % error, "err")
+            return False, "Could not update settings.py: %s" % error
+        self.log("Backed up settings.py to %s" % backup, "ok")
+        self.log("Refreshed the oTree lab support block in %s" % path, "ok")
+        self.refresh_block_status()
+        return True, "Refreshed. Now press Launch, pick your lab, and go."
 
     # -- one-click shortcut ------------------------------------------------
 
@@ -3846,6 +3882,9 @@ class LauncherApp(object):
         newly shown lab appears (and a hidden one disappears) in the tiles, with
         the single-lab forced default honored."""
         self.lab_presets = core.lab_presets_from_store(self.store_extra)
+        # A lab's default_room may have just changed; re-derive the built-in Lab
+        # default's room from the machine lab live (marker unset -> no-op).
+        apply_lab_marker(self.presets, lab_presets=self.lab_presets)
         self._rebuild_lab_tiles()
         self._apply_lab_view()
         self.refresh_previews()
@@ -3932,12 +3971,12 @@ class LauncherApp(object):
 
     def enumerate_rooms(self, project_path):
         # Block-aware: when the project has a live lab support block the picker
-        # also offers the lab room the block defines at launch (default "study"),
-        # so a just-appended block does not hide the room the user needs.
-        return core.enumerate_rooms_for_picker(project_path)
+        # also offers the lab room the block defines at launch (this lab's own
+        # default_room), so a just-appended block does not hide the room needed.
+        return core.enumerate_rooms_for_picker(project_path, self._lab_room())
 
     def set_room(self, name):
-        name = (name or "").strip() or DEFAULT_ROOM_NAME
+        name = (name or "").strip() or self._lab_room()
         self.var["room_name"].set(name)
         self.log("Room set to %r for this run." % name, "info")
 
@@ -4014,6 +4053,20 @@ class LauncherApp(object):
                 issue["field"] = failure["field"]
             self._attach_inline_fix(issue, failure, cfg)
             issues.append(issue)
+        # Non-blocking: the lab's default room changed since this config was saved.
+        # One click switches THIS config to the lab default; ignoring it and
+        # launching as-is is fine (silent when the rooms already match).
+        mismatch = core.lab_room_mismatch(cfg, self.lab_presets)
+        if mismatch:
+            def _use_lab_room(cfg=cfg, room=mismatch["lab_room"]):
+                cfg["room_name"] = room
+                self.set_room(room)
+                return True, "Room set to %r (the lab default)." % room
+            issues.append({
+                "level": "warn", "title": mismatch["message"],
+                "hint": "Existing saved configs keep their room; this switches only "
+                        "this config. You can also just launch as-is.",
+                "fix": _use_lab_room, "fix_label": "Use new default", "info": ""})
         # A hard blocker on a field suppresses the softer warning about that same
         # field: with no project folder, only the must-fix (with Choose folder…)
         # shows, not also the preflight "Project folder not found" warning.
@@ -4592,7 +4645,8 @@ class GetReadyDialog(object):
 
     WRAP = 372
 
-    def __init__(self, parent, fonts, on_ready):
+    def __init__(self, parent, fonts, on_ready, headline=None, subline=None,
+                 button_label=None):
         self.parent = parent
         self.fonts = fonts
         self.on_ready = on_ready
@@ -4616,14 +4670,14 @@ class GetReadyDialog(object):
 
         self.headline = tk.Label(
             body,
-            text="This project is not set up for the lab yet.",
+            text=headline or "This project is not set up for the lab yet.",
             bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold,
             anchor="w", justify="left", wraplength=self.WRAP)
         self.headline.grid(row=0, column=0, sticky="ew")
 
         self.subline = tk.Label(
             body,
-            text="One click gets it ready.",
+            text=subline or "One click gets it ready.",
             bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
             anchor="w", justify="left", wraplength=self.WRAP)
         self.subline.grid(row=1, column=0, sticky="ew", pady=(7, 0))
@@ -4648,7 +4702,8 @@ class GetReadyDialog(object):
         self.dismiss = ttk.Button(buttons, text="Not now", command=self._close)
         self.dismiss.pack(side="right")
         self.primary = tk.Button(
-            buttons, text="OK, get ready for the lab", command=self._get_ready,
+            buttons, text=button_label or "OK, get ready for the lab",
+            command=self._get_ready,
             font=fonts.bold, bg=COLORS["accent"], fg="#ffffff",
             activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=16, pady=6, cursor="hand2", highlightthickness=0)
@@ -5417,7 +5472,9 @@ class LaunchBriefingDialog(object):
             tk.Label(line, text="Open", bg=COLORS["card"], fg=COLORS["muted"],
                      font=fonts.body).pack(side="left")
             chip = self.room_chip = tk.Label(
-                line, text=briefing.get("shortcut_name", ""), bg=COLORS["accent_soft"],
+                line,
+                text=briefing.get("shortcut_label") or briefing.get("shortcut_name", ""),
+                bg=COLORS["accent_soft"],
                 fg=COLORS["accent"], font=fonts.bold, padx=9, pady=3, highlightthickness=1,
                 highlightbackground=COLORS["accent"], cursor="hand2")
             chip.pack(side="left", padx=7)
@@ -6244,6 +6301,9 @@ class RoomPickerDialog(object):
     def __init__(self, parent, fonts, app):
         self.app = app
         self.fonts = fonts
+        # This lab's default room (pinned + highlighted at the top), not a
+        # hardcoded "study".
+        self.lab_room = app._lab_room()
         self._room_names = []   # real room names, parallel to the listbox rows
         top = self.top = tk.Toplevel(parent)
         top.title("Choose the room")
@@ -6342,7 +6402,7 @@ class RoomPickerDialog(object):
         "study (lab default)". The "with participant PC links" wording lives only
         on the primary button, not in the list."""
         label = name
-        if name == DEFAULT_ROOM_NAME:
+        if name == self.lab_room:
             label += " (lab default)"
         return label
 
@@ -6381,17 +6441,17 @@ class RoomPickerDialog(object):
         """Populate the list: study pinned + highlighted at the top (the lab
         default, with participant PC links), then this project's other rooms."""
         self.listbox.delete(0, "end")
-        self._room_names = [DEFAULT_ROOM_NAME]
-        self.listbox.insert("end", self._room_display(DEFAULT_ROOM_NAME))
+        self._room_names = [self.lab_room]
+        self.listbox.insert("end", self._room_display(self.lab_room))
         self.listbox.itemconfig(0, foreground=COLORS["accent"], selectforeground=COLORS["accent"])
         if result.get("ok"):
             for name in result.get("rooms", []):
-                if name == DEFAULT_ROOM_NAME:
+                if name == self.lab_room:
                     continue
                 self._room_names.append(name)
                 idx = len(self._room_names) - 1
                 self.listbox.insert("end", self._room_display(name))
-                if core.room_has_participant_links(name):
+                if core.room_has_participant_links(name, self.lab_room):
                     self.listbox.itemconfig(idx, foreground=COLORS["accent"],
                                             selectforeground=COLORS["accent"])
             if result.get("empty"):
@@ -6461,9 +6521,33 @@ class LabPresetEditDialog(object):
         self.seats.grid(row=5, column=0, sticky="ew", pady=(2, 0))
         self.seats.insert("1.0", " ".join((preset or {}).get("seats", [])))
 
+        # Per-lab default room (Pass 7) + optional shortcut label. The ℹ icon
+        # carries the room tooltip.
+        roomrow = tk.Frame(body, bg=COLORS["card"])
+        roomrow.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        head = tk.Frame(roomrow, bg=COLORS["card"])
+        head.pack(anchor="w")
+        tk.Label(head, text="Default room", bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.body).pack(side="left")
+        room_info = tk.Label(head, text=" ⓘ", bg=COLORS["card"], fg=COLORS["accent"],
+                             font=fonts.body, cursor="hand2")
+        room_info.pack(side="left")
+        Tooltip(room_info, lambda: ROOM_TOOLTIP_TEXT, delay=100).attach(room_info)
+        room_info.bind("<Button-1>",
+                       lambda _e: messagebox.showinfo("Default room", ROOM_TOOLTIP_TEXT,
+                                                      parent=self.top))
+        self.room = tk.StringVar(top, value=(preset or {}).get("default_room", "")
+                                 or DEFAULT_ROOM_NAME)
+        ttk.Entry(roomrow, textvariable=self.room, width=22).pack(anchor="w", pady=(2, 0))
+        tk.Label(roomrow, text="Shortcut label (optional) — the name the participant-PC "
+                 "desktop shortcuts are saved as", bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.body).pack(anchor="w", pady=(8, 0))
+        self.shortcut = tk.StringVar(top, value=(preset or {}).get("shortcut_label", ""))
+        ttk.Entry(roomrow, textvariable=self.shortcut, width=22).pack(anchor="w", pady=(2, 0))
+
         # Optional column count so the plain-grid seat map matches the room shape.
         colrow = tk.Frame(body, bg=COLORS["card"])
-        colrow.grid(row=6, column=0, sticky="w", pady=(8, 0))
+        colrow.grid(row=7, column=0, sticky="w", pady=(8, 0))
         tk.Label(colrow, text="Columns in the room grid (optional)", bg=COLORS["card"],
                  fg=COLORS["muted"], font=fonts.body).pack(side="left", padx=(0, 8))
         self.cols = tk.StringVar(top, value=str((preset or {}).get("cols", "") or ""))
@@ -6473,10 +6557,10 @@ class LabPresetEditDialog(object):
 
         self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["error"],
                                font=fonts.small, anchor="w", justify="left", wraplength=420)
-        self.status.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        self.status.grid(row=8, column=0, sticky="ew", pady=(6, 0))
 
         buttons = tk.Frame(body, bg=COLORS["card"])
-        buttons.grid(row=8, column=0, sticky="ew", pady=(12, 0))
+        buttons.grid(row=9, column=0, sticky="ew", pady=(12, 0))
         buttons.columnconfigure(0, weight=1)
         ttk.Button(buttons, text="Cancel", command=self._close).grid(row=0, column=0, sticky="w")
         tk.Button(buttons, text="Save", command=self._save, font=fonts.bold,
@@ -6497,7 +6581,8 @@ class LabPresetEditDialog(object):
             self.status.configure(text="Columns must be a whole number, or blank for auto.")
             return
         ok, message = self.on_save(self.name.get(), self.ip.get(),
-                                   self.seats.get("1.0", "end"), cols)
+                                   self.seats.get("1.0", "end"), cols,
+                                   self.room.get(), self.shortcut.get())
         if ok:
             self._close()
         else:
@@ -6847,9 +6932,10 @@ class LabSettingsDialog(object):
         self.app.apply_lab_presets_change()
 
     def _add(self):
-        def on_save(name, ip, seats, cols=0):
+        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None):
             ok, message, new_list, _preset = core.add_lab_preset(
-                self._lab_presets(), name, ip, seats, cols=cols)
+                self._lab_presets(), name, ip, seats, cols=cols,
+                default_room=default_room, shortcut_label=shortcut_label)
             if ok:
                 self._save_presets(new_list)
                 self.preset_status.configure(text=message, fg=COLORS["ok"])
@@ -6863,9 +6949,10 @@ class LabSettingsDialog(object):
             return
         preset = core.find_lab_preset(lab_id, self._lab_presets())
 
-        def on_save(name, ip, seats, cols=0):
+        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None):
             ok, message, new_list, _preset = core.update_lab_preset(
-                self._lab_presets(), lab_id, name=name, ip=ip, seats=seats, cols=cols)
+                self._lab_presets(), lab_id, name=name, ip=ip, seats=seats, cols=cols,
+                default_room=default_room, shortcut_label=shortcut_label)
             if ok:
                 self._save_presets(new_list)
                 self.preset_status.configure(text=message, fg=COLORS["ok"])
@@ -6994,10 +7081,30 @@ class FirstRunWizard(object):
         self.w_map.set("(plain grid)")
         self.w_map.grid(row=1, column=2, padx=(0, 6))
         tk.Button(form, text="Add lab", command=self._add_lab).grid(row=1, column=3)
+
+        # Default room + optional shortcut label (Pass 7). The ℹ icon carries the
+        # room tooltip. Seats move down two rows to make space.
+        room_head = tk.Frame(form)
+        room_head.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        tk.Label(room_head, text="Default room").pack(side="left")
+        room_info = tk.Label(room_head, text=" ⓘ", fg="#2867d6", cursor="hand2")
+        room_info.pack(side="left")
+        Tooltip(room_info, lambda: ROOM_TOOLTIP_TEXT, delay=100).attach(room_info)
+        room_info.bind("<Button-1>",
+                       lambda _e: messagebox.showinfo("Default room", ROOM_TOOLTIP_TEXT,
+                                                      parent=self.top))
+        tk.Label(form, text="Shortcut label (optional)").grid(row=2, column=1, sticky="w",
+                                                              pady=(6, 0))
+        self.w_room = tk.Entry(form, width=18)
+        self.w_room.insert(0, DEFAULT_ROOM_NAME)
+        self.w_room.grid(row=3, column=0, padx=(0, 6), sticky="w")
+        self.w_shortcut = tk.Entry(form, width=18)
+        self.w_shortcut.grid(row=3, column=1, padx=(0, 6), sticky="w")
+
         tk.Label(form, text="Seats (one per line, or space/comma separated):").grid(
-            row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+            row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.w_seats = tk.Text(form, width=68, height=3)
-        self.w_seats.grid(row=3, column=0, columnspan=4, sticky="ew")
+        self.w_seats.grid(row=5, column=0, columnspan=4, sticky="ew")
         row += 1
 
         # --- Database -------------------------------------------------------
@@ -7067,14 +7174,21 @@ class FirstRunWizard(object):
             return
         map_choice = self.w_map.get()
         map_name = "" if map_choice == "(plain grid)" else map_choice
-        self.labs.append({"name": name, "host": host, "seats": seats, "map": map_name})
-        self.lab_list.insert("end", "%s · %s · %d seats%s" % (
-            name, host or "(no host)", len(seats),
-            "" if not map_name else " · map: " + map_name))
+        room = core.sanitize_room_name(self.w_room.get())
+        shortcut = self.w_shortcut.get().strip()
+        self.labs.append({"name": name, "host": host, "seats": seats, "map": map_name,
+                          "default_room": room, "shortcut_label": shortcut})
+        self.lab_list.insert("end", "%s · %s · %d seats · room: %s%s%s" % (
+            name, host or "(no host)", len(seats), room,
+            "" if not map_name else " · map: " + map_name,
+            "" if not shortcut else " · shortcut: " + shortcut))
         self.w_name.delete(0, "end")
         self.w_host.delete(0, "end")
         self.w_seats.delete("1.0", "end")
         self.w_map.set("(plain grid)")
+        self.w_room.delete(0, "end")
+        self.w_room.insert(0, DEFAULT_ROOM_NAME)
+        self.w_shortcut.delete(0, "end")
         self.status.configure(text="")
 
     def _remove_lab(self):

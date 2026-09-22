@@ -185,13 +185,16 @@ def project_status(path):
 def _lab_rows(presets):
     """Lab-settings table rows (every lab, shown and hidden), in stored order."""
     return [{"id": p["id"], "name": p["name"], "ip": p["ip"],
-             "seats": p["seats"], "display": p["display"]} for p in presets]
+             "seats": p["seats"], "display": p["display"],
+             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
+            for p in presets]
 
 
 def _lab_tiles(presets):
     """The lab selector tiles: only the DISPLAYED presets, with their seat map."""
     return [{"id": p["id"], "name": p["name"], "host": p["ip"],
-             "seats": p["seats"], "map": p["map"]}
+             "seats": p["seats"], "map": p["map"],
+             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
             for p in core.displayed_lab_presets(presets)]
 
 
@@ -231,9 +234,11 @@ class Api(object):
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = core.load_store(self.store_path)
         # This machine's lab identity (lab.local) configures the built-in
-        # default's lab. Applied in memory to the built-in only; user configs
-        # are untouched. A no-op on first launch (marker unset).
-        core.apply_lab_marker(self.presets)
+        # default's lab AND its room (from that lab's default_room). Applied in
+        # memory to the built-in only; user configs are untouched. A no-op on
+        # first launch (marker unset).
+        core.apply_lab_marker(
+            self.presets, lab_presets=core.lab_presets_from_store(self.store_extra))
         self.presets = core.order_presets_for_display(self.presets)
         if not os.path.exists(self.store_path):
             try:
@@ -270,6 +275,17 @@ class Api(object):
     def _config_fields(self, preset):
         cfg = core.normalize_config(preset)
         return {key: cfg[key] for key in core.FIELD_KEYS}
+
+    def _lab_room_for(self, cfg=None):
+        """This config's (or this machine's) lab default room, for the settings
+        inspector / room picker. Falls back to the machine marker lab, then
+        "study"."""
+        presets = core.lab_presets_from_store(self.store_extra)
+        lab = ""
+        if cfg is not None:
+            lab = str(cfg.get("lab", "") or "").strip()
+        lab = lab or core.read_lab_marker() or ""
+        return core.lab_default_room(presets, lab)
 
     def _default_author(self):
         """The author to prefill in Save As: last used, else the OS username."""
@@ -332,14 +348,22 @@ class Api(object):
         ordered = core.order_presets_for_display(self.presets)
         rows = [preset_row(p) for p in ordered]
         selected = core.select_on_open(self.presets)
-        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
         # The labs the selector should offer, seeded from lab_info.json and
         # narrowed to the displayed ones. The JS builds its lab buttons and seat
         # maps from this list; no lab data is hardcoded in the page.
         all_presets = core.lab_presets_from_store(self.store_extra)
+        if selected:
+            fields = self._config_fields(selected)
+        else:
+            # A brand-new config's room follows the ACTIVE lab's default_room (this
+            # machine's lab), not the hardcoded "study".
+            fields = dict(core.DEFAULT_CONFIG)
+            fields["room_name"] = core.lab_default_room(
+                all_presets, core.read_lab_marker() or fields.get("lab"))
         labs = [
             {"id": p["id"], "name": p["name"], "host": p["ip"],
-             "seats": p["seats"], "map": p["map"]}
+             "seats": p["seats"], "map": p["map"],
+             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
             for p in core.displayed_lab_presets(all_presets)
         ]
         # The full preset list (incl. hidden ones) + the Postgres admin config
@@ -347,7 +371,8 @@ class Api(object):
         # through the existing core helpers (no new logic).
         lab_presets = [
             {"id": p["id"], "name": p["name"], "ip": p["ip"],
-             "seats": p["seats"], "display": p["display"]}
+             "seats": p["seats"], "display": p["display"],
+             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
             for p in all_presets
         ]
         pg_admin = core.pg_admin_from_store(self.store_extra)
@@ -358,7 +383,9 @@ class Api(object):
             "selected": selected.get("name") if selected else "",
             "fields": fields,
             "project": project_status(fields.get("project_path", "")),
-            "settings": core.inspect_settings(fields.get("project_path", "")),
+            "settings": core.inspect_settings(
+                fields.get("project_path", ""),
+                core.lab_default_room(all_presets, fields.get("lab"))),
             # False on first run (lab_info.json absent) → the UI shows the
             # first-run setup WIZARD instead of an empty lab selector / seat map.
             "lab_info_present": core.lab_info_present(),
@@ -391,7 +418,8 @@ class Api(object):
             "ok": True,
             "fields": fields,
             "project": project_status(fields.get("project_path", "")),
-            "settings": core.inspect_settings(fields.get("project_path", "")),
+            "settings": core.inspect_settings(
+                fields.get("project_path", ""), self._lab_room_for(fields)),
         }
 
     # -- native file dialogs ----------------------------------------------
@@ -424,7 +452,7 @@ class Api(object):
             return
         self._callback("pywOnProjectPicked",
                        {"path": path, "project": project_status(path),
-                        "settings": core.inspect_settings(path)})
+                        "settings": core.inspect_settings(path, self._lab_room_for())})
 
     @api_call
     def pick_participant_file(self):
@@ -450,7 +478,7 @@ class Api(object):
     @api_call
     def validate_project(self, path):
         return {"project": project_status(path),
-                "settings": core.inspect_settings(path)}
+                "settings": core.inspect_settings(path, self._lab_room_for())}
 
     # -- saving / deleting configs ----------------------------------------
 
@@ -533,7 +561,9 @@ class Api(object):
             return {"ok": False, "already": True,
                     "message": "This machine's lab is already set in lab.local."}
         try:
-            self._mutate_store(lambda: core.apply_lab_marker(self.presets, lab))
+            self._mutate_store(lambda: core.apply_lab_marker(
+                self.presets, lab,
+                lab_presets=core.lab_presets_from_store(self.store_extra)))
         except OSError:
             pass
         selected = self.presets[0] if self.presets else None
@@ -566,7 +596,9 @@ class Api(object):
         except (OSError, ValueError) as error:
             return {"ok": False, "message": "Could not write lab.local: %s" % error}
         try:
-            self._mutate_store(lambda: core.apply_lab_marker(self.presets, lab))
+            self._mutate_store(lambda: core.apply_lab_marker(
+                self.presets, lab,
+                lab_presets=core.lab_presets_from_store(self.store_extra)))
         except OSError:
             pass
         selected = self.presets[0] if self.presets else None
@@ -588,7 +620,7 @@ class Api(object):
         """The room names the project's own settings.py defines, plus the lab room
         when the project has a LIVE lab support block (which defines it at launch),
         so a just-appended block lets the user pick "study" (Feature 3)."""
-        return core.enumerate_rooms_for_picker(project_path)
+        return core.enumerate_rooms_for_picker(project_path, self._lab_room_for())
 
     # -- the global database registry + researcher roster (Round 3) --------
     # These map straight onto the shared core helpers so the web picker, create
@@ -841,42 +873,58 @@ class Api(object):
         return {"ok": True, "presets": _lab_rows(presets), "labs": _lab_tiles(presets)}
 
     @api_call
-    def add_lab(self, name, ip, seats, cols=0):
+    def add_lab(self, name, ip, seats, cols=0, default_room=None, shortcut_label=None):
         """Add a lab preset from the Lab Settings page (web parity with Tk).
 
         Wraps core.add_lab_preset (validate → append), persists to the store, and
         returns the refreshed preset rows + selector tiles for the page to
-        repaint. The web rebuild previously left this button a UI stub.
+        repaint. Also carries the per-lab default_room + optional shortcut_label.
         """
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets, preset = core.add_lab_preset(
-            presets, name, ip, seats, display=True, cols=cols or 0)
+            presets, name, ip, seats, display=True, cols=cols or 0,
+            default_room=default_room, shortcut_label=shortcut_label)
         if not ok:
             return {"ok": False, "message": message}
         try:
             self._mutate_store(
-                lambda: self.store_extra.__setitem__("lab_presets", presets))
+                lambda: self._store_lab_presets(presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
                 "labs": _lab_tiles(presets),
+                "configs": [preset_row(p) for p in self.presets],
                 "new_id": preset["id"] if preset else ""}
 
     @api_call
-    def update_lab(self, lab_id, name=None, ip=None, seats=None, cols=None):
-        """Edit an existing lab preset from the Lab Settings page (web/Tk parity)."""
+    def update_lab(self, lab_id, name=None, ip=None, seats=None, cols=None,
+                   default_room=None, shortcut_label=None):
+        """Edit an existing lab preset from the Lab Settings page (web/Tk parity).
+
+        A changed ``default_room`` also re-derives the built-in Lab default's room
+        live (via ``_store_lab_presets`` -> apply_lab_marker), so the default
+        config follows the lab immediately."""
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets, preset = core.update_lab_preset(
-            presets, lab_id, name=name, ip=ip, seats=seats, cols=cols)
+            presets, lab_id, name=name, ip=ip, seats=seats, cols=cols,
+            default_room=default_room, shortcut_label=shortcut_label)
         if not ok:
             return {"ok": False, "message": message}
         try:
             self._mutate_store(
-                lambda: self.store_extra.__setitem__("lab_presets", presets))
+                lambda: self._store_lab_presets(presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
-                "labs": _lab_tiles(presets)}
+                "labs": _lab_tiles(presets),
+                "configs": [preset_row(p) for p in self.presets]}
+
+    def _store_lab_presets(self, presets):
+        """Store new lab presets AND re-derive the built-in Lab default's room
+        from the machine lab (a lab's default_room may have just changed).
+        Called under the store lock (via _mutate_store)."""
+        self.store_extra["lab_presets"] = presets
+        core.apply_lab_marker(self.presets, lab_presets=presets)
 
     @api_call
     def delete_lab(self, lab_id, selected_lab=None):
@@ -905,7 +953,7 @@ class Api(object):
     def settings_status(self, project_path):
         # Read-only: we detect whether the researcher's settings.py has the
         # block and report it. The launcher never writes into their code.
-        return core.inspect_settings(project_path)
+        return core.inspect_settings(project_path, self._lab_room_for())
 
     @api_call
     def settings_block_text(self):
@@ -924,7 +972,8 @@ class Api(object):
         its GUI handler (PRINCIPLES principle 4).
         """
         project_path = (project_path or "").strip()
-        state = core.inspect_settings(project_path)
+        lab_room = self._lab_room_for()
+        state = core.inspect_settings(project_path, lab_room)
         if not state["readable"]:
             return {"ok": False, "message": "Could not read %s" % state["path"]}
         if state["has_block"]:
@@ -939,16 +988,42 @@ class Api(object):
             # A race: the block was appended between the check above and the lock
             # inside core.append_block. Report it as already-present, not an error.
             return {"ok": False, "already": True,
-                    "settings": core.inspect_settings(project_path),
+                    "settings": core.inspect_settings(project_path, lab_room),
                     "message": "settings.py already has the oTree lab support block, "
                                "so it was left unchanged."}
         except OSError as error:
             return {"ok": False, "message": "Could not add the block: %s" % error,
                     "log": [["err", "Could not add the block: %s" % error]]}
         return {"ok": True, "backup": backup, "path": path,
-                "settings": core.inspect_settings(project_path),
+                "settings": core.inspect_settings(project_path, lab_room),
                 "log": [["ok", "Backed up settings.py to %s" % backup],
                         ["ok", "Appended the oTree lab support block to %s" % path]]}
+
+    @api_call
+    def refresh_settings_block(self, project_path):
+        """Replace an OUTDATED lab support block with the current one (Pass 7).
+
+        Mirrors ``append_settings_block`` but for a project stuck on an old/stale
+        block: ``core.append_block`` refuses when a marker is present, so this
+        uses ``core.refresh_block`` (same lock + timestamped .bak + atomic write)
+        to remove the old block region and append the current ``core.LAB_BLOCK``.
+        Fully revertible from the backup. Wired to the get-ready "Refresh lab
+        block" button.
+        """
+        project_path = (project_path or "").strip()
+        lab_room = self._lab_room_for()
+        state = core.inspect_settings(project_path, lab_room)
+        if not state["readable"]:
+            return {"ok": False, "message": "Could not read %s" % state["path"]}
+        try:
+            backup, path = core.refresh_block(project_path)
+        except OSError as error:
+            return {"ok": False, "message": "Could not refresh the block: %s" % error,
+                    "log": [["err", "Could not refresh the block: %s" % error]]}
+        return {"ok": True, "backup": backup, "path": path,
+                "settings": core.inspect_settings(project_path, lab_room),
+                "log": [["ok", "Backed up settings.py to %s" % backup],
+                        ["ok", "Refreshed the oTree lab support block in %s" % path]]}
 
     # -- save a one-click shortcut -----------------------------------------
 
@@ -1081,7 +1156,9 @@ class Api(object):
                 issue["fix"] = "choose_folder"
                 issue["fix_label"] = "Choose folder…"
             issues.append(issue)
-        if self._project_needs_block(cfg):
+        block_state = self._block_state(cfg)
+        if block_state.get("readable") and not block_state.get("has_block") \
+                and core.effective_seat_mode(cfg) != core.SEAT_NONE:
             issues.append({
                 "level": "warn",
                 "title": "This project has no oTree lab support block, so the lab "
@@ -1091,6 +1168,17 @@ class Api(object):
                         "after a timestamped .bak backup (fully revertible). The "
                         "manual copy/paste is on the info screen.",
                 "fix": "add_block", "fix_label": "Add it for me", "info": "block"})
+        elif block_state.get("needs_refresh"):
+            # The block is present but OUTDATED (stale body / cut off): a refresh
+            # replaces it in place. append_block refuses when a marker exists.
+            issues.append({
+                "level": "warn",
+                "title": "This project's oTree lab support block is out of date, so "
+                         "the lab room (especially with no seats) may not work.",
+                "hint": "Refreshes the block in place to the current version, after "
+                        "a timestamped .bak backup (fully revertible).",
+                "fix": "refresh_block", "fix_label": "Refresh lab block",
+                "info": "block"})
         for failure in core.preflight_failures(core.preflight(cfg, core.load_lab_info())):
             if failure.get("check") in blocked_checks:
                 continue
@@ -1118,11 +1206,30 @@ class Api(object):
                     room = (cfg.get("room_name") or "").strip()
                     path = (cfg.get("project_path") or "").strip()
                     if room and path and core.effective_seat_mode(cfg) != core.SEAT_NONE:
-                        state = core.inspect_settings(path)
+                        state = core.inspect_settings(path, self._lab_room_for(cfg))
                         if state.get("readable") and not state.get("has_block"):
                             issue["add_room"] = room
             issues.append(issue)
+        # Non-blocking: the lab's default room changed since this config was saved.
+        # One click switches THIS config to the lab default; launching as-is is
+        # fine (silent when the rooms already match).
+        mismatch = core.lab_room_mismatch(cfg, lab_presets)
+        if mismatch:
+            issues.append({
+                "level": "warn", "title": mismatch["message"],
+                "hint": "Existing saved configs keep their room; this switches only "
+                        "this config. You can also just launch as-is.",
+                "fix": "use_lab_room", "fix_label": "Use new default", "info": "",
+                "lab_room": mismatch["lab_room"]})
         return {"ok": True, "issues": issues}
+
+    def _block_state(self, cfg):
+        """inspect_settings for this config's project, against its lab room. "" /
+        missing folder -> an unreadable state (so no block warning fires)."""
+        path = (cfg.get("project_path") or "").strip()
+        if not path or not os.path.isdir(path):
+            return {"readable": False, "has_block": False, "needs_refresh": False}
+        return core.inspect_settings(path, self._lab_room_for(cfg))
 
     @staticmethod
     def _project_folder_problem(cfg):
