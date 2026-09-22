@@ -15,6 +15,7 @@ Standard library only: Python 3 + tkinter/ttk.  No pip installs, no build step.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import getpass
 import json
@@ -22,6 +23,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -105,6 +107,88 @@ def data_dir():
     return os.path.join(repo_root(), DATA_DIRNAME)
 
 
+def secure_chmod(path):
+    """Restrict a secret-bearing file to owner-only (0o600) on POSIX.
+
+    lab_info.json and presets.json hold database and oTree admin passwords, so on
+    a shared lab machine another local account must not be able to read them. On
+    Windows os.chmod only toggles the read-only bit (a near no-op) and file
+    security is really governed by NTFS ACLs, which this does NOT harden -- that
+    is a known gap noted here deliberately, not an oversight. Any chmod error is
+    swallowed so a permission quirk never breaks a save.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def exclusive_file_lock(lock_path):
+    """Best-effort exclusive lock held for the duration of the ``with`` block.
+
+    Uses fcntl.flock on POSIX and msvcrt.locking on Windows, on a dedicated
+    sibling lock file. If neither locking primitive is available the lock is a
+    no-op; the caller's atomic re-read + os.replace is still correct on its own,
+    the lock only serialises concurrent appenders so they cannot each pass the
+    "marker not present" check before either writes.
+    """
+    handle = open(lock_path, "a+")
+    locked = False
+    try:
+        try:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            locked = True
+        except ImportError:
+            try:
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                locked = True
+            except (ImportError, OSError):
+                pass
+        yield
+    finally:
+        if locked:
+            try:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                try:
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+        try:
+            handle.close()
+        except OSError:
+            pass
+
+
+def launch_port(cfg):
+    """The validated launch port for this config as an int in 1..65535, or None.
+
+    ONE source of truth for the port, so the ``otree prodserver`` command, the
+    port preflight, and the opened URLs all agree. A blank, non-numeric, or
+    out-of-range value returns None, meaning "let oTree use its default 8000"
+    (the out-of-range case is what the port preflight turns into a clean
+    validation failure rather than letting an OverflowError escape from
+    ``socket.bind``).
+    """
+    raw = str(normalize_config(cfg)["port"]).strip()
+    if not raw:
+        return None
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
 def lab_info_path():
     """Where lab_info.json lives. OTREE_LAB_INFO overrides it (used by tests)."""
     override = os.environ.get("OTREE_LAB_INFO")
@@ -113,11 +197,35 @@ def lab_info_path():
     return os.path.join(data_dir(), LAB_INFO_FILENAME)
 
 
+def lab_info_status(path=None):
+    """Distinguish the three states of lab_info.json.
+
+    Returns one of:
+      "missing"  -- the file does not exist (genuine first run)
+      "malformed" -- the file exists but is unreadable or not a JSON object
+                     (a hand-edit typo, or an interrupted write from before the
+                     atomic-save fix); it is RECOVERABLE, so a wizard must not
+                     silently overwrite it (see :func:`load_lab_info_for_setup`)
+      "ok"       -- the file exists and parses to a dict
+    """
+    path = path or lab_info_path()
+    if not os.path.exists(path):
+        return "missing"
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return "malformed"
+    return "ok" if isinstance(data, dict) else "malformed"
+
+
 def load_lab_info(path=None):
     """Read lab_info.json into a dict, or None when it is absent or unreadable.
 
     A present-but-unparseable file also returns None, so a hand-edit typo is
-    treated the same as "not set up yet" (first run) rather than crashing.
+    treated the same as "not set up yet" (first run) rather than crashing. To
+    tell those apart (and preserve a recoverable file) use
+    :func:`lab_info_status` / :func:`preserve_corrupt_lab_info`.
     """
     path = path or lab_info_path()
     try:
@@ -128,6 +236,28 @@ def load_lab_info(path=None):
     return data if isinstance(data, dict) else None
 
 
+def preserve_corrupt_lab_info(path=None):
+    """Rename a malformed lab_info.json to a timestamped ``.corrupt`` copy.
+
+    Called before a first-run wizard is allowed to write a fresh lab_info.json:
+    when the existing file EXISTS but is unreadable/invalid it is recoverable, so
+    it is moved aside (``lab_info.json.<stamp>.corrupt``) rather than silently
+    overwritten. Returns the recovery path if one was made, else None (the file
+    was absent or already valid). Never raises: a rename failure just returns
+    None so the caller can still proceed.
+    """
+    path = path or lab_info_path()
+    if lab_info_status(path) != "malformed":
+        return None
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    recovery = "%s.%s.corrupt" % (path, stamp)
+    try:
+        os.replace(path, recovery)
+    except OSError:
+        return None
+    return recovery
+
+
 def lab_info_present(path=None):
     """True when a readable lab_info.json exists. The first-run check: when this
     is False the launcher runs its setup wizard to create the file."""
@@ -135,13 +265,44 @@ def lab_info_present(path=None):
 
 
 def save_lab_info(data, path=None):
-    """Write a lab_info dict to lab_info.json (pretty-printed). Returns the path."""
+    """Write a lab_info dict to lab_info.json atomically, owner-only. Returns path.
+
+    The pretty-printed JSON is written to a temp file in the same directory,
+    flushed + fsync'd, then os.replace'd into place, so an interrupted write can
+    never leave a half-written (malformed) lab_info.json that the next start
+    would mistake for a broken first run. The file holds DB and oTree admin
+    passwords, so it is created 0o600 (owner-only) on POSIX -- see
+    :func:`secure_chmod`.
+    """
     path = path or lab_info_path()
     folder = os.path.dirname(path) or "."
     os.makedirs(folder, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
+    # If the file we are about to replace is malformed (a recoverable typo or a
+    # half-written file from an old, non-atomic save), move it aside first so the
+    # first-run wizard's fresh write never silently destroys recoverable data. A
+    # valid file is left untouched (this is a no-op) and overwritten as normal.
+    preserve_corrupt_lab_info(path)
+    text = json.dumps(data, indent=2)
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=folder, prefix=".lab_info-", suffix=".tmp", delete=False
+    )
+    tmp_name = handle.name
+    try:
+        secure_chmod(tmp_name)
+        handle.write(text)
         handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        os.replace(tmp_name, path)
+    except Exception:
+        handle.close()
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    secure_chmod(path)
     return path
 
 
@@ -1061,17 +1222,74 @@ def inspect_settings(project_path):
     return result
 
 
+class BlockAlreadyPresent(Exception):
+    """append_block found the lab support block already in settings.py (checked
+    under the lock) and refused to append it a second time."""
+
+
 def append_block(project_path):
-    """Back up settings.py, then append the block. Returns (backup, settings)."""
+    """Atomically back up settings.py and append the lab support block.
+
+    This is the ONE sanctioned mutation of a researcher's own code, so it is a
+    single lock-guarded operation rather than inspect-then-append:
+
+      1. take an exclusive lock on a sibling lock file (serialises two clicks /
+         two launchers / an editor race),
+      2. RE-READ settings.py and re-check the marker under the lock -- if the
+         block is already there raise :class:`BlockAlreadyPresent` (never a
+         double append),
+      3. copy the current file to a UNIQUE timestamped ``.bak`` (microseconds, so
+         two appends can never collide on the one backup name),
+      4. write settings + block to a same-dir temp file, fsync it, and
+         ``os.replace`` it into place (so a crash mid-write cannot corrupt the
+         researcher's settings.py).
+
+    Returns ``(backup, settings_path)`` -- the same shape callers/tests expect.
+    Raises :class:`BlockAlreadyPresent` if the block is already present, or
+    OSError on a read/write problem.
+    """
     path = settings_path_for(project_path)
-    with open(path, "r", encoding="utf-8") as handle:
-        text = handle.read()
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = path + "." + stamp + ".bak"
-    shutil.copy2(path, backup)
-    separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(separator + LAB_BLOCK)
+    folder = os.path.dirname(path) or "."
+    with exclusive_file_lock(path + ".lock"):
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        # Re-check the marker under the lock: refuse a second append even if
+        # another appender slipped in between our caller's check and here.
+        if BLOCK_MARKER in text:
+            raise BlockAlreadyPresent(
+                "settings.py already has the oTree lab support block.")
+        # A microsecond-stamped backup name, bumped in the unlikely event of a
+        # same-microsecond collision, so the first backup is never clobbered.
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = path + "." + stamp + ".bak"
+        while os.path.exists(backup):
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            backup = path + "." + stamp + ".bak"
+        shutil.copy2(path, backup)
+        separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        new_text = text + separator + LAB_BLOCK
+        handle = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=folder, prefix=".settings-", suffix=".tmp", delete=False
+        )
+        tmp_name = handle.name
+        try:
+            handle.write(new_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.close()
+            # Keep the researcher's original file mode on the replacement.
+            try:
+                os.chmod(tmp_name, stat.S_IMODE(os.stat(path).st_mode))
+            except OSError:
+                pass
+            os.replace(tmp_name, path)
+        except Exception:
+            handle.close()
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
     return backup, path
 
 
@@ -1334,6 +1552,11 @@ def save_store(presets, extra=None, path=None):
     )
     tmp_name = handle.name
     try:
+        # presets.json carries DB creds, custom-DB creds and Postgres-admin creds,
+        # so lock it down to owner-only (0o600) on POSIX, including the temp file,
+        # before it is fsync'd and replaced into place. See secure_chmod (Windows
+        # ACLs are not hardened here).
+        secure_chmod(tmp_name)
         handle.write(text)
         handle.write("\n")
         handle.flush()
@@ -1347,6 +1570,7 @@ def save_store(presets, extra=None, path=None):
         except OSError:
             pass
         raise
+    secure_chmod(path)
     return path
 
 
@@ -1460,13 +1684,30 @@ def _applescript_string(text):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _prodserver_argv(cfg):
+    """``["otree", "prodserver"]`` plus the validated port when one is set.
+
+    oTree 6's ``prodserver`` takes an optional positional ``addrport`` (a port,
+    or ``ipaddr:port``), so the CONFIGURED port reaches the real server on every
+    platform instead of oTree silently defaulting to 8000. The port is
+    :func:`launch_port` (the same validated 1..65535 int the port preflight and
+    the opened URLs use); a blank/invalid port omits the arg and lets oTree use
+    its own default, so this is version-safe (the arg is only ever a bare port).
+    """
+    argv = ["otree", "prodserver"]
+    port = launch_port(cfg)
+    if port is not None:
+        argv.append(str(port))
+    return argv
+
+
 def macos_shell_script(cfg, project_path, env_pairs):
     """The shell line that a new macOS Terminal window will run."""
     parts = ["cd " + shlex.quote(project_path)]
     for key, value in env_pairs:
         parts.append("export %s=%s" % (key, shlex.quote(value)))
     parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
-    parts.append("otree prodserver")
+    parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg)))
     return "; ".join(parts)
 
 
@@ -1476,21 +1717,25 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
     Returns a dict with the command to run, the platform branch that produced
     it, and the extra Popen arguments that branch needs.  Kept separate from
     the running of it so both branches can be tested off their own platform.
+    The configured port (:func:`launch_port`) is passed to prodserver on every
+    platform so the server, the readiness probe and the opened URLs agree.
     """
     platform_name = platform_name or sys.platform
     env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
+    argv = _prodserver_argv(cfg)
+    prodserver = " ".join(argv)  # e.g. "otree prodserver 8000"
 
     if platform_name.startswith("win"):
         # cmd /k keeps the console open after the server stops, so the
         # researcher can still read the traceback that killed it.
-        inner = 'title oTree Server ({app}) && otree prodserver'.format(app=APP_NAME)
+        inner = 'title oTree Server ({app}) && {prod}'.format(app=APP_NAME, prod=prodserver)
         return {
             "kind": "windows",
             "cmd": ["cmd", "/k", inner],
             "cwd": project_path,
             "creationflags": CREATE_NEW_CONSOLE,
             "shell": False,
-            "description": "new console window: cmd /k otree prodserver",
+            "description": "new console window: cmd /k %s" % prodserver,
         }
 
     if platform_name == "darwin":
@@ -1510,7 +1755,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
         if shutil.which(terminal):
             return {
                 "kind": "linux-terminal",
-                "cmd": [terminal, "-e", "otree", "prodserver"],
+                "cmd": [terminal, "-e"] + argv,
                 "cwd": project_path,
                 "creationflags": 0,
                 "shell": False,
@@ -1518,7 +1763,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
             }
     return {
         "kind": "linux-background",
-        "cmd": ["otree", "prodserver"],
+        "cmd": list(argv),
         "cwd": project_path,
         "creationflags": 0,
         "shell": False,
@@ -1596,7 +1841,7 @@ def export_bat_text(cfg, name="config"):
 
     lines += [
         "REM === Start the server in a new terminal ===",
-        'start "oTree Server" cmd /k otree prodserver',
+        'start "oTree Server" cmd /k %s' % " ".join(_prodserver_argv(c)),
         "",
     ]
 
@@ -3217,6 +3462,15 @@ def preflight_check_port(config):
         return _preflight_result(
             "port", True,
             "No numeric launch port set, skipping the port check.",
+            "port=%r" % raw)
+
+    # A value outside 1..65535 would make socket.bind raise OverflowError (not
+    # OSError), so it slipped past the except below and crashed the preflight.
+    # Treat it as a clean validation failure instead.
+    if not (1 <= port <= 65535):
+        return _preflight_result(
+            "port", False,
+            "The launch port %d is out of range (it must be between 1 and 65535)." % port,
             "port=%r" % raw)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

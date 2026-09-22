@@ -700,17 +700,15 @@ def inspect_settings(project_path):
 
 
 def append_block(project_path):
-    """Back up settings.py, then append the block. Returns (backup, settings)."""
-    path = settings_path_for(project_path)
-    with open(path, "r", encoding="utf-8") as handle:
-        text = handle.read()
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = path + "." + stamp + ".bak"
-    shutil.copy2(path, backup)
-    separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(separator + LAB_BLOCK)
-    return backup, path
+    """Append the lab support block to settings.py. Returns (backup, settings).
+
+    Delegates to the SINGLE atomic, lock-guarded implementation in
+    ``core.append_block`` (re-reads + re-checks the marker under an exclusive
+    lock, unique .bak name, temp+fsync+os.replace), so the Tk and web faces
+    share one safe writer for the one place the launcher mutates a researcher's
+    own code. Raises ``core.BlockAlreadyPresent`` if the block is already there.
+    """
+    return core.append_block(project_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1002,10 @@ def save_store(presets, extra=None, path=None):
     )
     tmp_name = handle.name
     try:
+        # presets.json carries DB / custom-DB / Postgres-admin creds; lock it to
+        # owner-only (0o600) on POSIX, temp file included. Same core helper the
+        # web face uses (Windows ACLs are not hardened here).
+        core.secure_chmod(tmp_name)
         handle.write(text)
         handle.write("\n")
         handle.flush()
@@ -1017,6 +1019,7 @@ def save_store(presets, extra=None, path=None):
         except OSError:
             pass
         raise
+    core.secure_chmod(path)
     return path
 
 
@@ -1090,13 +1093,27 @@ def _applescript_string(text):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _prodserver_argv(cfg):
+    """``["otree", "prodserver"]`` plus the validated port when one is set.
+
+    Shares ``core.launch_port`` (the single validated 1..65535 port), so the
+    server command, the port preflight and the opened URLs all agree; a
+    blank/invalid port omits the arg and lets oTree default to 8000.
+    """
+    argv = ["otree", "prodserver"]
+    port = core.launch_port(cfg)
+    if port is not None:
+        argv.append(str(port))
+    return argv
+
+
 def macos_shell_script(cfg, project_path, env_pairs):
     """The shell line that a new macOS Terminal window will run."""
     parts = ["cd " + shlex.quote(project_path)]
     for key, value in env_pairs:
         parts.append("export %s=%s" % (key, shlex.quote(value)))
     parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
-    parts.append("otree prodserver")
+    parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg)))
     return "; ".join(parts)
 
 
@@ -1106,21 +1123,25 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
     Returns a dict with the command to run, the platform branch that produced
     it, and the extra Popen arguments that branch needs.  Kept separate from
     the running of it so both branches can be tested off their own platform.
+    The configured port (``core.launch_port``) is passed to prodserver on every
+    platform so the server, the readiness probe and the opened URLs agree.
     """
     platform_name = platform_name or sys.platform
     env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
+    argv = _prodserver_argv(cfg)
+    prodserver = " ".join(argv)  # e.g. "otree prodserver 8000"
 
     if platform_name.startswith("win"):
         # cmd /k keeps the console open after the server stops, so the
         # researcher can still read the traceback that killed it.
-        inner = 'title oTree Server ({app}) && otree prodserver'.format(app=APP_NAME)
+        inner = 'title oTree Server ({app}) && {prod}'.format(app=APP_NAME, prod=prodserver)
         return {
             "kind": "windows",
             "cmd": ["cmd", "/k", inner],
             "cwd": project_path,
             "creationflags": CREATE_NEW_CONSOLE,
             "shell": False,
-            "description": "new console window: cmd /k otree prodserver",
+            "description": "new console window: cmd /k %s" % prodserver,
         }
 
     if platform_name == "darwin":
@@ -1140,7 +1161,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
         if shutil.which(terminal):
             return {
                 "kind": "linux-terminal",
-                "cmd": [terminal, "-e", "otree", "prodserver"],
+                "cmd": [terminal, "-e"] + argv,
                 "cwd": project_path,
                 "creationflags": 0,
                 "shell": False,
@@ -1148,7 +1169,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
             }
     return {
         "kind": "linux-background",
-        "cmd": ["otree", "prodserver"],
+        "cmd": list(argv),
         "cwd": project_path,
         "creationflags": 0,
         "shell": False,
@@ -1226,7 +1247,7 @@ def export_bat_text(cfg, name="config"):
 
     lines += [
         "REM === Start the server in a new terminal ===",
-        'start "oTree Server" cmd /k otree prodserver',
+        'start "oTree Server" cmd /k %s' % " ".join(_prodserver_argv(c)),
         "",
     ]
 
@@ -3918,6 +3939,13 @@ class LauncherApp(object):
             return False
         try:
             backup, path = append_block(cfg["project_path"])
+        except core.BlockAlreadyPresent:
+            # A race: another appender got the block in between our check above
+            # and the lock. The safe writer refused, so report it as already-there.
+            messagebox.showinfo("Already there",
+                                "settings.py already has the oTree lab support block.",
+                                parent=self.root)
+            return False
         except OSError as error:
             messagebox.showerror("Could not add the block", str(error), parent=self.root)
             self.log("Could not add the block: %s" % error, "err")
@@ -3958,6 +3986,9 @@ class LauncherApp(object):
                            "If a ROOMS line follows the block, move the block to the end.")
         try:
             backup, path = append_block(cfg["project_path"])
+        except core.BlockAlreadyPresent:
+            return False, ("settings.py already has the lab support block, so nothing was added. "
+                           "If a ROOMS line follows the block, move the block to the end.")
         except OSError as error:
             self.log("Could not add the block: %s" % error, "err")
             return False, "Could not update settings.py: %s" % error

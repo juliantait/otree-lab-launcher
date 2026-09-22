@@ -38,6 +38,23 @@ import otree_core as core
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "web", "index.html")
 
+# WebView devtools are a security exposure (they run JS against the privileged
+# js_api), so they are OFF unless this env var is explicitly set to a truthy
+# value. Debugging on a dev machine: set OTREE_LAB_LAUNCHER_DEBUG=1.
+DEBUG_ENV_VAR = "OTREE_LAB_LAUNCHER_DEBUG"
+
+
+def webview_debug_enabled(env=None):
+    """True only when the debug opt-in env var is set to a truthy value.
+
+    Truthy means "1", "true", "yes" or "on" (case-insensitive); anything else
+    (including unset or "0") is False, so the shipped launcher never opens
+    devtools by accident.
+    """
+    env = os.environ if env is None else env
+    value = str(env.get(DEBUG_ENV_VAR, "")).strip().lower()
+    return value in ("1", "true", "yes", "on")
+
 # ---------------------------------------------------------------------------
 # Diagnostics. On Windows the pywebview console shows nothing, so we tee a full
 # log to data/web_launcher.log: startup, every Api method entry/exit, and any
@@ -851,6 +868,13 @@ class Api(object):
                                "so it was left unchanged."}
         try:
             backup, path = core.append_block(project_path)
+        except core.BlockAlreadyPresent:
+            # A race: the block was appended between the check above and the lock
+            # inside core.append_block. Report it as already-present, not an error.
+            return {"ok": False, "already": True,
+                    "settings": core.inspect_settings(project_path),
+                    "message": "settings.py already has the oTree lab support block, "
+                               "so it was left unchanged."}
         except OSError as error:
             return {"ok": False, "message": "Could not add the block: %s" % error,
                     "log": [["err", "Could not add the block: %s" % error]]}
@@ -1394,11 +1418,17 @@ def main():
         background_color="#1b1b1c",
     )
     api.window = window
-    # debug=True turns on the WebView2 devtools (right-click → Inspect) so the
-    # Console is reachable while we chase the freeze on the lab machine.
-    LOG.info("webview.start(debug=True)")
+    # devtools (right-click -> Inspect) let JS run against the privileged js_api
+    # (e.g. append_settings_block), so they are OFF by default in the shipped
+    # launcher and only enabled by an explicit opt-in env var for debugging.
+    debug = webview_debug_enabled()
+    if debug:
+        LOG.warning("WebView devtools ENABLED via %s -- the js_api is reachable "
+                    "from the browser Console. Do not use on a shared machine.",
+                    DEBUG_ENV_VAR)
+    LOG.info("webview.start(debug=%s)", debug)
     try:
-        webview.start(debug=True)
+        webview.start(debug=debug)
     except Exception:
         LOG.exception("webview.start crashed")
         raise
