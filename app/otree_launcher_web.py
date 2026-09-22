@@ -598,7 +598,7 @@ class Api(object):
         returned for the page to repaint.
         """
         lab = (lab or "").strip()
-        presets = core.default_lab_presets()
+        presets = core.lab_presets_from_store(self.store_extra)
         if not lab or core.find_lab_preset(lab, presets) is None:
             return {"ok": False, "message": "Choose one of the available labs."}
         if core.read_lab_marker() is not None:
@@ -628,7 +628,7 @@ class Api(object):
         repaints and the built-in "Lab default" immediately shows the new lab.
         """
         lab = (lab or "").strip()
-        presets = core.default_lab_presets()
+        presets = core.lab_presets_from_store(self.store_extra)
         if not lab or core.find_lab_preset(lab, presets) is None:
             return {"ok": False, "message": "Choose one of the available labs."}
         try:
