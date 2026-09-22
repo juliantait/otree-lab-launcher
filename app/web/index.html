@@ -415,18 +415,15 @@ input::placeholder{color:var(--faint)}
 .blockwarn .btn{margin-top:9px}
 
 /* ---------------------------- ACTIVITY LOG ---------------------------- */
-.logwrap{padding:6px clamp(16px,2.4vw,26px) 18px}
-.log-head{display:flex;align-items:center;gap:8px;padding:6px 2px}
-.log-head .cap{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
-  cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px}
-.log-head .cap .arw{font-size:10px;color:var(--faint)}
-.log-head .copy{margin-left:auto}
+/* One log, two views: the compact live line lives in the launch bar (see
+   .launch-status); the FULL log lives in the #logModal overlay below and is
+   the single source of truth (#logBody). No more inline collapsible log. */
 .log-body{
   background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);
-  font-family:var(--mono);font-size:12px;line-height:1.6;padding:12px 15px;margin-top:4px;
-  max-height:190px;overflow:auto;overscroll-behavior:contain;
+  font-family:var(--mono);font-size:12px;line-height:1.6;padding:12px 15px;
+  overflow:auto;overscroll-behavior:contain;
 }
-.log-body .ln{white-space:pre-wrap;word-break:break-word}
+.log-body .ln{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 .log .t{color:#6f7d90}.log .info{color:var(--text)}.log .muted{color:#8e9aab}
 .log .cmd{color:#7fd1ff}.log .ok{color:#7ee0a8}.log .warn{color:#f2c66b}.log .err{color:#ff9a90}
 .log .out{color:#b6c0cf;padding-left:20px;display:block}
@@ -447,9 +444,21 @@ input::placeholder{color:var(--faint)}
   pointer-events:none;
   background:linear-gradient(180deg,rgba(30,30,32,0),var(--bg));
 }
+/* Compact live line: shows ONLY the latest log entry, constrained to the
+   leftover space so it can never push the buttons off the row or scroll the
+   page. min-width:0 lets it shrink inside the flex row; a long path is
+   truncated with an ellipsis (full text on hover via title=). */
 .launch-status{font-size:12.5px;color:var(--muted);margin-right:auto;min-height:1em;
-  flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+  flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .launch-status.ok{color:var(--ok)} .launch-status.err{color:var(--err)}
+.launch-status.warn{color:var(--warn)} .launch-status.muted{color:var(--muted)}
+.btn-logexpand{
+  font-family:inherit;font-size:12.5px;font-weight:600;color:var(--muted);flex:0 0 auto;
+  background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:9px 14px;cursor:pointer;transition:background .14s,border-color .14s,color .14s;
+}
+.btn-logexpand:hover{background:var(--panel-2);border-color:#4c4c50;color:var(--text)}
+.btn-logexpand:active{transform:translateY(1px)}
 .btn-launch{
   font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:#fff;
   background:linear-gradient(180deg,#e85a80,var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
@@ -474,6 +483,13 @@ input::placeholder{color:var(--faint)}
   background:var(--panel);border:1px solid var(--line);border-radius:var(--r-xl);
   box-shadow:var(--shadow-lg);padding:24px 26px}
 .modal-card.wide{max-width:660px}
+/* Large variant for the full activity log: ~80vw x ~70vh, capped on big
+   screens, a flex column so the scrollable log body fills the remaining space. */
+.modal-card.huge{max-width:min(1100px,80vw);width:80vw;height:70vh;max-height:70vh;
+  display:flex;flex-direction:column;padding:20px 22px}
+.modal-card.huge .modal-title{flex:0 0 auto}
+.modal-card.huge .log-toolbar{flex:0 0 auto;display:flex;justify-content:flex-end;margin:2px 0 8px}
+.modal-card.huge .log-body{flex:1 1 auto;min-height:0;margin-top:0}
 .modal-x{position:absolute;top:12px;right:15px;background:transparent;border:0;color:var(--muted);
   font-size:23px;line-height:1;cursor:pointer}
 .modal-x:hover{color:var(--text-strong)}
@@ -894,20 +910,12 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 
     </div>
 
-    <!-- Activity log -->
-    <div class="logwrap">
-      <div class="log-head">
-        <span class="cap" onclick="toggleLog()"><span class="arw" id="logArw">&#9656;</span>Activity log</span>
-        <button class="btn ghost tiny copy" onclick="copyLog()">Copy</button>
-      </div>
-      <div class="log-body log" id="logBody" hidden>
-        <div class="ln"><span class="muted">oTree Lab Launcher ready. Pick a config on the left, then click Launch.</span></div>
-      </div>
-    </div>
-
-    <!-- Launch bar -->
+    <!-- Launch bar. The compact live line (#launchStatus) shows only the latest
+         activity entry, width-constrained so it never pushes the buttons off the
+         row; "Activity log" opens the full log as an internal overlay. -->
     <div class="launchbar">
       <p class="launch-status" id="launchStatus"></p>
+      <button class="btn-logexpand" onclick="openLogModal()">Activity log</button>
       <button class="btn-shortcut" onclick="onExport()">Save one-click shortcut</button>
       <button class="btn-launch" onclick="onLaunch()">Launch</button>
     </div>
@@ -920,6 +928,22 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
     <button class="modal-x" onclick="closeModal()" aria-label="Close">&times;</button>
     <h3 class="modal-title" id="modalTitle"></h3>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- ==================== ACTIVITY LOG (full) ==================== -->
+<!-- The single activity log, shown as an INTERNAL overlay (~80vw x ~70vh) — no
+     new OS window. #logBody is the one source of truth: appendLog() writes here
+     whether the overlay is open or not, and the compact launch-bar line mirrors
+     the latest entry. Long backup paths wrap here (never truncated). -->
+<div class="modal" id="logModal" hidden onclick="if(event.target===this)closeLogModal()">
+  <div class="modal-card huge" id="logCard">
+    <button class="modal-x" onclick="closeLogModal()" aria-label="Close">&times;</button>
+    <h3 class="modal-title">Activity log</h3>
+    <div class="log-toolbar"><button class="btn ghost tiny" onclick="copyLog()">Copy</button></div>
+    <div class="log-body log" id="logBody">
+      <div class="ln"><span class="muted">oTree Lab Launcher ready. Pick a config on the left, then click Launch.</span></div>
+    </div>
   </div>
 </div>
 
@@ -1017,23 +1041,45 @@ function currentLab(){if(selectedLabId&&LAB_BY_ID[selectedLabId])return selected
    drives client-side seeding/highlighting. */
 function labRoom(){var l=labById(currentLab());return (l&&l.default_room)||"study";}
 
-/* ---------------------------- log + status ---------------------------- */
+/* ---------------------------- log + status ----------------------------
+   ONE activity log, two views. appendLog() is the single sink: it renders a
+   line into #logBody (the full-log overlay, always in the DOM so it fills live
+   whether the overlay is open or not) AND updates the compact launch-bar line
+   to that latest entry. Both pywLog and pywStatus feed this one log, so no
+   event is ever shown in two competing spots. */
 window.pywLog=function(cls,text){appendLog(cls,text);};
 window.pywStatus=function(cls,text){
-  var s=el("launchStatus");s.className="launch-status"+(cls?" "+cls:"");s.textContent=text;
+  appendLog(cls,text);
+  /* During a launch the Before-you-launch modal shows a live handoff note;
+     keep tinting it to match the latest status (colour only — its text is
+     driven by the launch flow). */
   var t=el("takeoverStatus");
   if(t&&!el("infoModal").hidden){t.className="handoff-note"+(cls?" "+cls:"");}
 };
+/* Compact line = the most recent entry, with its colour (ok/err/warn/muted).
+   Full text is kept in title= so a truncated path is still readable on hover. */
+function setCompactLine(cls,text){
+  var s=el("launchStatus");if(!s)return;
+  s.className="launch-status"+(cls?" "+cls:"");
+  s.textContent=text;s.title=text||"";
+}
 function appendLog(cls,text){
-  var body=el("logBody");if(el("logBody").hidden)toggleLog();
-  var ln=document.createElement("div");ln.className="ln";
-  var t=document.createElement("span");t.className="t";
-  t.textContent="["+new Date().toTimeString().slice(0,8)+"] ";
-  var m=document.createElement("span");m.className=cls||"info";m.textContent=text;
-  ln.appendChild(t);ln.appendChild(m);body.appendChild(ln);body.scrollTop=body.scrollHeight;
+  var body=el("logBody");
+  if(body){
+    var ln=document.createElement("div");ln.className="ln";
+    var t=document.createElement("span");t.className="t";
+    t.textContent="["+new Date().toTimeString().slice(0,8)+"] ";
+    var m=document.createElement("span");m.className=cls||"info";m.textContent=text;
+    ln.appendChild(t);ln.appendChild(m);body.appendChild(ln);body.scrollTop=body.scrollHeight;
+  }
+  setCompactLine(cls,text);
 }
 function applyLog(r){if(r&&r.log&&r.log.length)r.log.forEach(function(e){appendLog(e[0],e[1]);});}
-function toggleLog(){var b=el("logBody");b.hidden=!b.hidden;el("logArw").innerHTML=b.hidden?"&#9656;":"&#9662;";}
+function openLogModal(){
+  el("logModal").hidden=false;
+  var b=el("logBody");if(b)b.scrollTop=b.scrollHeight;
+}
+function closeLogModal(){el("logModal").hidden=true;}
 function copyLog(){try{navigator.clipboard.writeText(el("logBody").innerText);}catch(e){}}
 
 /* results delivered from Python worker threads (native dialogs) */
@@ -1462,7 +1508,11 @@ function openModal(title,html,wide){
   el("modalTitle").textContent=title;el("modalBody").innerHTML=html;el("infoModal").hidden=false;
 }
 function closeModal(){el("infoModal").hidden=true;}
-document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!el("infoModal").hidden)closeModal();});
+document.addEventListener("keydown",function(e){
+  if(e.key!=="Escape")return;
+  if(!el("logModal").hidden){closeLogModal();return;}
+  if(!el("infoModal").hidden)closeModal();
+});
 
 /* ---------------------------- Save as ---------------------------- */
 function onSaveAs(){
