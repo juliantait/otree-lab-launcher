@@ -545,6 +545,39 @@ class Api(object):
                 "selected": selected.get("name") if selected else "",
                 "fields": fields}
 
+    @api_call
+    def change_lab_marker(self, lab):
+        """Lab Settings "which lab is this computer" CHANGE path (OVERWRITE).
+
+        Unlike ``set_lab_marker`` (the first-run, refuse-if-exists chooser), this
+        is the change-it-later control: it calls ``core.set_lab_marker`` which
+        OVERWRITES lab.local, so a machine that already has an identity can be
+        re-pointed at a different lab without hand-editing the file. It then
+        re-applies the marker to the in-memory built-in default (under the store
+        lock, persisted) and returns refreshed rows + selected so the page
+        repaints and the built-in "Lab default" immediately shows the new lab.
+        """
+        lab = (lab or "").strip()
+        presets = core.default_lab_presets()
+        if not lab or core.find_lab_preset(lab, presets) is None:
+            return {"ok": False, "message": "Choose one of the available labs."}
+        try:
+            core.set_lab_marker(lab)
+        except (OSError, ValueError) as error:
+            return {"ok": False, "message": "Could not write lab.local: %s" % error}
+        try:
+            self._mutate_store(lambda: core.apply_lab_marker(self.presets, lab))
+        except OSError:
+            pass
+        selected = self.presets[0] if self.presets else None
+        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
+        preset = core.find_lab_preset(lab, presets)
+        return {"ok": True, "lab_marker": lab,
+                "lab_name": preset.get("name") if preset else lab,
+                "configs": [preset_row(p) for p in self.presets],
+                "selected": selected.get("name") if selected else "",
+                "fields": fields}
+
     # -- room picker / create-database / lab-settings bridges --------------
     # Each maps straight onto an existing otree_core function; no launch logic
     # lives here. Used by the rebuilt web UI (room picker, Create-a-database,
@@ -1324,15 +1357,20 @@ class Api(object):
                                     method=result.get("method", "manual"))
                 return
 
-            self._mark_run(cfg)
+            matched = self._mark_run(cfg)
             self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
                                "server runs in its own window; watch there for live logs. You "
                                "can close this launcher.")
             # Only a real, server-ready success reaches here: tell the handoff
             # banner, with the method so it reports honestly (already logged in vs
-            # at the login page).
+            # at the login page). Also push the REFRESHED config rows + selected so
+            # the sidebar shows the just-launched config's new run time and its
+            # updated recency slot LIVE, without a relaunch. Only here (a ready
+            # success) -- a failed/not-ready launch below never restamps/refreshes.
+            configs, selected = self._launched_config_state(matched)
             self._launch_result(True, "", url=result["monitor_url"],
-                                method=result["method"])
+                                method=result["method"],
+                                configs=configs, selected=selected)
         except Exception:
             LOG.exception("_run_launch: EXCEPTION")
             self._log("err", traceback.format_exc())
@@ -1341,7 +1379,8 @@ class Api(object):
         finally:
             LOG.info("_run_launch: end")
 
-    def _launch_result(self, ok, message, url="", method="manual"):
+    def _launch_result(self, ok, message, url="", method="manual",
+                       configs=None, selected=None):
         """Deliver the REAL launch outcome to the page's handoff banner.
 
         Worker-thread only (it uses evaluate_js via _callback). ``ok`` True means
@@ -1350,9 +1389,15 @@ class Api(object):
         login page). On failure ``message`` explains what went wrong; there is NO
         false success.
         """
-        self._callback("pywOnLaunchResult",
-                       {"ok": bool(ok), "message": message, "url": url,
-                        "method": method})
+        payload = {"ok": bool(ok), "message": message, "url": url,
+                   "method": method}
+        # On a READY success the caller passes the refreshed rows so the page can
+        # repaint the sidebar live (Bug E). Absent on failure -> the JS leaves the
+        # config list untouched (no restamp/reorder on a failed launch).
+        if configs is not None:
+            payload["configs"] = configs
+            payload["selected"] = selected or ""
+        self._callback("pywOnLaunchResult", payload)
 
     def _remember_launch(self, cfg):
         """Stash the params the takeover 'Click here' needs to re-open the
@@ -1411,16 +1456,39 @@ class Api(object):
         UI-thread "save as new" cannot interleave with this stamp-and-save and
         clobber either change.
         """
+        matched = {"preset": None}
+
         def _apply():
             for preset in self.presets:
                 if not core.configs_differ(preset, cfg):
                     preset["last_run"] = core.now_iso()
+                    matched["preset"] = preset
                     break
 
         try:
             self._mutate_store(_apply)
         except OSError:
             pass
+        return matched["preset"]
+
+    def _launched_config_state(self, matched):
+        """Refreshed config rows + selected name for a live post-launch repaint.
+
+        Re-derives the display order (built-in default pinned, then most-recently-
+        launched first) so the just-stamped config jumps to its recency slot, and
+        selects the config that was launched (the freshly stamped one) so the
+        sidebar highlights it. READY-launch only -- the caller does not build this
+        for a failed/not-ready launch, so a failure never restamps or reorders.
+        """
+        ordered = core.order_presets_for_display(self.presets)
+        rows = [preset_row(p) for p in ordered]
+        selected = ""
+        if matched is not None:
+            selected = matched.get("name", "")
+        elif ordered:
+            chosen = core.select_on_open(self.presets)
+            selected = chosen.get("name", "") if chosen else ""
+        return rows, selected
 
 
 # ---------------------------------------------------------------------------

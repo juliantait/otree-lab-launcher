@@ -434,6 +434,7 @@ input::placeholder{color:var(--faint)}
 /* ---------------------------- LAUNCH BAR ---------------------------- */
 .launchbar{
   position:sticky;bottom:0;z-index:15;display:flex;align-items:center;gap:14px;
+  flex-wrap:wrap;
   padding:14px clamp(16px,2.4vw,26px);margin-top:auto;
   background:var(--bg);
   border-top:1px solid var(--line-soft);
@@ -446,7 +447,8 @@ input::placeholder{color:var(--faint)}
   pointer-events:none;
   background:linear-gradient(180deg,rgba(30,30,32,0),var(--bg));
 }
-.launch-status{font-size:12.5px;color:var(--muted);margin-right:auto;min-height:1em}
+.launch-status{font-size:12.5px;color:var(--muted);margin-right:auto;min-height:1em;
+  flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word}
 .launch-status.ok{color:var(--ok)} .launch-status.err{color:var(--err)}
 .btn-launch{
   font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:#fff;
@@ -1744,8 +1746,9 @@ function openLabSettings(){
 function makeThisTheLab(){
   var lab=val("lsMarker");
   if(!NATIVE||!API){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+((LAB_BY_ID[lab]||{}).name||lab)+".";el("lsIdentityStatus").className="ls-status";return;}
-  API.set_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+(r.lab_name||lab)+".";
-    renderConfigList(r.configs,r.selected);}else el("lsIdentityStatus").textContent=(r&&r.message)||"Could not set the lab.";});
+  API.change_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+(r.lab_name||lab)+".";
+    el("lsIdentityStatus").className="ls-status";
+    renderConfigList(r.configs,r.selected);if(r.selected)currentConfigName=r.selected;}else el("lsIdentityStatus").textContent=(r&&r.message)||"Could not set the lab.";});
 }
 function savePgAdmin(){
   PG_ADMIN={admin_username:val("pgUser"),admin_password:val("pgPw"),admin_host:val("pgHost"),admin_port:val("pgPort")};
@@ -2104,7 +2107,13 @@ function enterLaunchingState(){
    success shows "dashboard opening" + a working link; a failure shows a clear
    failure state and no dead "Click here". */
 window.pywOnLaunchResult=function(res){
-  if(res&&res.ok){showHandoffSuccess(res.url||"",res.method||"manual");}
+  if(res&&res.ok){
+    /* Bug E: a READY success carries the refreshed config rows so the sidebar
+       shows the just-launched config's new run time and its updated recency
+       slot LIVE (no relaunch). A failure carries no rows, so the list is left
+       untouched (never restamped/reordered on a failed launch). */
+    if(res.configs){renderConfigList(res.configs,res.selected);if(res.selected)currentConfigName=res.selected;}
+    showHandoffSuccess(res.url||"",res.method||"manual");}
   else{showHandoffFailure((res&&res.message)||"Launch failed. See the activity log.");}
 };
 function showHandoffSuccess(url,method){
