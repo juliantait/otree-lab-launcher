@@ -202,11 +202,14 @@ def preset_row(preset):
     cfg = core.normalize_config(preset)
     project_path = (cfg.get("project_path") or "").strip()
     folder = os.path.basename(os.path.normpath(project_path)) if project_path else ""
+    builtin = core.is_builtin(preset)
     return {
         "name": preset.get("name", ""),
-        "when": core.format_last_run(preset.get("last_run")),
+        # The built-in Lab default is a launch TEMPLATE, never a saved config, so
+        # it NEVER shows a run time (Job 2) -- only researcher configs do.
+        "when": "" if builtin else core.format_last_run(preset.get("last_run")),
         "author": preset.get("author", ""),
-        "builtin": core.is_builtin(preset),
+        "builtin": builtin,
         # The raw lab id; the UI derives the lab-name suffix from it at display
         # time (using the matching lab preset's name) and never stores it.
         "lab": cfg.get("lab", ""),
@@ -239,6 +242,9 @@ class Api(object):
         # first launch (marker unset).
         core.apply_lab_marker(
             self.presets, lab_presets=core.lab_presets_from_store(self.store_extra))
+        # The built-in Lab default is a launch TEMPLATE: force its last_run to
+        # None on load so a stamp a previous version wrote is cleared (Job 2).
+        core.clear_builtin_last_run(self.presets)
         self.presets = core.order_presets_for_display(self.presets)
         if not os.path.exists(self.store_path):
             try:
@@ -1583,8 +1589,12 @@ class Api(object):
                         preset = candidate
                         break
             if preset is not None:
-                preset["last_run"] = core.now_iso()
                 matched["preset"] = preset
+                # The built-in Lab default is a launch TEMPLATE you launch FROM,
+                # never a saved config, so it must NEVER record a run (Job 2).
+                # Keep it as the matched/selected config, but do not stamp it.
+                if not core.is_builtin(preset):
+                    preset["last_run"] = core.now_iso()
 
         try:
             self._mutate_store(_apply)

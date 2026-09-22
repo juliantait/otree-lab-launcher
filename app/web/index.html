@@ -1010,7 +1010,7 @@ var PREVIEW_LABS=[
   {"id":"small","name":"Small lab","host":"localhost","seats":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22"],"map":{"cols":5,"rows":5,"cells":[{"r":5,"c":1,"kind":"exp"},{"r":5,"c":2,"kind":"seat"},{"r":5,"c":3,"kind":"seat"},{"r":5,"c":4,"kind":"seat"},{"r":5,"c":5,"kind":"seat"},{"r":4,"c":1,"kind":"seat"},{"r":4,"c":2,"kind":"seat"},{"r":4,"c":3,"kind":"seat"},{"r":4,"c":4,"kind":"seat"},{"r":4,"c":5,"kind":"wall"},{"r":3,"c":1,"kind":"seat"},{"r":3,"c":2,"kind":"seat"},{"r":3,"c":3,"kind":"seat"},{"r":3,"c":4,"kind":"seat"},{"r":3,"c":5,"kind":"wall"},{"r":2,"c":1,"kind":"seat"},{"r":2,"c":2,"kind":"seat"},{"r":2,"c":3,"kind":"seat"},{"r":2,"c":4,"kind":"seat"},{"r":2,"c":5,"kind":"seat"},{"r":1,"c":1,"kind":"seat"},{"r":1,"c":2,"kind":"seat"},{"r":1,"c":3,"kind":"seat"},{"r":1,"c":4,"kind":"seat"},{"r":1,"c":5,"kind":"seat"}]}}
 ];
 var PREVIEW_CONFIGS=[
-  {name:"Lab default",builtin:true,lab:"large",folder:"",author:"builtin",when:"Never run"},
+  {name:"Lab default",builtin:true,lab:"large",folder:"",author:"builtin",when:""},
   {name:"Dictator study",builtin:false,lab:"large",folder:"C:\\experiments\\dictator_game",author:"J. Tait",when:"15 Sep 2026"},
   {name:"Bargaining wave 2",builtin:false,lab:"large",folder:"C:\\experiments\\bargaining_v2",author:"S. Vermeer",when:"11 Sep 2026"},
   {name:"Trust game pilot",builtin:false,lab:"small",folder:"C:\\experiments\\trust_pilot",author:"M. Researcher",when:"3 Sep 2026"},
@@ -1882,7 +1882,14 @@ function saveLabPreset(id){
   var done=function(r){
     if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
       /* A changed default_room re-derives the built-in Lab default live. */
-      if(r.configs)renderConfigList(r.configs,currentConfigName);
+      if(r.configs){renderConfigList(r.configs,currentConfigName);
+        /* JOB 1: the built-in Lab default's room FOLLOWS the lab's default room.
+           If it is the config on screen, re-apply the (possibly changed) lab
+           room to the room label NOW so "Room X (lab default)" updates without a
+           restart -- matching the backend's live re-derive. Re-snapshot clean so
+           the template does not read as edited. */
+        var sel=r.configs.filter(function(c){return c.name===currentConfigName;})[0];
+        if(sel&&sel.builtin){setRoom(labRoom());markFormClean();}}
       openLabSettings();
       var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}}
     else fail((r&&r.message)||"Could not save the lab.");};

@@ -780,6 +780,15 @@ def default_preset():
     return preset
 
 
+def clear_builtin_last_run(presets):
+    """Force the built-in Lab default's ``last_run`` to None, in place (Job 2).
+
+    The built-in "Lab default" is a launch TEMPLATE, never a saved config, so it
+    must NEVER record a run; this clears any ``last_run`` a previous version
+    stamped onto it on load. Mirror of otree_core.clear_builtin_last_run."""
+    return core.clear_builtin_last_run(presets)
+
+
 def load_store(path=None):
     """Read the presets file.
 
@@ -1620,6 +1629,9 @@ class LauncherApp(object):
         # memory to the built-in only; user configs untouched. A no-op on first
         # launch (marker unset).
         apply_lab_marker(self.presets, lab_presets=self.lab_presets)
+        # The built-in Lab default is a launch TEMPLATE: force its last_run to
+        # None on load so a stamp a previous version wrote is cleared (Job 2).
+        clear_builtin_last_run(self.presets)
         if not os.path.exists(self.store_path):
             try:
                 save_store(self.presets, self.store_extra, self.store_path)
@@ -1838,11 +1850,16 @@ class LauncherApp(object):
                                           font=self.fonts.small, anchor="w")
                         author.pack(fill="x")
 
-            when = tk.Label(text, text=format_last_run(preset.get("last_run")), bg=bg,
-                            fg=COLORS["muted"], font=self.fonts.small, anchor="w")
-            when.pack(fill="x")
+            # The built-in Lab default is a launch TEMPLATE, never a saved config,
+            # so it NEVER shows a run time (Job 2) -- only researcher configs do.
+            when = None
+            if not is_builtin(preset):
+                when = tk.Label(text, text=format_last_run(preset.get("last_run")), bg=bg,
+                                fg=COLORS["muted"], font=self.fonts.small, anchor="w")
+                when.pack(fill="x")
 
-            widgets = ([row, accent, text, title, name, when]
+            widgets = ([row, accent, text, title, name]
+                       + ([when] if when else [])
                        + ([line2] if line2 else []) + ([folder] if folder else [])
                        + ([badge] if badge else []) + ([author] if author else []))
             for widget in widgets:
@@ -3885,6 +3902,23 @@ class LauncherApp(object):
         # A lab's default_room may have just changed; re-derive the built-in Lab
         # default's room from the machine lab live (marker unset -> no-op).
         apply_lab_marker(self.presets, lab_presets=self.lab_presets)
+        # JOB 1: if the built-in Lab default is the config on screen its room
+        # FOLLOWS the lab, so re-apply the (possibly changed) lab room to the form
+        # NOW -- otherwise the "Room X (lab default)" label stays stale until a
+        # restart. Only when unedited (not dirty), and under the loading guard so
+        # it does not count as a user edit.
+        if (self.selected_index is not None
+                and 0 <= self.selected_index < len(self.presets)):
+            selected = self.presets[self.selected_index]
+            if is_builtin(selected) and not self.dirty:
+                new_room = normalize_config(selected)["room_name"]
+                if self.var["room_name"].get().strip() != new_room:
+                    self.loading = True
+                    try:
+                        self.var["room_name"].set(new_room)
+                    finally:
+                        self.loading = False
+                self._update_room_default_tag()
         self._rebuild_lab_tiles()
         self._apply_lab_view()
         self.refresh_previews()
@@ -3981,11 +4015,13 @@ class LauncherApp(object):
         self.log("Room set to %r for this run." % name, "info")
 
     def _update_room_default_tag(self):
-        """Show the muted "(lab default)" tag only for the study room."""
+        """Show the muted "(lab default)" tag whenever the room IS this lab's
+        default room (which may have been changed in Lab Settings), not a
+        hardcoded "study" -- parity with the web roomTag (Job 1)."""
         tag = getattr(self, "room_default_tag", None)
         if tag is None:
             return
-        is_default = (self.var["room_name"].get().strip() == DEFAULT_ROOM_NAME)
+        is_default = (self.var["room_name"].get().strip() == self._lab_room())
         try:
             if is_default:
                 tag.pack(side="left")
@@ -4552,6 +4588,13 @@ class LauncherApp(object):
                      "Use Save as new to keep them.", "muted")
             return
         preset = self.presets[self.selected_index]
+        # The built-in Lab default is a launch TEMPLATE you launch FROM, never a
+        # saved config, so it must NEVER record a run (Job 2). Keep the same muted
+        # "not a saved config" guidance in the log and do not stamp it.
+        if is_builtin(preset):
+            self.log("The Lab default is a launch template, so nothing was stamped. "
+                     "Use Save as new to keep these settings.", "muted")
+            return
         # Runs on the launch WORKER thread, so stamp + save go through the store
         # lock: a UI-thread "save as new" cannot interleave and lose either change.
         try:
@@ -7561,12 +7604,14 @@ def headless_run(config_name, store_path=None):
         return 7
 
     # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
-    # but ONLY now that the server is confirmed ready.
-    try:
-        match["last_run"] = core.now_iso()
-        save_store(presets, store_extra, store_path)
-    except OSError:
-        pass
+    # but ONLY now that the server is confirmed ready, and NEVER for the built-in
+    # Lab default (it is a launch TEMPLATE, not a saved config -- Job 2).
+    if not is_builtin(match):
+        try:
+            match["last_run"] = core.now_iso()
+            save_store(presets, store_extra, store_path)
+        except OSError:
+            pass
 
     _hlog("Done. The server keeps running in its own window.")
     return 0

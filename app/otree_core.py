@@ -1640,6 +1640,21 @@ def default_preset():
     return preset
 
 
+def clear_builtin_last_run(presets):
+    """Force the built-in Lab default's ``last_run`` to None, in place (Job 2).
+
+    The built-in "Lab default" is a launch TEMPLATE you launch FROM, never a
+    saved config, so it must NEVER record a run. This clears any ``last_run`` a
+    previous version stamped onto it (Pass 9 over-corrected and stamped it) so a
+    stored stamp is wiped on load. Idempotent; user configs are untouched.
+    Returns ``presets`` for chaining.
+    """
+    for preset in presets:
+        if is_builtin(preset):
+            preset["last_run"] = None
+    return presets
+
+
 def load_store(path=None, default_factory=None):
     """Read the presets file.
 
@@ -3691,6 +3706,12 @@ def enumerate_rooms_for_picker(project_path, lab_room=None, timeout=8.0,
 
 PREFLIGHT_DB_TIMEOUT = 4          # seconds for the psycopg2 connect probe
 PREFLIGHT_ROOMS_TIMEOUT = 6.0     # seconds for the ROOMS subprocess import
+# A just-quit server (Ctrl-C) can leave the launch port in TIME_WAIT for a
+# moment, so a plain bind fails EADDRINUSE even though nothing is listening.
+# These bound the disambiguation (a short connect probe + one retried bind) so
+# the port check stops "crying wolf" right after a quit (Job 3).
+PREFLIGHT_PORT_CONNECT_TIMEOUT = 0.5   # seconds for the "is anything accepting?" probe
+PREFLIGHT_PORT_RETRY_DELAY = 0.4       # seconds to let a TIME_WAIT socket clear before re-binding
 
 
 # Field tags for pre-launch issues (the ``field`` key). An issue carries one when
@@ -3752,15 +3773,65 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
         mask_database_url(url))
 
 
+def _port_bind_free(port):
+    """(True, None) when a fresh socket can bind ``port`` here, else (False, err).
+
+    SO_REUSEADDR is deliberately LEFT OFF: on POSIX it would let the probe bind
+    over a TIME_WAIT socket (we WANT to detect that here and disambiguate it
+    below), and on Windows it would let the probe bind over an ACTIVE listener
+    (hijack), which would hide a genuinely-busy port. So the plain bind is the
+    conservative signal; the caller sorts a real listener from a TIME_WAIT lag.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("", port))
+        return True, None
+    except OSError as error:
+        return False, error
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _port_has_listener(port, host="127.0.0.1", timeout=PREFLIGHT_PORT_CONNECT_TIMEOUT):
+    """True when something is actually ACCEPTING connections on ``port``.
+
+    A live server accepts the test connection; a lingering TIME_WAIT / closing
+    socket left by a just-quit server does NOT (connection refused), so this
+    tells a genuinely-busy port from the post-Ctrl-C release lag. The launcher
+    binds oTree on all interfaces, so a localhost probe reaches it.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def preflight_check_port(config):
     """Check 2: the launch port is free to bind on this machine.
 
     Tries to bind the port oTree will use (from ``config['port']``). A bind that
-    fails with "address already in use" means another server is probably still
-    running. The probe socket is closed immediately on success. SO_REUSEADDR is
-    deliberately left off, so a genuine listener is detected.
+    fails with "address already in use" USUALLY means another server is still
+    running -- but right after a Ctrl-C quit the OS can hold the port in
+    TIME_WAIT for a moment, so a plain bind fails even though nothing is
+    listening (Job 3). To stop "crying wolf" then, a failed bind is
+    disambiguated: only when something actually ACCEPTS a test connection is the
+    port reported in use; a lingering TIME_WAIT socket (which refuses
+    connections) reads as free, after one retried bind following a short pause.
+    Either way this is a SOFT check -- launch-anyway still works.
     """
-    import socket
     import errno
     c = normalize_config(config)
     raw = str(c["port"]).strip()
@@ -3781,26 +3852,46 @@ def preflight_check_port(config):
             "The launch port %d is out of range (it must be between 1 and 65535)." % port,
             "port=%r" % raw)
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("", port))
-    except OSError as error:
-        if error.errno in (errno.EADDRINUSE, errno.EACCES):
-            return _preflight_result(
-                "port", False,
-                "Port %d is already in use: another server may still be running."
-                % port,
-                str(error))
+    ok, error = _port_bind_free(port)
+    if ok:
+        return _preflight_result("port", True, "Port %d is free." % port, "")
+
+    # A non-"in use" error (e.g. an odd platform errno) is not something we can
+    # act on: pass with a note, exactly as before.
+    if error.errno not in (errno.EADDRINUSE, errno.EACCES):
         return _preflight_result(
             "port", True,
             "Could not test port %d (%s), continuing." % (port, error),
             str(error))
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-    return _preflight_result("port", True, "Port %d is free." % port, "")
+
+    def _in_use(err):
+        return _preflight_result(
+            "port", False,
+            "Port %d is already in use: another server is running." % port,
+            str(err))
+
+    # EACCES is a permission problem (a privileged port), not a TIME_WAIT lag --
+    # keep reporting it as busy.
+    if error.errno == errno.EACCES:
+        return _in_use(error)
+
+    # EADDRINUSE: a live listener, or just the release lag from a quit server?
+    if _port_has_listener(port):
+        return _in_use(error)
+
+    # Nothing is accepting -- most likely a TIME_WAIT socket from a just-quit
+    # server. Give the OS a moment and re-check the bind once before deciding.
+    time.sleep(PREFLIGHT_PORT_RETRY_DELAY)
+    ok2, error2 = _port_bind_free(port)
+    if ok2:
+        return _preflight_result("port", True, "Port %d is free." % port, "")
+    if _port_has_listener(port):
+        return _in_use(error2)
+    return _preflight_result(
+        "port", True,
+        "Port %d looks free: nothing is listening (a just-closed server may "
+        "still be releasing it)." % port,
+        str(error2))
 
 
 def preflight_check_project(config, timeout=PREFLIGHT_ROOMS_TIMEOUT):
