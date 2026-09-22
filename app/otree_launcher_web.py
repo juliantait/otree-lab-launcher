@@ -221,20 +221,45 @@ def preset_row(preset):
 class Api(object):
     def __init__(self, store_path=None):
         self.store_path = store_path or core.presets_path()
+        # ONE in-process lock for every read-modify-write-save of the store
+        # (self.presets / self.store_extra). The UI (js_api) methods run on the
+        # WebView thread while launch / database / dialog workers run on their
+        # own daemon threads and ALSO mutate-and-save the store; without this a
+        # background last_run stamp and a UI "save as new" could interleave so
+        # one save clobbers the other's change. Re-entrant so a helper that calls
+        # another store-mutating method on the same thread does not deadlock.
+        self._store_lock = threading.RLock()
         self.presets, self.store_extra = core.load_store(self.store_path)
         # This machine's lab identity (lab.local) configures the built-in
         # default's lab. Applied in memory to the built-in only; user configs
         # are untouched. A no-op on first launch (marker unset).
         core.apply_lab_marker(self.presets)
-        self.presets = core.sort_presets(self.presets)
+        self.presets = core.order_presets_for_display(self.presets)
         if not os.path.exists(self.store_path):
             try:
-                core.save_store(self.presets, self.store_extra, self.store_path)
+                self._mutate_store(lambda: None)
             except OSError:
                 pass
         self.window = None  # set by main() once the window exists
 
     # -- helpers -----------------------------------------------------------
+
+    def _mutate_store(self, mutate):
+        """Serialise one read-modify-write-save of the store under the app lock.
+
+        Holds ``self._store_lock`` across BOTH the mutation callback and the
+        ``save_store`` that persists it, so no two threads can interleave their
+        read-modify-write-save sequences (a lost update) and no thread can mutate
+        ``self.presets`` / ``self.store_extra`` while another is serialising them
+        to disk. ``mutate`` does the in-place change (and may return a value the
+        caller wants); the whole store is then written atomically. Any
+        ``save_store`` OSError propagates so callers can report it -- the
+        in-memory mutation has still been applied.
+        """
+        with self._store_lock:
+            result = mutate()
+            core.save_store(self.presets, self.store_extra, self.store_path)
+            return result
 
     def _find(self, name):
         for preset in self.presets:
@@ -300,8 +325,13 @@ class Api(object):
 
     @api_call
     def get_initial_state(self):
-        rows = [preset_row(p) for p in self.presets]
-        selected = self.presets[0] if self.presets else None
+        # Order at DISPLAY time (built-in default pinned top, then most-recently-
+        # launched first) and OPEN selected on the last-launched config, falling
+        # back to the pinned default when nothing has been launched. Both come
+        # from core so the Tk face agrees exactly.
+        ordered = core.order_presets_for_display(self.presets)
+        rows = [preset_row(p) for p in ordered]
+        selected = core.select_on_open(self.presets)
         fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
         # The labs the selector should offer, seeded from lab_info.json and
         # narrowed to the displayed ones. The JS builds its lab buttons and seat
@@ -433,15 +463,20 @@ class Api(object):
             return {"ok": False, "message": "A config called %r already exists." % name}
         author = (author or "").strip() or self._default_author()
         preset = core.preset_from_fields(name, fields_to_config(fields), author=author)
-        self.presets.append(preset)
-        self.presets = core.sort_presets(self.presets)
-        # Remember the author across sessions (round-tripped through store_extra),
-        # so the next Save As prefills it. Kept JSON-serialisable; unknown keys
-        # in store_extra are preserved by save_store.
-        if preset.get("author"):
-            self.store_extra["last_author"] = preset["author"]
+
+        def _apply():
+            self.presets.append(preset)
+            self.presets = core.order_presets_for_display(self.presets)
+            # Remember the author across sessions (round-tripped through
+            # store_extra), so the next Save As prefills it. Kept
+            # JSON-serialisable; unknown keys in store_extra are preserved.
+            if preset.get("author"):
+                self.store_extra["last_author"] = preset["author"]
+
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            # Lock-guarded: a background launch stamping last_run cannot interleave
+            # with this save and lose either change.
+            self._mutate_store(_apply)
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         # Log line is RETURNED for the page to append, not pushed via
@@ -460,11 +495,13 @@ class Api(object):
         if core.is_builtin(preset):
             return {"ok": False, "builtin": True,
                     "message": "%r is a built-in config and cannot be deleted." % name}
-        self.presets = [p for p in self.presets if p is not preset]
-        if not self.presets:
-            self.presets = [core.default_preset()]
+        def _apply():
+            self.presets = [p for p in self.presets if p is not preset]
+            if not self.presets:
+                self.presets = [core.default_preset()]
+
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(_apply)
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
@@ -495,9 +532,8 @@ class Api(object):
         if not written:
             return {"ok": False, "already": True,
                     "message": "This machine's lab is already set in lab.local."}
-        core.apply_lab_marker(self.presets, lab)
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(lambda: core.apply_lab_marker(self.presets, lab))
         except OSError:
             pass
         selected = self.presets[0] if self.presets else None
@@ -582,9 +618,9 @@ class Api(object):
         """Persist which built-in database a brand-new config starts on (Lab
         Settings > Default database). Mirrors the Tk ``_save_default_db``."""
         db_id = (db_id or "").strip() or core.DB_BUILTIN_LAB
-        self.store_extra["default_database"] = db_id
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("default_database", db_id))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "default_database": db_id}
@@ -608,10 +644,9 @@ class Api(object):
         if result.get("ok"):
             fields = result.get("fields") or {}
             try:
-                entry = core.register_database(
+                entry = self._mutate_store(lambda: core.register_database(
                     self.store_extra, title=new_db, researcher=researcher,
-                    connection=fields, postgres_user=fields.get("db_user", ""))
-                core.save_store(self.presets, self.store_extra, self.store_path)
+                    connection=fields, postgres_user=fields.get("db_user", "")))
                 result["registered"] = entry
                 result["databases"] = core.known_databases_from_store(self.store_extra)
                 result["researchers"] = core.list_researchers(self.store_extra, self.presets)
@@ -628,9 +663,9 @@ class Api(object):
         """
         fields = fields or {}
         admin = {k: str(fields.get(k, "") or "") for k in core.PG_ADMIN_KEYS}
-        self.store_extra["pg_admin"] = admin
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("pg_admin", admin))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "pg_admin": core.pg_admin_from_store(self.store_extra)}
@@ -642,11 +677,10 @@ class Api(object):
         place, and attach the refreshed lists to ``result``. A registry error
         must never lose the database, so it is reported, not raised."""
         try:
-            entry = core.register_database(
+            entry = self._mutate_store(lambda: core.register_database(
                 self.store_extra, title=fields.get("db_name", ""),
                 researcher=researcher, connection=fields,
-                postgres_user=fields.get("db_user", ""))
-            core.save_store(self.presets, self.store_extra, self.store_path)
+                postgres_user=fields.get("db_user", "")))
             result["registered"] = entry
             result["databases"] = core.known_databases_from_store(self.store_extra)
             result["researchers"] = core.list_researchers(self.store_extra, self.presets)
@@ -766,9 +800,9 @@ class Api(object):
         ok, message, presets = core.set_lab_display(presets, lab_id, display)
         if not ok:
             return {"ok": False, "message": message}
-        self.store_extra["lab_presets"] = presets
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("lab_presets", presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "presets": _lab_rows(presets), "labs": _lab_tiles(presets)}
@@ -786,9 +820,9 @@ class Api(object):
             presets, name, ip, seats, display=True, cols=cols or 0)
         if not ok:
             return {"ok": False, "message": message}
-        self.store_extra["lab_presets"] = presets
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("lab_presets", presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
@@ -803,9 +837,9 @@ class Api(object):
             presets, lab_id, name=name, ip=ip, seats=seats, cols=cols)
         if not ok:
             return {"ok": False, "message": message}
-        self.store_extra["lab_presets"] = presets
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("lab_presets", presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
@@ -824,9 +858,9 @@ class Api(object):
             presets, lab_id, selected_lab=selected_lab)
         if not ok:
             return {"ok": False, "message": message}
-        self.store_extra["lab_presets"] = presets
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(
+                lambda: self.store_extra.__setitem__("lab_presets", presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
@@ -1371,13 +1405,20 @@ class Api(object):
         return base
 
     def _mark_run(self, cfg):
-        """Stamp the matching saved config as run just now, if one matches."""
-        for preset in self.presets:
-            if not core.configs_differ(preset, cfg):
-                preset["last_run"] = core.now_iso()
-                break
+        """Stamp the matching saved config as run just now, if one matches.
+
+        Runs on the launch WORKER thread, so it goes through the store lock: a
+        UI-thread "save as new" cannot interleave with this stamp-and-save and
+        clobber either change.
+        """
+        def _apply():
+            for preset in self.presets:
+                if not core.configs_differ(preset, cfg):
+                    preset["last_run"] = core.now_iso()
+                    break
+
         try:
-            core.save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(_apply)
         except OSError:
             pass
 

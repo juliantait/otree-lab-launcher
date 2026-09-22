@@ -823,22 +823,12 @@ def save_store(presets, extra=None, path=None):
 def sort_presets(presets):
     """Built-in (Lab default) first, then most recently run, then by name.
 
-    The built-in default is always pinned to the very top regardless of when it
-    last ran; everything else falls under the recent-run ordering below it.
+    De-duplicated (Pass 5): the ordering lives once in
+    :func:`otree_core.order_presets_for_display` so the Tk sidebar and the web
+    config list agree exactly. Kept under this name because the launcher and its
+    tests call ``sort_presets``.
     """
-
-    def key(item):
-        stamp = item.get("last_run")
-        stamp = stamp if isinstance(stamp, str) and stamp else ""
-        return (0 if is_builtin(item) else 1,
-                0 if stamp else 1, _invert(stamp), str(item.get("name", "")).casefold())
-
-    return sorted(presets, key=key)
-
-
-def _invert(stamp):
-    """Sort ISO timestamps descending inside an otherwise ascending sort."""
-    return tuple(-ord(ch) for ch in stamp)
+    return core.order_presets_for_display(presets)
 
 
 def unique_name(name, presets):
@@ -1629,6 +1619,14 @@ class LauncherApp(object):
         self.person_glyph = glyph_or_fallback(PERSON_EMOJI, PERSON_FALLBACK)
         self.folder_glyph = glyph_or_fallback(FOLDER_EMOJI, FOLDER_FALLBACK)
 
+        # ONE in-process lock for every read-modify-write-save of the store
+        # (self.presets / self.store_extra). Tk UI actions run on the main
+        # thread, but the launch worker (last_run stamp) and the create-database
+        # worker also mutate-and-save the store from their own daemon threads;
+        # without this a background stamp and a UI "save as new" could interleave
+        # so one save clobbers the other. Re-entrant so _mutate_store -> _persist
+        # on the same thread does not deadlock. See _mutate_store / _persist.
+        self._store_lock = threading.RLock()
         self.presets, self.store_extra = load_store(self.store_path)
         # This machine's lab identity (lab.local) configures the built-in
         # default's lab. Applied in memory to the built-in only; user configs
@@ -1664,8 +1662,13 @@ class LauncherApp(object):
         self._wire_traces()
 
         self.refresh_sidebar()
+        # Open SELECTED on the most-recently-launched config (falling back to the
+        # pinned built-in default when nothing has been launched). Shared with the
+        # web face through core.select_on_open, so both open on the same config.
         if self.presets:
-            self.select_preset(0, log_it=False)
+            open_on = core.select_on_open(self.presets)
+            open_index = self._index_of(open_on) if open_on is not None else 0
+            self.select_preset(open_index if open_index is not None else 0, log_it=False)
         else:
             self.load_fields(DEFAULT_CONFIG, None)
         self._prefill_last_project()
@@ -3416,9 +3419,9 @@ class LauncherApp(object):
         """Remember the last project folder per machine (in store_extra)."""
         path = os.path.normpath(path)
         if self.store_extra.get("last_project") != path:
-            self.store_extra["last_project"] = path
             try:
-                save_store(self.presets, self.store_extra, self.store_path)
+                self._mutate_store(
+                    lambda: self.store_extra.__setitem__("last_project", path))
             except OSError:
                 pass
 
@@ -3438,16 +3441,20 @@ class LauncherApp(object):
         if not name:
             return
         preset = preset_from_fields(name, self.form_values(), author=dialog.author)
-        self.presets.append(preset)
-        # Remember the author for next time (JSON-serialisable; unknown keys in
-        # store_extra are preserved by save_store). The author also joins the
-        # shared researcher roster (the same one the create-database dialog uses).
-        if preset.get("author"):
-            self.store_extra["last_author"] = preset["author"]
-            core.add_researcher(self.store_extra, preset["author"])
-        if not self._persist():
-            self.presets.remove(preset)
-            return
+        # Hold the store lock across the in-memory mutation AND the save, so a
+        # background last_run stamp cannot interleave and clobber this new config
+        # (or vice versa). _persist re-acquires the same re-entrant lock.
+        with self._store_lock:
+            self.presets.append(preset)
+            # Remember the author for next time (JSON-serialisable; unknown keys
+            # in store_extra are preserved by save_store). The author also joins
+            # the shared researcher roster (also used by the create-db dialog).
+            if preset.get("author"):
+                self.store_extra["last_author"] = preset["author"]
+                core.add_researcher(self.store_extra, preset["author"])
+            if not self._persist():
+                self.presets.remove(preset)
+                return
         self.selected_index = self._index_of(preset)
         self.dirty = False
         self.refresh_dirty()
@@ -3481,13 +3488,15 @@ class LauncherApp(object):
             return
         selected_preset = (self.presets[self.selected_index]
                            if self.selected_index is not None else None)
-        self.presets = [p for p in self.presets if p is not preset]
-        if selected_preset is preset or selected_preset is None:
-            self.selected_index = None
-        else:
-            self.selected_index = self._index_of(selected_preset)
-        if not self._persist():
-            return
+        # Mutate + save under the store lock so a background stamp cannot race it.
+        with self._store_lock:
+            self.presets = [p for p in self.presets if p is not preset]
+            if selected_preset is preset or selected_preset is None:
+                self.selected_index = None
+            else:
+                self.selected_index = self._index_of(selected_preset)
+            if not self._persist():
+                return
         if selected_preset is preset:
             self.dirty = False
             self.subtitle.configure(text="Config: unsaved settings")
@@ -3582,9 +3591,10 @@ class LauncherApp(object):
             ok, message, new_list, preset = core.add_lab_preset(
                 self.lab_presets, name, ip, seats, cols=cols)
             if ok:
-                self.store_extra["lab_presets"] = new_list
-                self.lab_presets = core.lab_presets_from_store(self.store_extra)
-                self._persist_store()
+                with self._store_lock:
+                    self.store_extra["lab_presets"] = new_list
+                    self.lab_presets = core.lab_presets_from_store(self.store_extra)
+                    self._persist_store()
                 self._set_lab_identity(preset["id"], dialog)
             return ok, message
         LabPresetEditDialog(dialog, self.fonts, "Create a new lab", None, on_save)
@@ -3611,19 +3621,22 @@ class LauncherApp(object):
                 "lab.local could not be written:\n\n%s" % error, parent=self.root)
             return
         # Make it the ONLY displayed lab (reuse the display-toggle machinery), so
-        # the machine shows just its one lab.
+        # the machine shows just its one lab. The store mutations + save happen
+        # under the store lock so a background worker's save cannot race them
+        # (_persist_store re-acquires the same re-entrant lock).
         ok, _msg, new_list = core.apply_lab_identity(self.lab_presets, lab_id)
-        if ok:
-            self.store_extra["lab_presets"] = new_list
-            self.lab_presets = core.lab_presets_from_store(self.store_extra)
-        # Point the built-in default's lab at this machine's lab.
-        apply_lab_marker(self.presets, lab_id)
+        with self._store_lock:
+            if ok:
+                self.store_extra["lab_presets"] = new_list
+                self.lab_presets = core.lab_presets_from_store(self.store_extra)
+            # Point the built-in default's lab at this machine's lab.
+            apply_lab_marker(self.presets, lab_id)
+            self._persist_store()
         if dialog is not None:
             try:
                 dialog.destroy()
             except tk.TclError:
                 pass
-        self._persist_store()
         # Repaint the main selector to the single lab and reflect it in the form.
         self._rebuild_lab_tiles()
         selected = self.presets[self.selected_index] if self.selected_index is not None else None
@@ -3640,16 +3653,37 @@ class LauncherApp(object):
         if log:
             self.log("This machine is set to %s (saved to lab.local)." % label, "ok")
 
-    def _persist(self):
-        try:
+    def _mutate_store(self, mutate):
+        """Serialise one read-modify-write-save of the store under the app lock.
+
+        Holds ``self._store_lock`` across BOTH the mutation callback and the
+        ``save_store``, so no two threads can interleave their read-modify-write-
+        save sequences (a lost update) and no thread can mutate ``self.presets`` /
+        ``self.store_extra`` while another is serialising them to disk. Used by
+        the background workers (launch stamp, create-database registration) and
+        by the store-writing dialogs. Returns whatever ``mutate`` returns; a
+        ``save_store`` OSError propagates (the in-memory change is still applied).
+        The lock is re-entrant, so a callback may itself call another lock-guarded
+        save without deadlocking.
+        """
+        with self._store_lock:
+            result = mutate()
             save_store(self.presets, self.store_extra, self.store_path)
-            return True
-        except OSError as error:
-            messagebox.showerror(
-                "Could not save", "The config file could not be written:\n\n%s\n\n%s"
-                % (self.store_path, error), parent=self.root)
-            self.log("Could not write %s: %s" % (self.store_path, error), "err")
-            return False
+            return result
+
+    def _persist(self):
+        # Lock-guarded so a background worker's stamp-and-save cannot serialise
+        # the store while this save is mid-write (or vice versa).
+        with self._store_lock:
+            try:
+                save_store(self.presets, self.store_extra, self.store_path)
+                return True
+            except OSError as error:
+                messagebox.showerror(
+                    "Could not save", "The config file could not be written:\n\n%s\n\n%s"
+                    % (self.store_path, error), parent=self.root)
+                self.log("Could not write %s: %s" % (self.store_path, error), "err")
+                return False
 
     def show_block(self):
         cfg = self.form_values()
@@ -3794,11 +3828,16 @@ class LauncherApp(object):
         LabSettingsDialog(self.root, self.fonts, self)
 
     def _persist_store(self):
-        """Save presets + extra (which now carries lab_presets and pg_admin)."""
-        try:
-            save_store(self.presets, self.store_extra, self.store_path)
-        except OSError as error:
-            messagebox.showerror("Could not save", str(error), parent=self.root)
+        """Save presets + extra (which now carries lab_presets and pg_admin).
+
+        Lock-guarded (see :meth:`_persist`) so it cannot race a background
+        worker's stamp-and-save.
+        """
+        with self._store_lock:
+            try:
+                save_store(self.presets, self.store_extra, self.store_path)
+            except OSError as error:
+                messagebox.showerror("Could not save", str(error), parent=self.root)
 
     def apply_lab_presets_change(self):
         """Re-read lab presets from the store and repaint the main selector.
@@ -3854,10 +3893,11 @@ class LauncherApp(object):
         if result.get("ok"):
             fields = result.get("fields") or {}
             try:
-                entry = core.register_database(
+                # Worker thread: register + save atomically under the store lock so
+                # it cannot race a UI save (or the launch stamp).
+                entry = self._mutate_store(lambda: core.register_database(
                     self.store_extra, title=name, researcher=researcher,
-                    connection=fields, postgres_user=fields.get("db_user", ""))
-                self._persist_store()
+                    connection=fields, postgres_user=fields.get("db_user", "")))
                 result["registered"] = entry
             except Exception as error:   # registration must never lose the DB
                 result["register_error"] = str(error)
@@ -4454,9 +4494,10 @@ class LauncherApp(object):
                      "Use Save as new to keep them.", "muted")
             return
         preset = self.presets[self.selected_index]
-        preset["last_run"] = now_iso()
+        # Runs on the launch WORKER thread, so stamp + save go through the store
+        # lock: a UI-thread "save as new" cannot interleave and lose either change.
         try:
-            save_store(self.presets, self.store_extra, self.store_path)
+            self._mutate_store(lambda: preset.__setitem__("last_run", now_iso()))
         except OSError as error:
             self.log("Could not update the last-run time: %s" % error, "warn")
             return
@@ -6664,13 +6705,16 @@ class LabSettingsDialog(object):
         self.a_pw_entry.configure(show="" if self.show_pw.get() else MASK_CHAR)
 
     def _save_admin(self):
-        self.app.store_extra["pg_admin"] = {
-            "admin_username": self.a_user.get().strip(),
-            "admin_password": self.a_pw.get(),
-            "admin_host": self.a_host.get().strip(),
-            "admin_port": self.a_port.get().strip(),
-        }
-        self.app._persist_store()
+        # Mutate + save under the app store lock (re-entrant) so it cannot race a
+        # background worker serialising the store.
+        with self.app._store_lock:
+            self.app.store_extra["pg_admin"] = {
+                "admin_username": self.a_user.get().strip(),
+                "admin_password": self.a_pw.get(),
+                "admin_host": self.a_host.get().strip(),
+                "admin_port": self.a_port.get().strip(),
+            }
+            self.app._persist_store()
         self.admin_status.configure(text="Saved ✓", fg=COLORS["ok"])
 
     # -- database section: custom registry + default ------------------------
@@ -6771,8 +6815,9 @@ class LabSettingsDialog(object):
                    command=self._view_block).pack(side="left")
 
     def _save_default_db(self):
-        self.app.store_extra["default_database"] = self.default_db.get()
-        self.app._persist_store()
+        with self.app._store_lock:
+            self.app.store_extra["default_database"] = self.default_db.get()
+            self.app._persist_store()
 
     def _view_block(self):
         self.app.show_block()
@@ -6795,8 +6840,9 @@ class LabSettingsDialog(object):
         return sel[0] if sel else None
 
     def _save_presets(self, new_list):
-        self.app.store_extra["lab_presets"] = new_list
-        self.app._persist_store()
+        with self.app._store_lock:
+            self.app.store_extra["lab_presets"] = new_list
+            self.app._persist_store()
         self._reload_tree()
         self.app.apply_lab_presets_change()
 

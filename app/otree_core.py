@@ -1544,6 +1544,14 @@ def save_store(presets, extra=None, path=None):
     The new content goes to a temporary file in the same directory, is flushed
     to disk, and only then replaces the old file, so an interrupted write can
     never leave a half-written presets.json behind.
+
+    The whole write is wrapped in a best-effort CROSS-PROCESS file lock on a
+    sibling ``.lock`` file, so two launcher instances sharing one data dir (e.g.
+    a GUI and the headless one-click shortcut) serialise their writes instead of
+    racing os.replace. The in-process store lock each face holds guards threads
+    within one process; this guards separate processes. It degrades to a no-op
+    where OS locking is unavailable (the atomic temp-file + os.replace is still
+    correct on its own -- see :func:`exclusive_file_lock`).
     """
     path = path or presets_path()
     folder = os.path.dirname(path) or "."
@@ -1553,29 +1561,30 @@ def save_store(presets, extra=None, path=None):
     payload["presets"] = presets
     text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
 
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=folder, prefix=".presets-", suffix=".tmp", delete=False
-    )
-    tmp_name = handle.name
-    try:
-        # presets.json carries DB creds, custom-DB creds and Postgres-admin creds,
-        # so lock it down to owner-only (0o600) on POSIX, including the temp file,
-        # before it is fsync'd and replaced into place. See secure_chmod (Windows
-        # ACLs are not hardened here).
-        secure_chmod(tmp_name)
-        handle.write(text)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-        handle.close()
-        os.replace(tmp_name, path)
-    except Exception:
-        handle.close()
+    with exclusive_file_lock(path + ".lock"):
+        handle = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=folder, prefix=".presets-", suffix=".tmp", delete=False
+        )
+        tmp_name = handle.name
         try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+            # presets.json carries DB creds, custom-DB creds and Postgres-admin creds,
+            # so lock it down to owner-only (0o600) on POSIX, including the temp file,
+            # before it is fsync'd and replaced into place. See secure_chmod (Windows
+            # ACLs are not hardened here).
+            secure_chmod(tmp_name)
+            handle.write(text)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.close()
+            os.replace(tmp_name, path)
+        except Exception:
+            handle.close()
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
     secure_chmod(path)
     return path
 
@@ -1616,20 +1625,62 @@ def display_name(preset):
     return name
 
 
-def sort_presets(presets):
-    """Built-in (Lab default) first, then most recently run, then by name.
+def _stamp_of(item):
+    """A config's last_run as a plain ISO string ("" when never launched).
 
-    The built-in default is always pinned to the very top regardless of when it
-    last ran; everything else falls under the recent-run ordering below it.
+    ISO timestamps sort lexicographically in chronological order, so a plain
+    string compare (max / _invert) is a correct recency compare.
+    """
+    stamp = item.get("last_run")
+    return stamp if isinstance(stamp, str) and stamp else ""
+
+
+def order_presets_for_display(presets):
+    """The order the config list is shown in, shared by BOTH faces (Job 2).
+
+    The app-owned built-in Lab default is pinned to the very TOP regardless of
+    when it last ran; below it the saved configs are ordered MOST-RECENTLY-
+    LAUNCHED FIRST (by ``last_run`` descending). Configs that have never been
+    launched (``last_run`` None) come after every launched config, ordered by
+    name (case-insensitive) for a stable, predictable list.
+
+    This is a DISPLAY/SELECTION concern only: it returns a new sorted list and
+    never mutates or persists the stored order (see save_store) -- the ordering
+    is re-derived from ``last_run`` every time it is shown.
     """
 
     def key(item):
-        stamp = item.get("last_run")
-        stamp = stamp if isinstance(stamp, str) and stamp else ""
+        stamp = _stamp_of(item)
         return (0 if is_builtin(item) else 1,
                 0 if stamp else 1, _invert(stamp), str(item.get("name", "")).casefold())
 
     return sorted(presets, key=key)
+
+
+# Back-compat alias: the two faces (and the existing tests) call sort_presets;
+# it is now just the shared display ordering above so both faces agree.
+sort_presets = order_presets_for_display
+
+
+def select_on_open(presets):
+    """The config the app should open SELECTED (Job 2).
+
+    The most-recently-launched NON-built-in config, so reopening the launcher
+    lands on whatever you last ran rather than the pinned default. When no user
+    config has ever been launched it falls back to the built-in Lab default (the
+    first built-in), then to the first config, and to None only for an empty
+    list. Shares the ``last_run`` signal with :func:`order_presets_for_display`
+    so the selection is always a row the ordering also puts near the top.
+    """
+    if not presets:
+        return None
+    launched = [p for p in presets if not is_builtin(p) and _stamp_of(p)]
+    if launched:
+        return max(launched, key=_stamp_of)
+    for p in presets:
+        if is_builtin(p):
+            return p
+    return presets[0]
 
 
 def _invert(stamp):
