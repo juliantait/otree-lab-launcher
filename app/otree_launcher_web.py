@@ -190,12 +190,17 @@ def _lab_rows(presets):
             for p in presets]
 
 
-def _lab_tiles(presets):
-    """The lab selector tiles: only the DISPLAYED presets, with their seat map."""
+def _lab_tiles(presets, config_lab=None):
+    """The lab selector tiles for a config, with their seat maps.
+
+    Every DISPLAYED preset, PLUS the given config's own saved lab even when it
+    is hidden (``config_lab``) -- so a config saved on a now-hidden lab keeps a
+    tile for it (core.lab_options_for_config). With no ``config_lab`` this is
+    exactly the displayed labs, unchanged."""
     return [{"id": p["id"], "name": p["name"], "host": p["ip"],
              "seats": p["seats"], "map": p["map"],
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
-            for p in core.displayed_lab_presets(presets)]
+            for p in core.lab_options_for_config(presets, config_lab)]
 
 
 def preset_row(preset):
@@ -366,12 +371,10 @@ class Api(object):
             fields = dict(core.DEFAULT_CONFIG)
             fields["room_name"] = core.lab_default_room(
                 all_presets, core.read_lab_marker() or fields.get("lab"))
-        labs = [
-            {"id": p["id"], "name": p["name"], "host": p["ip"],
-             "seats": p["seats"], "map": p["map"],
-             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
-            for p in core.displayed_lab_presets(all_presets)
-        ]
+        # The per-config selector tiles: the displayed labs PLUS the initially
+        # selected config's own lab even if it is hidden, so a config saved on a
+        # now-hidden lab still shows (and keeps) its own lab (BUG B).
+        labs = _lab_tiles(all_presets, fields.get("lab"))
         # The full preset list (incl. hidden ones) + the Postgres admin config
         # feed the Lab Settings page. Both live in the store's extra, read here
         # through the existing core helpers (no new logic).
@@ -423,6 +426,10 @@ class Api(object):
         return {
             "ok": True,
             "fields": fields,
+            # The per-config selector tiles: displayed labs UNION this config's
+            # own lab (even if hidden), so loading it never drops its lab (BUG B).
+            "labs": _lab_tiles(
+                core.lab_presets_from_store(self.store_extra), fields.get("lab")),
             "project": project_status(fields.get("project_path", "")),
             "settings": core.inspect_settings(
                 fields.get("project_path", ""), self._lab_room_for(fields)),
@@ -541,6 +548,44 @@ class Api(object):
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
                 "selected": self.presets[0].get("name")}
 
+    def _apply_lab_identity(self, lab):
+        """BUG A: after lab.local is (re)written, collapse the DISPLAYED labs to
+        ``lab`` and re-point the built-in Lab default at it, persisting both
+        under the store lock. Mirrors the Tk ``_set_lab_identity`` display step
+        (core.apply_lab_identity), which the web path used to skip. Returns the
+        refreshed lab-preset list (normalized)."""
+        def _apply():
+            presets = core.lab_presets_from_store(self.store_extra)
+            ok, _msg, presets = core.apply_lab_identity(presets, lab)
+            if ok:
+                self.store_extra["lab_presets"] = presets
+            # Re-point the built-in default's lab (and room) at this machine's
+            # lab, using the just-collapsed list.
+            core.apply_lab_marker(self.presets, lab, lab_presets=presets)
+            return presets
+        try:
+            return self._mutate_store(_apply)
+        except OSError:
+            return core.lab_presets_from_store(self.store_extra)
+
+    def _lab_identity_response(self, lab):
+        """The shared payload for set_/change_lab_marker: refreshed config rows,
+        the selected config's fields, AND the refreshed lab-settings rows + the
+        per-config selector tiles (now collapsed to ``lab``) so the page can
+        repaint the main selector and the Shown column live (BUG A)."""
+        presets = self._apply_lab_identity(lab)
+        selected = self.presets[0] if self.presets else None
+        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
+        preset = (core.find_lab_preset(lab, presets)
+                  or core.find_lab_preset(lab, core.default_lab_presets()))
+        return {"ok": True, "lab_marker": lab,
+                "lab_name": preset.get("name") if preset else lab,
+                "configs": [preset_row(p) for p in self.presets],
+                "selected": selected.get("name") if selected else "",
+                "fields": fields,
+                "lab_presets": _lab_rows(presets),
+                "labs": _lab_tiles(presets, fields.get("lab"))}
+
     @api_call
     def set_lab_marker(self, lab):
         """First-launch operator choice of this machine's lab.
@@ -566,20 +611,9 @@ class Api(object):
         if not written:
             return {"ok": False, "already": True,
                     "message": "This machine's lab is already set in lab.local."}
-        try:
-            self._mutate_store(lambda: core.apply_lab_marker(
-                self.presets, lab,
-                lab_presets=core.lab_presets_from_store(self.store_extra)))
-        except OSError:
-            pass
-        selected = self.presets[0] if self.presets else None
-        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
-        preset = core.find_lab_preset(lab, presets)
-        return {"ok": True, "lab_marker": lab,
-                "lab_name": preset.get("name") if preset else lab,
-                "configs": [preset_row(p) for p in self.presets],
-                "selected": selected.get("name") if selected else "",
-                "fields": fields}
+        # Collapse the displayed labs to the chosen one + re-point the default,
+        # then hand the page refreshed rows/tiles to repaint (BUG A).
+        return self._lab_identity_response(lab)
 
     @api_call
     def change_lab_marker(self, lab):
@@ -601,20 +635,10 @@ class Api(object):
             core.set_lab_marker(lab)
         except (OSError, ValueError) as error:
             return {"ok": False, "message": "Could not write lab.local: %s" % error}
-        try:
-            self._mutate_store(lambda: core.apply_lab_marker(
-                self.presets, lab,
-                lab_presets=core.lab_presets_from_store(self.store_extra)))
-        except OSError:
-            pass
-        selected = self.presets[0] if self.presets else None
-        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
-        preset = core.find_lab_preset(lab, presets)
-        return {"ok": True, "lab_marker": lab,
-                "lab_name": preset.get("name") if preset else lab,
-                "configs": [preset_row(p) for p in self.presets],
-                "selected": selected.get("name") if selected else "",
-                "fields": fields}
+        # OVERWRITE path: same as first-run once the marker is written -- collapse
+        # the displayed labs to the chosen one, re-point the default, return the
+        # refreshed rows/tiles so the selector shifts live (BUG A).
+        return self._lab_identity_response(lab)
 
     # -- room picker / create-database / lab-settings bridges --------------
     # Each maps straight onto an existing otree_core function; no launch logic
@@ -865,8 +889,12 @@ class Api(object):
         return {"ok": True, "state": self.get_initial_state()}
 
     @api_call
-    def set_lab_display(self, lab_id, display):
-        """Show/hide a lab in the main selector from the Lab Settings table."""
+    def set_lab_display(self, lab_id, display, config_lab=None):
+        """Show/hide a lab in the main selector from the Lab Settings table.
+
+        ``config_lab`` is the lab of the config currently open on screen; the
+        returned selector tiles keep it even when it was just hidden, so hiding a
+        lab does not drop the open config's own lab tile (BUG B, Tk parity)."""
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets = core.set_lab_display(presets, lab_id, display)
         if not ok:
@@ -876,10 +904,12 @@ class Api(object):
                 lambda: self.store_extra.__setitem__("lab_presets", presets))
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
-        return {"ok": True, "presets": _lab_rows(presets), "labs": _lab_tiles(presets)}
+        return {"ok": True, "presets": _lab_rows(presets),
+                "labs": _lab_tiles(presets, config_lab)}
 
     @api_call
-    def add_lab(self, name, ip, seats, cols=0, default_room=None, shortcut_label=None):
+    def add_lab(self, name, ip, seats, cols=0, default_room=None,
+                shortcut_label=None, config_lab=None):
         """Add a lab preset from the Lab Settings page (web parity with Tk).
 
         Wraps core.add_lab_preset (validate → append), persists to the store, and
@@ -898,13 +928,13 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
-                "labs": _lab_tiles(presets),
+                "labs": _lab_tiles(presets, config_lab),
                 "configs": [preset_row(p) for p in self.presets],
                 "new_id": preset["id"] if preset else ""}
 
     @api_call
     def update_lab(self, lab_id, name=None, ip=None, seats=None, cols=None,
-                   default_room=None, shortcut_label=None):
+                   default_room=None, shortcut_label=None, config_lab=None):
         """Edit an existing lab preset from the Lab Settings page (web/Tk parity).
 
         A changed ``default_room`` also re-derives the built-in Lab default's room
@@ -922,7 +952,7 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
-                "labs": _lab_tiles(presets),
+                "labs": _lab_tiles(presets, config_lab),
                 "configs": [preset_row(p) for p in self.presets]}
 
     def _store_lab_presets(self, presets):
@@ -933,13 +963,14 @@ class Api(object):
         core.apply_lab_marker(self.presets, lab_presets=presets)
 
     @api_call
-    def delete_lab(self, lab_id, selected_lab=None):
+    def delete_lab(self, lab_id, selected_lab=None, config_lab=None):
         """Delete a lab preset from the Lab Settings page (web/Tk parity).
 
         Refuses to remove the last displayed lab (core.delete_lab_preset), so the
         selector always keeps a lab. Returns the next lab to select when the
-        deleted one was the current selection.
-        """
+        deleted one was the current selection. ``config_lab`` keeps the open
+        config's own (possibly hidden) lab in the returned tiles when it still
+        exists (BUG B, Tk parity)."""
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets, next_selected = core.delete_lab_preset(
             presets, lab_id, selected_lab=selected_lab)
@@ -951,7 +982,7 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
-                "labs": _lab_tiles(presets), "next_selected": next_selected}
+                "labs": _lab_tiles(presets, config_lab), "next_selected": next_selected}
 
     # -- settings.py block -------------------------------------------------
 

@@ -2458,6 +2458,25 @@ def displayed_lab_presets(lab_presets):
     return [p for p in (lab_presets or []) if p.get("display", True)]
 
 
+def lab_options_for_config(lab_presets, config_lab):
+    """The labs a PER-CONFIG lab selector should offer, in stored order.
+
+    Every DISPLAYED lab, PLUS the config's own saved lab even when that lab is
+    hidden (``display`` is False), so opening a config that was saved on a
+    now-hidden lab never drops or silently reassigns the lab it was saved with.
+    No duplicate; a pseudo-host / custom / unknown ``config_lab`` (one that no
+    preset carries) contributes nothing, leaving just the displayed labs.
+
+    This is the seam both faces build their per-config selector from, so the Tk
+    tiles and the web tiles agree on which labs a given config may pick.
+    """
+    presets = lab_presets or []
+    cid = str(config_lab).strip() if config_lab not in (None, "") else None
+    return [p for p in presets
+            if p.get("display", True)
+            or (cid is not None and str(p.get("id", "")) == cid)]
+
+
 def selectable_lab_presets(lab_presets):
     """The labs the main selector offers: the displayed ones.
 

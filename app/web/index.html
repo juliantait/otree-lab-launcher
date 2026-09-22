@@ -1136,7 +1136,12 @@ function selectConfig(name,row){
   el("cfgTitle").textContent="Config: "+disp;
   if(NATIVE&&API){
     API.select_config(name).then(function(r){
-      if(r&&r.ok){applyFields(r.fields);applyProject(r.project);applySettings(r.settings);
+      if(r&&r.ok){
+        // Rebuild the lab selector to the config's OWN labs (displayed + its own
+        // hidden lab) BEFORE applyFields, so its lab has a tile and stays
+        // selected instead of falling back to a displayed one (BUG B).
+        if(r.labs)setLabs(r.labs);
+        applyFields(r.fields);applyProject(r.project);applySettings(r.settings);
         var cd=lastConfigDisplay(name);if(cd)el("cfgTitle").textContent="Config: "+cd;}
     });
   }
@@ -1844,9 +1849,19 @@ function openLabSettings(){
 function makeThisTheLab(){
   var lab=val("lsMarker");
   if(!NATIVE||!API){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+((LAB_BY_ID[lab]||{}).name||lab)+".";el("lsIdentityStatus").className="ls-status";return;}
-  API.change_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+(r.lab_name||lab)+".";
-    el("lsIdentityStatus").className="ls-status";
-    renderConfigList(r.configs,r.selected);if(r.selected)currentConfigName=r.selected;}else el("lsIdentityStatus").textContent=(r&&r.message)||"Could not set the lab.";});
+  API.change_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;
+    // BUG A: shift the shown/default lab LIVE. The marker path now collapses the
+    // displayed labs to the chosen one server-side; consume the refreshed rows +
+    // tiles so the main selector and the Lab Settings "Shown" column update at
+    // once (previously nothing changed until a full reload).
+    if(r.lab_presets)LAB_PRESETS=r.lab_presets;
+    if(r.labs)setLabs(r.labs);
+    if(r.fields)applyFields(r.fields);
+    renderConfigList(r.configs,r.selected);if(r.selected)currentConfigName=r.selected;
+    openLabSettings();
+    el("lsIdentityStatus").textContent="This computer is now "+(r.lab_name||lab)+".";
+    el("lsIdentityStatus").className="ls-status";}
+    else el("lsIdentityStatus").textContent=(r&&r.message)||"Could not set the lab.";});
 }
 function savePgAdmin(){
   PG_ADMIN={admin_username:val("pgUser"),admin_password:val("pgPw"),admin_host:val("pgHost"),admin_port:val("pgPort")};
@@ -1856,7 +1871,7 @@ function savePgAdmin(){
 function toggleLabShown(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];if(!p)return;
   var next=(p.display===false);
-  if(NATIVE&&API&&API.set_lab_display){API.set_lab_display(id,next).then(function(r){if(r&&r.presets){LAB_PRESETS=r.presets;if(r.labs)setLabs(r.labs);openLabSettings();}});}
+  if(NATIVE&&API&&API.set_lab_display){API.set_lab_display(id,next,currentLab()).then(function(r){if(r&&r.presets){LAB_PRESETS=r.presets;if(r.labs)setLabs(r.labs);openLabSettings();}});}
   else{p.display=next;openLabSettings();}
 }
 function labPresetEdit(id){
@@ -1893,14 +1908,14 @@ function saveLabPreset(id){
       openLabSettings();
       var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}}
     else fail((r&&r.message)||"Could not save the lab.");};
-  if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut).then(done);
-  else API.add_lab(name,ip,seats,colsNum,room,shortcut).then(done);
+  if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
+  else API.add_lab(name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
 }
 function deleteLabPreset(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;
   if(!NATIVE||!API){var s=el("lsLabStatus");if(s){s.className="ls-status warn";s.textContent="Deleting labs works in the app, not the static preview.";}return;}
   if(!confirm("Delete the lab \""+nm+"\"? This cannot be undone."))return;
-  API.delete_lab(id,selectedLabId).then(function(r){
+  API.delete_lab(id,selectedLabId,currentLab()).then(function(r){
     if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
       if(r.next_selected&&(selectedLabId===id))selectLab(r.next_selected);
       openLabSettings();var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Deleted.";}}
@@ -1929,7 +1944,12 @@ function showChooseLab(){
 function chooseLab(lab){
   if(!NATIVE||!API){closeModal();labMarker=lab;return;}
   API.set_lab_marker(lab).then(function(r){closeModal();
-    if(r&&r.ok){labMarker=lab;renderConfigList(r.configs,r.selected);currentConfigName=r.selected;if(r.fields)applyFields(r.fields);
+    if(r&&r.ok){labMarker=lab;
+      // BUG A: collapse the main selector to the chosen lab live (the marker
+      // path now hides the other labs server-side and returns refreshed tiles).
+      if(r.lab_presets)LAB_PRESETS=r.lab_presets;
+      if(r.labs)setLabs(r.labs);
+      renderConfigList(r.configs,r.selected);currentConfigName=r.selected;if(r.fields)applyFields(r.fields);
       window.pywStatus("ok","This machine is set to the "+(r.lab_name||lab)+" lab.");}
     else window.pywStatus("err",(r&&r.message)||"Could not set the lab.");});
 }

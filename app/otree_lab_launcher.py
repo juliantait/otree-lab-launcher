@@ -2543,11 +2543,17 @@ class LauncherApp(object):
         self.block_button.grid(row=0, column=0, sticky="w")
         body.bind("<Configure>", self._resize_lab_labels)
 
-    def _rebuild_lab_tiles(self, ncols=2):
-        """(Re)build one tile per DISPLAYED lab preset. Called at start-up and
-        after the Lab Settings page changes which labs are shown. If exactly one
-        lab is displayed it becomes the forced default so a researcher on that
-        machine cannot pick the wrong lab."""
+    def _rebuild_lab_tiles(self, ncols=2, config_lab=None):
+        """(Re)build one tile per lab the selector should offer. Called at
+        start-up, after the Lab Settings page changes which labs are shown, and
+        on every config load (with that config's own lab).
+
+        The offered labs are the DISPLAYED ones PLUS the loaded config's own lab
+        even when it is hidden (core.lab_options_for_config), so a config saved
+        on a now-hidden lab keeps a tile for it and does not get silently
+        reassigned (BUG B). If exactly one lab is offered it becomes the forced
+        default so a researcher on a single-lab machine cannot pick the wrong
+        lab."""
         frame = self.lab_tiles_frame
         for parts in self.lab_tiles.values():
             parts["frame"].destroy()
@@ -2557,7 +2563,11 @@ class LauncherApp(object):
             self._single_lab_frame = None
         for c in range(16):
             frame.columnconfigure(c, weight=0, uniform="")
-        presets = core.selectable_lab_presets(self.lab_presets)
+        presets = core.lab_options_for_config(self.lab_presets, config_lab)
+        if not presets:
+            # Defence against a hand-edited store that hid every lab (and no
+            # config lab to include): show them all rather than an empty board.
+            presets = core.selectable_lab_presets(self.lab_presets)
         single = (len(presets) == 1)
         if single:
             # One lab on this machine: a plain line, not a big non-clickable tile.
@@ -2568,11 +2578,22 @@ class LauncherApp(object):
                 col = idx % ncols
                 frame.columnconfigure(col, weight=1, uniform="tile")
                 self.lab_tiles[preset["id"]] = self._make_lab_tile(frame, preset, idx, ncols)
-        # Force the single-lab default, else keep the current selection if it is
-        # still selectable, else fall to the first.
+        # Force the single-lab default, else keep the current selection when it
+        # is among the offered labs (incl. the config's own hidden lab), else
+        # fall to the first. A pseudo-host (custom / local) selection is left
+        # untouched -- it is not a lab tile.
         if getattr(self, "var", None) is not None:
-            forced = core.default_selected_lab(self.lab_presets, current=self.var["lab"].get())
-            if forced and self.var["lab"].get() != forced:
+            current = self.var["lab"].get()
+            ids = [p["id"] for p in presets]
+            if current in (LAB_CUSTOM, LAB_LOCAL):
+                forced = current
+            elif single:
+                forced = ids[0]
+            elif current in ids:
+                forced = current
+            else:
+                forced = ids[0] if ids else current
+            if forced and current != forced:
                 self.var["lab"].set(forced)
 
     def _make_single_lab_line(self, parent, preset):
@@ -3055,11 +3076,13 @@ class LauncherApp(object):
             for key in FIELD_KEYS:
                 value = values[key]
                 self.var[key].set(json.dumps(value) if isinstance(value, list) else value)
-            # Honor the single-lab forced default and drop a stale lab id that is
-            # no longer displayed, so an opened config never selects a hidden lab.
-            forced = core.default_selected_lab(self.lab_presets, current=values["lab"])
-            if forced and forced != values["lab"] and values["lab"] != LAB_CUSTOM:
-                self.var["lab"].set(forced)
+            # Rebuild the lab selector to OFFER this config's OWN lab -- even when
+            # it is hidden (display=False) -- so opening a config saved on a
+            # now-hidden lab neither drops nor silently reassigns its lab (BUG B).
+            # The rebuild keeps the config's lab selected when a preset carries it
+            # and only falls back to a forced/first lab when the id truly does not
+            # exist at all. var["lab"] is already set to values["lab"] above.
+            self._rebuild_lab_tiles(config_lab=values["lab"])
             self.seat_excluded = set(values["seat_excluded"])
             self.db_mode_label.set(DB_MODE_LABELS[values["db_mode"]])
             self.seat_mode_label.set(SEAT_MODE_LABELS[values["seat_mode"]])
@@ -3648,7 +3671,9 @@ class LauncherApp(object):
             except tk.TclError:
                 pass
         # Repaint the main selector to the single lab and reflect it in the form.
-        self._rebuild_lab_tiles()
+        # Pass the open config's lab so, if it is a hidden-but-open config, its
+        # own lab keeps a tile (BUG B) rather than vanishing on the identity change.
+        self._rebuild_lab_tiles(config_lab=self.var["lab"].get() if getattr(self, "var", None) else None)
         selected = self.presets[self.selected_index] if self.selected_index is not None else None
         self._apply_lab_view()
         if selected is not None and is_builtin(selected) and not self.dirty:
@@ -3919,7 +3944,9 @@ class LauncherApp(object):
                     finally:
                         self.loading = False
                 self._update_room_default_tag()
-        self._rebuild_lab_tiles()
+        # Keep the open config's own lab in the selector even if it was just
+        # hidden in Lab Settings (BUG B): pass the form's current lab.
+        self._rebuild_lab_tiles(config_lab=self.var["lab"].get() if getattr(self, "var", None) else None)
         self._apply_lab_view()
         self.refresh_previews()
 
