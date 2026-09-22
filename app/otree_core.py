@@ -1490,17 +1490,23 @@ def default_preset():
     return preset
 
 
-def load_store(path=None):
+def load_store(path=None, default_factory=None):
     """Read the presets file.
 
     Returns (presets, extra) where `presets` is the list of stored records
     exactly as they were written (unknown keys included) and `extra` holds any
     top-level keys of the file this version does not know about.  A file that
     cannot be parsed is moved aside rather than overwritten.
+
+    ``default_factory`` builds the fallback "Lab default" record used when the
+    file is absent, unreadable, or empty. It defaults to :func:`default_preset`;
+    the Tk launcher passes its own so it keeps its own default (e.g. its
+    browser-open delay) while sharing this one parse/backup implementation.
     """
+    make_default = default_factory or default_preset
     path = path or presets_path()
     if not os.path.exists(path):
-        return [default_preset()], {}
+        return [make_default()], {}
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -1510,7 +1516,7 @@ def load_store(path=None):
             shutil.copy2(path, backup)
         except OSError:
             pass
-        return [default_preset()], {}
+        return [make_default()], {}
 
     extra = {}
     if isinstance(data, list):
@@ -1528,7 +1534,7 @@ def load_store(path=None):
         if not str(item.get("name", "")).strip():
             item["name"] = "Unnamed config %d" % (index + 1)
     if not presets:
-        presets = [default_preset()]
+        presets = [make_default()]
     return presets, extra
 
 

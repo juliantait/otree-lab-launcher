@@ -310,71 +310,21 @@ def build_url(cfg):
 def build_env(cfg, base_env=None, label_file=None):
     """A copy of the process environment with this config's values applied.
 
-    Variables that the config does not want are removed rather than set to an
-    empty or falsy value, so that a stale DATABASE_URL or OTREE_PRODUCTION
-    inherited from the machine cannot leak into the run.
+    De-duplicated: the launch environment is built ONCE in otree_core so a fix
+    to the env (a stale-var removal, a new OTREE_* var, the room/seat rule) lands
+    in a single place. This is a thin passthrough, byte-for-byte identical to the
+    previous local copy (a parity test asserts it against ``core.build_env``).
     """
-    c = normalize_config(cfg)
-    env = dict(os.environ if base_env is None else base_env)
-
-    if c["db_mode"] == DB_MODE_NONE:
-        for key in DB_ENV_KEYS:
-            env.pop(key, None)
-    else:
-        env["DB_NAME"] = c["db_name"]
-        env["DB_USER"] = c["db_user"]
-        env["DB_PASSWORD"] = c["db_password"]
-        env["DB_HOST"] = c["db_host"]
-        env["DB_PORT"] = c["db_port"]
-        env["DATABASE_URL"] = build_database_url(c)
-
-    env["OTREE_ADMIN_USERNAME"] = c["admin_username"]
-    env["OTREE_ADMIN_PASSWORD"] = c["admin_password"]
-
-    if c["production"]:
-        env["OTREE_PRODUCTION"] = "1"
-    else:
-        env.pop("OTREE_PRODUCTION", None)
-
-    if c["auth_level"] in ("STUDY", "DEMO"):
-        env["OTREE_AUTH_LEVEL"] = c["auth_level"]
-    else:
-        env.pop("OTREE_AUTH_LEVEL", None)
-
-    # A lab launch always opens /room/<room_name>, so always name that room for
-    # the block: the block creates it at runtime if the project does not already
-    # define it, so the room the launcher opens is guaranteed to exist (even a
-    # no-seats lab, which used to 500 with KeyError on a room nothing created).
-    # The seat list is exported ONLY when there are seats: with a seat file the
-    # block makes it the seat-board room; with none the room is left open (anyone
-    # joins). With NO lab environment at all the block stays inert off the lab.
-    env["OTREE_LAB_ROOM_NAME"] = c["room_name"]
-    if c["seat_mode"] == SEAT_NONE or not label_file:
-        env.pop("OTREE_LAB_LABEL_FILE", None)
-    else:
-        env["OTREE_LAB_LABEL_FILE"] = label_file
-
-    return env
+    return core.build_env(cfg, base_env, label_file)
 
 
 def launcher_env_keys(cfg, label_file=None):
-    """The names of the variables this config actually sets, in order."""
-    c = normalize_config(cfg)
-    keys = []
-    if c["db_mode"] != DB_MODE_NONE:
-        keys.extend(DB_ENV_KEYS)
-    keys.append("OTREE_ADMIN_USERNAME")
-    keys.append("OTREE_ADMIN_PASSWORD")
-    if c["production"]:
-        keys.append("OTREE_PRODUCTION")
-    if c["auth_level"] in ("STUDY", "DEMO"):
-        keys.append("OTREE_AUTH_LEVEL")
-    # A lab launch always names the room it opens; the seat file only when
-    # there are seats. Mirrors build_env exactly.
-    keys.append("OTREE_LAB_ROOM_NAME")
-    if c["seat_mode"] != SEAT_NONE and label_file:
-        keys.append("OTREE_LAB_LABEL_FILE")
-    return keys
+    """The names of the variables this config actually sets, in order.
+
+    Delegates to :func:`otree_core.launcher_env_keys` so the key list can never
+    drift from :func:`build_env`; the two live together in core.
+    """
+    return core.launcher_env_keys(cfg, label_file)
 
 
 def describe_env_value(key, value):
@@ -536,106 +486,13 @@ def seat_preview(labels, limit=10):
 # The settings.py block
 # ---------------------------------------------------------------------------
 
-BLOCK_MARKER = "=== oTree lab support (paste at the END of settings.py) ==="
-BLOCK_END_MARKER = "=== end oTree lab support ==="
-
-# The one source of truth for the block. otree_lab_block.py holds the same
-# text; test_block_file_matches_the_constant proves they have not drifted.
-LAB_BLOCK = '''# === oTree lab support (paste at the END of settings.py) ===
-# ---------------------------------------------------------------------------
-# OTREE LAB SUPPORT: appended by the oTree lab launcher.
-# TO REMOVE: delete everything from this banner line to the END of the file.
-# Safe to leave in permanently: it does NOTHING unless the launcher sets
-# its environment variables at launch. With no lab environment set, every
-# override below is skipped and your settings.py behaves exactly as before.
-#
-# Because Python binds names last, these assignments live at the END of the
-# file, so they win over anything the project hardcoded higher up, but only
-# while the launcher's variables are present. Each override is guarded by the
-# variable it needs, and its comment says in plain language what it redirects
-# and why. Everything here only redirects WHERE your program runs (the lab
-# machines, the lab database, the lab room and login); it never changes your
-# experiment's logic. Unrelated settings such as SECRET_KEY are left untouched.
-# ---------------------------------------------------------------------------
-import os as _os
-
-# (a) ROOMS + participant_label_file: a lab launch always names the room it
-#     opens, so make sure that room exists here. If the launcher also wrote a
-#     seat list, point the room at it so the admin gets the per-seat presence
-#     board; with no seat list the room is left OPEN (anyone joins). Adds
-#     nothing off the lab, where OTREE_LAB_ROOM_NAME is unset.
-if _os.environ.get("OTREE_LAB_ROOM_NAME"):
-    # The launcher picked the room it will open for this run.
-    _lab_room = _os.environ["OTREE_LAB_ROOM_NAME"]
-
-    # ROOMS may not exist yet in this project.
-    try:
-        ROOMS
-    except NameError:
-        ROOMS = []
-
-    # Add the room only if the project does not already define it, so a project
-    # that has its own room keeps its own settings.
-    if not any(r.get("name") == _lab_room for r in ROOMS):
-        ROOMS = list(ROOMS) + [dict(name=_lab_room, display_name="oTree lab session")]
-
-    # Point that room at the seat list ONLY when the launcher wrote one (seats).
-    # Mutating in place means any other keys the project set on the room survive.
-    # With no seat file the room stays open (no participant_label_file).
-    if _os.environ.get("OTREE_LAB_LABEL_FILE"):
-        for _room in ROOMS:
-            if _room.get("name") == _lab_room:
-                _room["participant_label_file"] = _os.environ["OTREE_LAB_LABEL_FILE"]
-
-# (b) DATABASES: redirect the project at the lab's PostgreSQL database, rebuilt
-#     from the DB_* variables the launcher set. Because it is assigned here at
-#     the end of the file it wins even over a DATABASES block the project
-#     hardcoded higher up, so a session cannot run against the wrong database.
-#     (oTree 6+ actually chooses its database from the DATABASE_URL environment
-#     variable, which the launcher also sets, so on that version the lab
-#     database is already in force through the environment; this settings-level
-#     DATABASES is the same redirect for Django-based oTree versions that read
-#     it, and is simply ignored where it is not.)
-if _os.environ.get("DB_NAME"):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": _os.environ["DB_NAME"],
-            "USER": _os.environ.get("DB_USER", ""),
-            "PASSWORD": _os.environ.get("DB_PASSWORD", ""),
-            "HOST": _os.environ.get("DB_HOST", "localhost"),
-            "PORT": _os.environ.get("DB_PORT", "5432"),
-        }
-    }
-
-# (c) ADMIN_USERNAME: oTree reads the admin password from the environment but
-#     hardcodes the admin username, so without this line the launcher's admin
-#     username box would do nothing. Only fires when the launcher set
-#     OTREE_ADMIN_USERNAME; off the lab the project's own username (or oTree's
-#     default) is left exactly as it was.
-if "OTREE_ADMIN_USERNAME" in _os.environ:
-    ADMIN_USERNAME = _os.environ["OTREE_ADMIN_USERNAME"]
-
-# (d) ADMIN_PASSWORD: take the admin password from the launcher, so a password
-#     hardcoded in the project cannot lock the experimenter out of the lab
-#     dashboard. Only fires when the launcher set OTREE_ADMIN_PASSWORD.
-if "OTREE_ADMIN_PASSWORD" in _os.environ:
-    ADMIN_PASSWORD = _os.environ["OTREE_ADMIN_PASSWORD"]
-
-# (e) AUTH_LEVEL: the launcher's access level (STUDY puts the whole site behind
-#     the admin login for a real session). Overrides any level the project
-#     hardcoded. Only fires when the launcher set OTREE_AUTH_LEVEL.
-if "OTREE_AUTH_LEVEL" in _os.environ:
-    AUTH_LEVEL = _os.environ["OTREE_AUTH_LEVEL"]
-
-# (f) DEBUG / production: re-derive oTree's own production rule from
-#     OTREE_PRODUCTION, so a project that hardcoded DEBUG = True cannot ship
-#     debug pages and tracebacks in the lab. Only fires when the launcher set
-#     OTREE_PRODUCTION (production mode); off the lab, DEBUG is left as it was.
-if "OTREE_PRODUCTION" in _os.environ:
-    DEBUG = _os.environ.get("OTREE_PRODUCTION") in (None, "", "0")
-# === end oTree lab support ===
-'''
+# The settings.py block is defined ONCE in otree_core (which is kept byte-for-
+# byte in sync with otree_lab_block.py, the documented reference the sync test
+# compares). The Tk launcher used to carry its own identical copy; it now points
+# at core so a change to the block only ever has to be made in one place.
+BLOCK_MARKER = core.BLOCK_MARKER
+BLOCK_END_MARKER = core.BLOCK_END_MARKER
+LAB_BLOCK = core.LAB_BLOCK
 
 
 def settings_path_for(project_path):
@@ -943,84 +800,24 @@ def default_preset():
 def load_store(path=None):
     """Read the presets file.
 
-    Returns (presets, extra) where `presets` is the list of stored records
-    exactly as they were written (unknown keys included) and `extra` holds any
-    top-level keys of the file this version does not know about.  A file that
-    cannot be parsed is moved aside rather than overwritten.
+    De-duplicated: the parse / broken-file-backup / unnamed-config logic lives
+    once in :func:`otree_core.load_store`. This passthrough supplies the Tk
+    launcher's own :func:`default_preset` as the fallback factory so the returned
+    "Lab default" keeps this face's defaults (e.g. its browser-open delay), while
+    the file handling itself is shared.
     """
-    path = path or presets_path()
-    if not os.path.exists(path):
-        return [default_preset()], {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        backup = path + ".broken-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        try:
-            shutil.copy2(path, backup)
-        except OSError:
-            pass
-        return [default_preset()], {}
-
-    extra = {}
-    if isinstance(data, list):
-        raw = data
-    elif isinstance(data, dict):
-        raw = data.get("presets", [])
-        extra = {k: v for k, v in data.items() if k not in ("presets", "version")}
-    else:
-        raw = []
-
-    presets = [item for item in raw if isinstance(item, dict)]
-    # A record without a usable name still belongs to somebody, so keep it
-    # rather than dropping it silently.
-    for index, item in enumerate(presets):
-        if not str(item.get("name", "")).strip():
-            item["name"] = "Unnamed config %d" % (index + 1)
-    if not presets:
-        presets = [default_preset()]
-    return presets, extra
+    return core.load_store(path, default_factory=default_preset)
 
 
 def save_store(presets, extra=None, path=None):
     """Write the presets file atomically.
 
-    The new content goes to a temporary file in the same directory, is flushed
-    to disk, and only then replaces the old file, so an interrupted write can
-    never leave a half-written presets.json behind.
+    De-duplicated: the atomic, owner-only (0o600) write lives once in
+    :func:`otree_core.save_store`; the Tk launcher used to keep its own copy of
+    the same temp-file-then-replace sequence. Byte-for-byte identical output (a
+    parity test asserts a saved-then-loaded round-trip matches core's).
     """
-    path = path or presets_path()
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    payload = dict(extra or {})
-    payload["version"] = STORAGE_VERSION
-    payload["presets"] = presets
-    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
-
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=folder, prefix=".presets-", suffix=".tmp", delete=False
-    )
-    tmp_name = handle.name
-    try:
-        # presets.json carries DB / custom-DB / Postgres-admin creds; lock it to
-        # owner-only (0o600) on POSIX, temp file included. Same core helper the
-        # web face uses (Windows ACLs are not hardened here).
-        core.secure_chmod(tmp_name)
-        handle.write(text)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-        handle.close()
-        os.replace(tmp_name, path)
-    except Exception:
-        handle.close()
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-    core.secure_chmod(path)
-    return path
+    return core.save_store(presets, extra, path)
 
 
 def sort_presets(presets):
@@ -1085,96 +882,40 @@ def format_last_run(stamp):
 
 
 def resetdb_command():
-    """`otree resetdb`, exactly as the batch file ran it."""
-    return ["otree", "resetdb"]
+    """`otree resetdb`, exactly as the batch file ran it.
 
-
-def _applescript_string(text):
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    De-duplicated: the exact resetdb argv lives once in core.
+    """
+    return core.resetdb_command()
 
 
 def _prodserver_argv(cfg):
     """``["otree", "prodserver"]`` plus the validated port when one is set.
 
-    Shares ``core.launch_port`` (the single validated 1..65535 port), so the
-    server command, the port preflight and the opened URLs all agree; a
-    blank/invalid port omits the arg and lets oTree default to 8000.
+    Delegates to core so the server command, the port preflight and the opened
+    URLs all share the one :func:`otree_core.launch_port`; a blank/invalid port
+    omits the arg and lets oTree default to 8000. Kept because export_bat_text
+    still composes the command line from it.
     """
-    argv = ["otree", "prodserver"]
-    port = core.launch_port(cfg)
-    if port is not None:
-        argv.append(str(port))
-    return argv
+    return core._prodserver_argv(cfg)
 
 
 def macos_shell_script(cfg, project_path, env_pairs):
-    """The shell line that a new macOS Terminal window will run."""
-    parts = ["cd " + shlex.quote(project_path)]
-    for key, value in env_pairs:
-        parts.append("export %s=%s" % (key, shlex.quote(value)))
-    parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
-    parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg)))
-    return "; ".join(parts)
+    """The shell line that a new macOS Terminal window will run (core-owned)."""
+    return core.macos_shell_script(cfg, project_path, env_pairs)
 
 
 def build_server_launch(cfg, project_path, env, platform_name=None):
     """How to start `otree prodserver` in a window the researcher can see.
 
-    Returns a dict with the command to run, the platform branch that produced
-    it, and the extra Popen arguments that branch needs.  Kept separate from
-    the running of it so both branches can be tested off their own platform.
-    The configured port (``core.launch_port``) is passed to prodserver on every
-    platform so the server, the readiness probe and the opened URLs agree.
+    De-duplicated: the per-platform launch spec (Windows ``cmd /k``, macOS
+    ``osascript``/Terminal, Linux terminal-or-background) is built once in
+    :func:`otree_core.build_server_launch`. This passthrough is byte-for-byte
+    identical to the previous local copy (a parity test asserts it across all
+    three platforms), so the configured port and env still reach prodserver the
+    same way on every platform.
     """
-    platform_name = platform_name or sys.platform
-    env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
-    argv = _prodserver_argv(cfg)
-    prodserver = " ".join(argv)  # e.g. "otree prodserver 8000"
-
-    if platform_name.startswith("win"):
-        # cmd /k keeps the console open after the server stops, so the
-        # researcher can still read the traceback that killed it.
-        inner = 'title oTree Server ({app}) && {prod}'.format(app=APP_NAME, prod=prodserver)
-        return {
-            "kind": "windows",
-            "cmd": ["cmd", "/k", inner],
-            "cwd": project_path,
-            "creationflags": CREATE_NEW_CONSOLE,
-            "shell": False,
-            "description": "new console window: cmd /k %s" % prodserver,
-        }
-
-    if platform_name == "darwin":
-        script = 'tell application "Terminal"\nactivate\ndo script %s\nend tell' % _applescript_string(
-            macos_shell_script(cfg, project_path, env_pairs)
-        )
-        return {
-            "kind": "macos",
-            "cmd": ["osascript", "-e", script],
-            "cwd": project_path,
-            "creationflags": 0,
-            "shell": False,
-            "description": "new Terminal window via osascript",
-        }
-
-    for terminal in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
-        if shutil.which(terminal):
-            return {
-                "kind": "linux-terminal",
-                "cmd": [terminal, "-e"] + argv,
-                "cwd": project_path,
-                "creationflags": 0,
-                "shell": False,
-                "description": "new %s window" % terminal,
-            }
-    return {
-        "kind": "linux-background",
-        "cmd": list(argv),
-        "cwd": project_path,
-        "creationflags": 0,
-        "shell": False,
-        "description": "background process (no terminal emulator found; output goes to this log)",
-    }
+    return core.build_server_launch(cfg, project_path, env, platform_name)
 
 
 # ---------------------------------------------------------------------------
