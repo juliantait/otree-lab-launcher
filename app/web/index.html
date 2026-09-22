@@ -415,9 +415,9 @@ input::placeholder{color:var(--faint)}
 .blockwarn .btn{margin-top:9px}
 
 /* ---------------------------- ACTIVITY LOG ---------------------------- */
-/* One log, two views: the compact live line lives in the launch bar (see
-   .launch-status); the FULL log lives in the #logModal overlay below and is
-   the single source of truth (#logBody). No more inline collapsible log. */
+/* One log, ONE view: nothing is printed inline in the launch bar. The FULL log
+   lives in the #logModal overlay below (the single source of truth, #logBody)
+   and is reached only by the "Activity log" button on the launch bar. */
 .log-body{
   background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);
   font-family:var(--mono);font-size:12px;line-height:1.6;padding:12px 15px;
@@ -444,16 +444,13 @@ input::placeholder{color:var(--faint)}
   pointer-events:none;
   background:linear-gradient(180deg,rgba(30,30,32,0),var(--bg));
 }
-/* Compact live line: shows ONLY the latest log entry, constrained to the
-   leftover space so it can never push the buttons off the row or scroll the
-   page. min-width:0 lets it shrink inside the flex row; a long path is
-   truncated with an ellipsis (full text on hover via title=). */
-.launch-status{font-size:12.5px;color:var(--muted);margin-right:auto;min-height:1em;
-  flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.launch-status.ok{color:var(--ok)} .launch-status.err{color:var(--err)}
-.launch-status.warn{color:var(--warn)} .launch-status.muted{color:var(--muted)}
+/* "Activity log" button: left-aligned on the launch bar (margin-right:auto
+   pushes Save-one-click + Launch to the right). Nothing is printed inline, so
+   the row holds only the three buttons and never wraps a status message above
+   them. */
 .btn-logexpand{
   font-family:inherit;font-size:12.5px;font-weight:600;color:var(--muted);flex:0 0 auto;
+  margin-right:auto;
   background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);
   padding:9px 14px;cursor:pointer;transition:background .14s,border-color .14s,color .14s;
 }
@@ -525,6 +522,19 @@ input::placeholder{color:var(--faint)}
 .i-btn{width:24px;height:24px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);
   color:var(--muted);cursor:pointer;font-style:italic;font-weight:700;font-size:12px}
 .i-btn:hover{color:var(--text);border-color:#4c4c50}
+/* Small inline info badge whose tip reveals on hover, keyboard focus, or click.
+   Used instead of a title= tooltip, which does NOT display in the pywebview
+   (WKWebView) window; the &#9432; glyph also fell back to a bare "?" there. */
+.info-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:4px}
+.info-i{width:16px;height:16px;padding:0;line-height:1;border-radius:50%;border:1px solid var(--line);
+  background:var(--panel-2);color:var(--muted);font-size:11px;font-weight:700;font-style:normal;
+  cursor:pointer;display:inline-grid;place-items:center}
+.info-i:hover{color:var(--text);border-color:var(--accent)}
+.info-tip{display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:240px;
+  background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;
+  font-size:11.5px;font-weight:400;line-height:1.5;color:var(--muted);white-space:normal;
+  box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.info-wrap:hover .info-tip,.info-wrap:focus-within .info-tip,.info-wrap.open .info-tip{display:block}
 
 /* lab settings */
 .ls-card{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:15px 16px;margin-bottom:14px}
@@ -910,11 +920,10 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 
     </div>
 
-    <!-- Launch bar. The compact live line (#launchStatus) shows only the latest
-         activity entry, width-constrained so it never pushes the buttons off the
-         row; "Activity log" opens the full log as an internal overlay. -->
+    <!-- Launch bar. Nothing is printed inline; the left-aligned "Activity log"
+         button opens the full log as an internal overlay, and Save-one-click +
+         Launch sit to the right. -->
     <div class="launchbar">
-      <p class="launch-status" id="launchStatus"></p>
       <button class="btn-logexpand" onclick="openLogModal()">Activity log</button>
       <button class="btn-shortcut" onclick="onExport()">Save one-click shortcut</button>
       <button class="btn-launch" onclick="onLaunch()">Launch</button>
@@ -1056,13 +1065,6 @@ window.pywStatus=function(cls,text){
   var t=el("takeoverStatus");
   if(t&&!el("infoModal").hidden){t.className="handoff-note"+(cls?" "+cls:"");}
 };
-/* Compact line = the most recent entry, with its colour (ok/err/warn/muted).
-   Full text is kept in title= so a truncated path is still readable on hover. */
-function setCompactLine(cls,text){
-  var s=el("launchStatus");if(!s)return;
-  s.className="launch-status"+(cls?" "+cls:"");
-  s.textContent=text;s.title=text||"";
-}
 function appendLog(cls,text){
   var body=el("logBody");
   if(body){
@@ -1072,7 +1074,6 @@ function appendLog(cls,text){
     var m=document.createElement("span");m.className=cls||"info";m.textContent=text;
     ln.appendChild(t);ln.appendChild(m);body.appendChild(ln);body.scrollTop=body.scrollHeight;
   }
-  setCompactLine(cls,text);
 }
 function applyLog(r){if(r&&r.log&&r.log.length)r.log.forEach(function(e){appendLog(e[0],e[1]);});}
 function openLogModal(){
@@ -1408,7 +1409,10 @@ function setSeatFilePath(p){var b=el("seatFilePath");if(p){b.textContent=p;b.cla
 /* room default tag */
 function setRoom(name){
   el("roomVal").textContent=name;el("customFields")&&(el("custom_room").value=name);
-  el("roomTag").hidden=(name!=="study");
+  /* The grey "(lab default)" suffix shows whenever the selected room IS this
+     lab's default room -- study OR a changed/refreshed default -- not a
+     hardcoded "study". */
+  el("roomTag").hidden=(name!==labRoom());
   updateDirtyState();
 }
 
@@ -1687,17 +1691,21 @@ function openRoomPicker(){
   }
 }
 function renderRoomPicker(rooms,loading,note){
+  /* The lab's actual default room (study OR a changed/refreshed default): it
+     carries the highlight + "(lab default)" marker, the description names it,
+     and the big pink button selects it. */
+  var labDefault=labRoom();
   var items=rooms.map(function(r,i){
-    return '<button class="room-item'+(r==="study"?" study":"")+(i===roomSelIndex?" sel":"")+'" onclick="roomSelIndex='+i+';roomRepaint()" ondblclick="useSelectedRoom()">'+escapeHtml(r)+(r==="study"?" (lab default)":"")+'</button>';
+    return '<button class="room-item'+(r===labDefault?" study":"")+(i===roomSelIndex?" sel":"")+'" onclick="roomSelIndex='+i+';roomRepaint()" ondblclick="useSelectedRoom()">'+escapeHtml(r)+(r===labDefault?" (lab default)":"")+'</button>';
   }).join("");
   window._roomRooms=rooms;
   openModal("Choose the room to serve",
     '<div style="display:flex;justify-content:flex-end;margin:-8px 0 6px"><button class="i-btn" onclick="toggleRoomInfo()">i</button></div>'+
     '<div class="info-panel" id="roomInfo" hidden>The lab desktop shortcuts open a per-machine link like '+
-      '<code>http://HOST:8000/room/study?participant_label=B3</code>, so every computer is a known fixed seat with a presence board. '+
+      '<code>http://HOST:8000/room/'+escapeHtml(labDefault)+'?participant_label=B3</code>, so every computer is a known fixed seat with a presence board. '+
       'Only change the room if the computers will open a different room’s link.</div>'+
-    '<p class="modal-desc">The study room is the lab default: the lab computers’ desktop shortcuts open its participant PC links. Only change it if the computers will open a different room’s link.</p>'+
-    '<button class="btn-launch room-primary" onclick="useStudyRoom()">Use study (lab default) with participant PC links</button>'+
+    '<p class="modal-desc">The '+escapeHtml(labDefault)+' room is the lab default: the lab computers’ desktop shortcuts open its participant PC links. Only change it if the computers will open a different room’s link.</p>'+
+    '<button class="btn-launch room-primary" onclick="useStudyRoom()">Use '+escapeHtml(labDefault)+' (lab default) with participant PC links</button>'+
     '<p class="room-note">'+(loading?"Reading this project’s rooms…":(note?escapeHtml(note):"Rooms defined in this project’s settings.py:"))+'</p>'+
     '<div class="roomlist" id="roomList">'+items+'</div>'+
     '<button class="btn" style="width:100%;margin-top:10px" onclick="useSelectedRoom()">Use the selected room</button>'+
@@ -1706,7 +1714,16 @@ function renderRoomPicker(rooms,loading,note){
 }
 function roomRepaint(){document.querySelectorAll("#roomList .room-item").forEach(function(b,i){b.classList.toggle("sel",i===roomSelIndex);});}
 function toggleRoomInfo(){var p=el("roomInfo");p.hidden=!p.hidden;}
-function useStudyRoom(){setRoom("study");closeModal();}
+/* A small "i" badge that reveals its help text on hover, keyboard focus, or
+   click. Replaces title= tooltips, which do not display inside pywebview. The
+   click toggle keeps it usable on touch; the button is type=button so it never
+   submits and (not being the modal backdrop) never closes the modal. */
+function infoBadge(text){
+  return '<span class="info-wrap"><button type="button" class="info-i" aria-label="More information" '+
+    'onclick="this.parentNode.classList.toggle(\'open\')">i</button>'+
+    '<span class="info-tip" role="tooltip">'+escapeHtml(text)+'</span></span>';
+}
+function useStudyRoom(){setRoom(labRoom());closeModal();}
 function useSelectedRoom(){var r=(window._roomRooms||[])[roomSelIndex];if(r){setRoom(r);closeModal();}}
 function useTypedRoom(){var n=(val("roomTypeName")||"").trim();if(n){setRoom(n);closeModal();}}
 
@@ -1850,7 +1867,7 @@ function labPresetEdit(id){
     '<div class="mfield"><label>Lab name</label><input id="lpName" type="text" value="'+escapeHtml(name)+'"></div>'+
     '<div class="mfield"><label>IP address or host</label><input id="lpIp" type="text" value="'+escapeHtml(ip)+'"></div>'+
     '<div class="mfield" style="align-items:start"><label>Seat labels</label><textarea id="lpSeats" rows="4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--bg-deep);color:var(--text);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px" placeholder="one per line, or spaces/commas">'+escapeHtml(seats)+'</textarea></div>'+
-    '<div class="mfield"><label>Default room <span class="info-i" title="'+escapeHtml(ROOM_HELP)+'" style="cursor:help;color:var(--accent)">&#9432;</span></label><input id="lpRoom" type="text" placeholder="study" value="'+escapeHtml(room)+'"></div>'+
+    '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label><input id="lpRoom" type="text" placeholder="study" value="'+escapeHtml(room)+'"></div>'+
     '<div class="mfield"><label>Shortcut label</label><input id="lpShortcut" type="text" placeholder="(optional) name of the participant-PC desktop shortcuts" value="'+escapeHtml(shortcut)+'"></div>'+
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
     '<div class="ls-status" id="lpStatus"></div>'+
@@ -2203,7 +2220,10 @@ var launchDashboardUrl="";
    here: it stays "launching" until the real result arrives via pywOnLaunchResult. */
 function doLaunch(force){
   if(!NATIVE||!API)return;
-  API.launch(gatherFields(),!!force).then(handleLaunchResponse);
+  /* Pass the SELECTED config name so a server-ready launch stamps last_run on
+     that config by identity, even if its room (or any field) was edited
+     on-screen and never saved back to the preset. */
+  API.launch(gatherFields(),!!force,currentConfigName||"").then(handleLaunchResponse);
 }
 function handleLaunchResponse(r){
   if(r&&r.ok&&r.launching){enterLaunchingState();return;}   /* wait for pywOnLaunchResult */
@@ -2420,7 +2440,7 @@ function wizStepLabs(){
     '<div class="ls-card" style="margin-top:12px"><h4>Add a lab</h4>'+
     '<div class="mfield"><label>Name</label><input type="text" id="wlName" placeholder="e.g. Small lab"></div>'+
     '<div class="mfield"><label>Host / IP</label><input type="text" id="wlHost" placeholder="host or IP the seats connect to"></div>'+
-    '<div class="mfield"><label>Default room <span class="info-i" title="'+escapeHtml(ROOM_HELP)+'" style="cursor:help;color:var(--accent)">&#9432;</span></label>'+
+    '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label>'+
       '<input type="text" id="wlRoom" placeholder="study" value="study"></div>'+
     '<div class="mfield"><label>Shortcut label</label><input type="text" id="wlShortcut" placeholder="(optional) name of the participant-PC desktop shortcuts"></div>'+
     '<div class="mfield"><label>Map</label><select id="wlMap">'+wizMapOptions("")+'</select></div>'+
@@ -2429,7 +2449,7 @@ function wizStepLabs(){
     '<div style="text-align:right"><button class="btn" onclick="wizAddLab()">Add lab</button></div>'+
     '<div class="modal-err" id="wlErr"></div></div>';
 }
-var ROOM_HELP="If the lab PCs already have shortcuts that open a room, put that room's name here so participants land in it; otherwise leave it as study.";
+var ROOM_HELP="If the lab PCs already have shortcuts that open a room, put that room name here so participants land in it; otherwise leave it as study.";
 function wizAddLab(){
   var name=(val("wlName")||"").trim(),host=(val("wlHost")||"").trim();
   var seats=(val("wlSeats")||"").trim().split(/[\s,]+/).filter(Boolean);

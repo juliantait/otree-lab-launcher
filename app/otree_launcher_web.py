@@ -1295,7 +1295,7 @@ class Api(object):
         return bool(state.get("readable")) and not state.get("has_block")
 
     @api_call
-    def launch(self, fields, force=False):
+    def launch(self, fields, force=False, config_name=""):
         """Validate, run the pre-launch preflight, then launch on a worker thread.
 
         Validation errors and preflight failures are RETURNED to the page (which
@@ -1323,7 +1323,10 @@ class Api(object):
                      "detail": f.get("detail", "")}
                     for f in failures]}
 
-        self._spawn(lambda: self._run_launch(cfg), "launch")
+        # config_name is the SELECTED config's identity (the page's
+        # currentConfigName). A server-ready launch stamps last_run on THAT
+        # config, even if its room/fields were edited on-screen and never saved.
+        self._spawn(lambda: self._run_launch(cfg, config_name), "launch")
         return {"ok": True, "launching": True}
 
     @api_call
@@ -1368,7 +1371,7 @@ class Api(object):
         except Exception:
             LOG.exception("window.destroy failed")
 
-    def _run_launch(self, cfg):
+    def _run_launch(self, cfg, config_name=""):
         LOG.info("_run_launch: begin (resetdb=%s, open_browser=%s)",
                  cfg.get("resetdb"), cfg.get("open_browser"))
         try:
@@ -1464,7 +1467,7 @@ class Api(object):
                                     method=result.get("method", "manual"))
                 return
 
-            matched = self._mark_run(cfg)
+            matched = self._mark_run(cfg, config_name)
             self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
                                "server runs in its own window; watch there for live logs. You "
                                "can close this launcher.")
@@ -1556,8 +1559,15 @@ class Api(object):
             pass
         return base
 
-    def _mark_run(self, cfg):
-        """Stamp the matching saved config as run just now, if one matches.
+    def _mark_run(self, cfg, config_name=""):
+        """Stamp the just-launched saved config as run now, and return it.
+
+        Prefers the SELECTED config's identity (``config_name``, the page's
+        currentConfigName): a launch stamps that config even if its room (or any
+        field) was edited on-screen and never saved back to the preset, so the
+        sidebar no longer shows "never run" after a "(lab default)" refresh. Only
+        when no selected identity is given (e.g. a headless one-click run) does it
+        fall back to matching by config content.
 
         Runs on the launch WORKER thread, so it goes through the store lock: a
         UI-thread "save as new" cannot interleave with this stamp-and-save and
@@ -1566,11 +1576,15 @@ class Api(object):
         matched = {"preset": None}
 
         def _apply():
-            for preset in self.presets:
-                if not core.configs_differ(preset, cfg):
-                    preset["last_run"] = core.now_iso()
-                    matched["preset"] = preset
-                    break
+            preset = self._find(config_name) if config_name else None
+            if preset is None:
+                for candidate in self.presets:
+                    if not core.configs_differ(candidate, cfg):
+                        preset = candidate
+                        break
+            if preset is not None:
+                preset["last_run"] = core.now_iso()
+                matched["preset"] = preset
 
         try:
             self._mutate_store(_apply)

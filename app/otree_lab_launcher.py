@@ -79,7 +79,7 @@ DEFAULT_ROOM_NAME = "study"
 
 # Shared help text for the per-lab "Default room" field (wizard + Lab Settings).
 ROOM_TOOLTIP_TEXT = (
-    "If the lab PCs already have shortcuts that open a room, put that room's name "
+    "If the lab PCs already have shortcuts that open a room, put that room name "
     "here so participants land in it; otherwise leave it as study.")
 
 SEAT_DEFAULT = "lab_default"
@@ -4542,7 +4542,12 @@ class LauncherApp(object):
                 self.log(line, "out", prefix=False)
 
     def _stamp_last_run(self, cfg):
-        if self.selected_index is None or self.dirty:
+        # Stamp the SELECTED config by identity (its index), even if its room (or
+        # any field) was edited on-screen and never saved -- otherwise a launch
+        # after a "(lab default)" room change would leave the config showing
+        # "never run" (parity with the web _mark_run identity stamp). Only a
+        # brand-new unsaved scratch (no selection) has nothing to stamp.
+        if self.selected_index is None:
             self.log("These settings are not a saved config, so no config was stamped. "
                      "Use Save as new to keep them.", "muted")
             return
@@ -6527,14 +6532,14 @@ class LabPresetEditDialog(object):
         roomrow.grid(row=6, column=0, sticky="ew", pady=(8, 0))
         head = tk.Frame(roomrow, bg=COLORS["card"])
         head.pack(anchor="w")
-        tk.Label(head, text="Default room", bg=COLORS["card"], fg=COLORS["muted"],
+        tk.Label(head, text="Default oTree room", bg=COLORS["card"], fg=COLORS["muted"],
                  font=fonts.body).pack(side="left")
         room_info = tk.Label(head, text=" ⓘ", bg=COLORS["card"], fg=COLORS["accent"],
                              font=fonts.body, cursor="hand2")
         room_info.pack(side="left")
         Tooltip(room_info, lambda: ROOM_TOOLTIP_TEXT, delay=100).attach(room_info)
         room_info.bind("<Button-1>",
-                       lambda _e: messagebox.showinfo("Default room", ROOM_TOOLTIP_TEXT,
+                       lambda _e: messagebox.showinfo("Default oTree room", ROOM_TOOLTIP_TEXT,
                                                       parent=self.top))
         self.room = tk.StringVar(top, value=(preset or {}).get("default_room", "")
                                  or DEFAULT_ROOM_NAME)
@@ -7086,12 +7091,12 @@ class FirstRunWizard(object):
         # room tooltip. Seats move down two rows to make space.
         room_head = tk.Frame(form)
         room_head.grid(row=2, column=0, sticky="w", pady=(6, 0))
-        tk.Label(room_head, text="Default room").pack(side="left")
+        tk.Label(room_head, text="Default oTree room").pack(side="left")
         room_info = tk.Label(room_head, text=" ⓘ", fg="#2867d6", cursor="hand2")
         room_info.pack(side="left")
         Tooltip(room_info, lambda: ROOM_TOOLTIP_TEXT, delay=100).attach(room_info)
         room_info.bind("<Button-1>",
-                       lambda _e: messagebox.showinfo("Default room", ROOM_TOOLTIP_TEXT,
+                       lambda _e: messagebox.showinfo("Default oTree room", ROOM_TOOLTIP_TEXT,
                                                       parent=self.top))
         tk.Label(form, text="Shortcut label (optional)").grid(row=2, column=1, sticky="w",
                                                               pady=(6, 0))
