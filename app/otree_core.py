@@ -45,7 +45,12 @@ import webbrowser
 #     database_config_fields(entry)    -> the db_* config overrides to apply
 #     register_database(extra, title, researcher, connection=..., ...)
 #                                      -> append a custom DB + record researcher
+#     edit_database(extra, db_id, ...) -> edit an existing DB (custom OR the
+#                                         lab-shared built-in) + persist
 #     normalize_database_entry(raw)    -> one normalized custom entry
+#     slugify_pg_dbname(name)          -> a Postgres-safe db name from any label
+#     switch_to_lab_default(cfg)       -> a cfg switched to the lab shared DB
+#                                         (the "Use lab default instead" recovery)
 #
 #   The lab-shared DEFAULT database (a REFERENCE into the one list above):
 #     default_database_id(extra)       -> the chosen default's id (lab built-in fallback)
@@ -2820,6 +2825,31 @@ def _unique_db_id(title, existing_ids):
     return candidate
 
 
+def slugify_pg_dbname(name):
+    """A Postgres-identifier-safe database name derived from an arbitrary label.
+
+    Used to prefill the Create-a-database dialog's name from the current
+    project folder / config name so staff rarely have to type it. The rules:
+    lowercase; turn spaces, hyphens and any character outside the Postgres
+    identifier set (letters, digits, underscore, dollar) into underscores;
+    collapse runs of underscores; strip leading/trailing underscores. A Postgres
+    identifier may not start with a digit and may not be empty, so a result that
+    is empty or begins with a digit is prefixed with an underscore. The result is
+    a valid, unquoted identifier the user can still edit.
+
+    Examples: ``"My Lab-Study 2" -> "my_lab_study_2"``; ``"2024data" -> "_2024data"``.
+    """
+    text = str(name or "").lower()
+    # Everything outside the Postgres identifier set (letters/digits/_/$) -- which
+    # includes spaces and hyphens -- becomes an underscore. We lowercased first,
+    # so the surviving letters are a-z.
+    text = re.sub(r"[^a-z0-9_$]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text or text[0].isdigit():
+        text = "_" + text
+    return text
+
+
 def normalize_database_entry(raw):
     """One custom registry entry as a normalized dict.
 
@@ -2949,6 +2979,95 @@ def register_database(extra, title, researcher, connection=None,
     extra["databases"] = stored
     if entry["researcher"]:
         add_researcher(extra, entry["researcher"])
+    return entry
+
+
+def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
+                  db_user=None, db_password=None, db_host=None, db_port=None,
+                  postgres_user=None):
+    """Edit an EXISTING database entry in place and persist the change.
+
+    Works for BOTH a custom registry entry AND the lab-shared built-in
+    (:data:`DB_BUILTIN_LAB`) -- the lab-shared database used to be read-only, and
+    making it editable here is the point of this function. Only the fields passed
+    (non-None) are changed; the rest keep their current values.
+
+      * A custom registry entry is updated in place in ``extra["databases"]``
+        (its id, so any default-database reference to it, is preserved). The
+        caller then saves presets.json as usual.
+      * The lab-shared built-in has no registry row -- it IS the lab_info.json
+        ``database`` block -- so its edit is written straight into lab_info.json
+        (:func:`save_lab_info` + :func:`reload_lab_info`) and the live
+        :data:`LAB_DB` is re-resolved via :func:`apply_default_database`, so every
+        DB_MODE_LAB launch immediately follows the change.
+      * The oTree default (SQLite) built-in has nothing to edit -> ``ValueError``.
+
+    ``postgres_user`` is an alias for the connection ``db_user`` (the two are the
+    same Postgres role); passing either updates it. Mutates ``extra`` in place and
+    returns the updated, normalized entry.
+    """
+    if extra is None:
+        raise ValueError("edit_database needs a store `extra` dict to write into")
+    db_id = str(db_id or "").strip()
+    if db_id == DB_BUILTIN_SQLITE:
+        raise ValueError("The oTree default (SQLite) database has nothing to edit.")
+
+    # The connection updates, keyed by the DATABASE_CONN_KEYS. postgres_user is a
+    # synonym for db_user; an explicit db_user wins when both are given.
+    conn_updates = {"db_name": db_name, "db_user": db_user,
+                    "db_password": db_password, "db_host": db_host,
+                    "db_port": db_port}
+    if postgres_user is not None and db_user is None:
+        conn_updates["db_user"] = postgres_user
+
+    if db_id == DB_BUILTIN_LAB:
+        info = load_lab_info() or {}
+        # Seed from the current resolved wizard credentials so a partial edit
+        # (say just the host) keeps the other fields intact.
+        block = dict(lab_db_from_info(info))
+        for key, value in conn_updates.items():
+            if value is not None:
+                block[key] = str(value)
+        info["database"] = block
+        save_lab_info(info)
+        reload_lab_info()
+        apply_default_database(extra)
+        return find_database(extra, DB_BUILTIN_LAB)
+
+    stored = extra.get("databases")
+    if not isinstance(stored, list):
+        stored = []
+    target_index = None
+    for index, item in enumerate(stored):
+        if isinstance(item, dict) and str(item.get("id", "")).strip() == db_id:
+            target_index = index
+            break
+    if target_index is None:
+        raise ValueError("No database with id %r to edit." % (db_id,))
+
+    entry = normalize_database_entry(stored[target_index])
+    if title is not None:
+        entry["title"] = str(title).strip() or entry["title"]
+    if researcher is not None:
+        entry["researcher"] = str(researcher).strip()
+    if postgres_user is not None:
+        entry["postgres_user"] = str(postgres_user).strip()
+    for key, value in conn_updates.items():
+        if value is not None:
+            entry[key] = str(value)
+    # Keep the recorded Postgres user aligned with db_user when only db_user was
+    # given (they name the same role), unless postgres_user was set explicitly.
+    if db_user is not None and postgres_user is None:
+        entry["postgres_user"] = str(db_user).strip()
+    entry = normalize_database_entry(entry)
+    stored[target_index] = entry
+    extra["databases"] = stored
+    if researcher is not None and entry["researcher"]:
+        add_researcher(extra, entry["researcher"])
+    # If this custom database is the one currently promoted to the lab-shared
+    # default, its connection just changed, so re-resolve the live LAB_DB.
+    if default_database_id(extra) == entry["id"]:
+        apply_default_database(extra)
     return entry
 
 
@@ -3966,11 +4085,17 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
     except Exception as error:
         # OperationalError covers wrong host/port/user/password/missing DB; any
         # other psycopg2 or DSN problem is treated the same way (fail-soft).
-        return _preflight_result(
+        result = _preflight_result(
             "database", False,
-            "Could not connect to the lab database at %s:%s: %s"
-            % (host, port, _pg_error(error)),
+            "Could not connect to the %s database at %s:%s: %s"
+            % ("lab" if c["db_mode"] == DB_MODE_LAB else "chosen", host, port,
+               _pg_error(error)),
             mask_database_url(url))
+        # Carry the db_mode so issue_fix_for can offer "Use lab default instead"
+        # only when it is a CUSTOM database that failed (switching to the lab
+        # default is meaningless when the lab default is itself what failed).
+        result["db_mode"] = c["db_mode"]
+        return result
     try:
         conn.close()
     except Exception:
@@ -4381,7 +4506,26 @@ def issue_fix_for(failure):
     if check == "project" and failure.get("kind") == "room":
         return {"fix": "pick_room", "fix_label": "Use this room",
                 "rooms": list(failure.get("rooms", []))}
+    # A CUSTOM database that could not be connected to -> offer a one-click switch
+    # to the lab shared (default) database so the user can re-launch at once. Not
+    # offered for a failed LAB database (switching to it would change nothing).
+    if check == "database" and failure.get("db_mode") == DB_MODE_CUSTOM:
+        return {"fix": "use_lab_default", "fix_label": "Use lab default instead"}
     return {}
+
+
+def switch_to_lab_default(cfg):
+    """Return a normalized copy of ``cfg`` switched to the lab shared database.
+
+    The switch behind the "Use lab default instead" recovery action both
+    launchers show when the chosen custom database cannot be connected to. It
+    flips ``db_mode`` to :data:`DB_MODE_LAB`; ``normalize_config`` then forces the
+    live :data:`LAB_DB` credentials in, so a re-launch runs against the lab shared
+    database. The single source of truth for that switch, shared by both UIs.
+    """
+    out = dict(cfg or {})
+    out["db_mode"] = DB_MODE_LAB
+    return normalize_config(out)
 
 
 # ---------------------------------------------------------------------------

@@ -337,6 +337,8 @@ input::placeholder{color:var(--faint)}
 .db-edit{flex:none;background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
 .db-edit:hover{color:var(--accent-dim,var(--accent))}
 .db-reset{flex:none;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
+.db-details-toggle{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:700;padding:4px 0 0;margin:0}
+.db-details-toggle:hover{color:var(--accent-dim,var(--accent))}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:#26262a;border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -860,6 +862,9 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
             </span>
             <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
           </div>
+          <!-- Feature 3: the selected database shows only the summary above; this
+               discloses the connection READ-ONLY. Editing is in Lab Settings. -->
+          <button type="button" class="db-details-toggle" id="dbDetailsToggle" onclick="toggleDbDetails()">Details &#9656;</button>
 
           <div class="db-section" id="dbSection" hidden>
             <div id="dbDetails">
@@ -1329,25 +1334,30 @@ function applyDbFields(fields){
     setDbVals(fields.db_name||"",fields.db_user||"",fields.db_password||"",fields.db_host||"localhost",fields.db_port||"5432");}
   applyDbMode(mode);refreshDbSummary();updateDirtyState();
 }
+var dbDetailsShown=false;
 function applyDbMode(mode){
   currentDbMode=mode;
   var fields=["db_name","db_user","db_pw","db_host","db_port"];
-  var section=el("dbSection");
-  if(mode==="custom"){
-    /* Editable connection fields: this is what lets you edit the current
-       custom database (the gap the old "Change…" left). */
-    fields.forEach(function(f){var e=el(f);e.readOnly=false;e.disabled=false;});
-    section.hidden=false;refreshUrl();
-  }else{
-    /* lab or none: nothing to type or show. The lab-shared default is chosen by
-       reference in Lab Settings and just appears as the one-line label "Lab
-       shared database (Postgres)"; its credentials are forced by the backend at
-       launch (normalize_config). none = the oTree default (SQLite). */
-    section.hidden=true;
-  }
+  /* Feature 3: every database (lab shared, custom, oTree default) shows only a
+     one-line summary here; the connection is revealed READ-ONLY behind the
+     Details disclosure. Editing a database moved entirely to Lab Settings >
+     Database, so nothing is editable inline on the run/config screen. */
+  fields.forEach(function(f){var e=el(f);if(e){e.readOnly=true;e.disabled=false;}});
+  refreshUrl();
+  applyDbDetailsView();
+}
+function toggleDbDetails(){dbDetailsShown=!dbDetailsShown;applyDbDetailsView();}
+function applyDbDetailsView(){
+  var s=el("dbSection"),t=el("dbDetailsToggle");if(!s||!t)return;
+  s.hidden=!dbDetailsShown;
+  t.innerHTML=dbDetailsShown?"Details &#9662;":"Details &#9656;";
 }
 function setDbVals(n,u,p,h,pt){el("db_name").value=n;el("db_user").value=u;el("db_pw").value=p;el("db_host").value=h;el("db_port").value=pt;}
-function refreshUrl(){el("dbUrl").textContent="postgres://"+val("db_user")+":••••••••@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");}
+function refreshUrl(){
+  var e=el("dbUrl");if(!e)return;
+  if(currentDbMode==="none"){e.textContent="not set — oTree falls back to its own default database (SQLite)";return;}
+  e.textContent="postgres://"+val("db_user")+":••••••••@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");
+}
 ["db_name","db_user","db_host","db_port"].forEach(function(f){document.addEventListener("DOMContentLoaded",function(){
   var e=el(f);if(e)e.addEventListener("input",function(){if(currentDbMode==="custom")refreshUrl();refreshDbSummary();});});});
 function refreshDbSummary(){
@@ -1813,9 +1823,20 @@ function openCreateDb(){
     renderCreateDb(PREVIEW_RESEARCHERS,"J. Tait");
   }
 }
+/* Mirror of core.slugify_pg_dbname: a Postgres-identifier-safe db name from any
+   label (Feature 1). Same rules as the Python helper so both prefill the same. */
+function slugifyPgDbname(name){
+  var text=String(name==null?"":name).toLowerCase();
+  text=text.replace(/[^a-z0-9_$]+/g,"_").replace(/_+/g,"_").replace(/^_+|_+$/g,"");
+  if(!text||/^[0-9]/.test(text))text="_"+text;
+  return text;
+}
 function renderCreateDb(roster,suggestedResearcher){
-  var suggested=(PREVIEW_PROJECT.name)||"otree";
-  if(NATIVE){var base=currentProjectPath.replace(/[\\/]+$/,"").split(/[\\/]/).pop();if(base)suggested=base;}
+  var raw=(PREVIEW_PROJECT.name)||currentConfigName||"otree";
+  if(NATIVE){var base=currentProjectPath.replace(/[\\/]+$/,"").split(/[\\/]/).pop();if(base)raw=base;}
+  /* Feature 1: prefill the name from the project folder / config name, SLUGIFIED
+     to a valid Postgres identifier. The user can still edit it. */
+  var suggested=slugifyPgDbname(raw);
   var opts=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
   openModal("Create a new Postgres database",
     '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
@@ -1827,26 +1848,33 @@ function renderCreateDb(roster,suggestedResearcher){
       '<datalist id="cdbRosterList">'+opts+'</datalist></div>'+
     '<div class="mfield"><label>New user (optional)</label><input id="cdbUser" type="text"></div>'+
     '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
+    /* Feature 4: register an existing database WITHOUT running CREATE DATABASE.
+       The entry is identical either way, so it is selectable/editable afterward. */
+    '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" onchange="onCdbExistsToggle()"> Database already exists in Postgres (register without creating)</label>'+
     '<div class="modal-err" id="cdbErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
     '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">Create</button></div>');
 }
+function onCdbExistsToggle(){
+  var b=el("cdbCreate");if(b)b.textContent=(el("cdbExists")&&el("cdbExists").checked)?"Register":"Create";
+}
 function doCreateDb(){
   var name=(val("cdbName")||"").trim(),researcher=(val("cdbResearcher")||"").trim();
   var user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
+  var exists=!!(el("cdbExists")&&el("cdbExists").checked);
   var e=el("cdbErr");
   if(!name){e.style.display="block";e.textContent="Enter a database name.";return;}
   if(!researcher){e.style.display="block";e.textContent="Enter or pick a researcher: whose database this is.";return;}
   if(!NATIVE||!API){closeModal();window.pywStatus("","Create database works in the app, not the static preview.");return;}
-  el("cdbCreate").textContent="Creating…";
-  API.create_database(name,user,pw,researcher).then(function(r){
+  el("cdbCreate").textContent=exists?"Registering…":"Creating…";
+  API.create_database(name,user,pw,researcher,exists).then(function(r){
     if(r&&r.ok){closeModal();applyDbMode("custom");
       if(r.fields)setDbVals(r.fields.db_name,r.fields.db_user,r.fields.db_password,r.fields.db_host,r.fields.db_port);
       /* keep the local registry + roster in sync with what the backend saved */
       if(r.databases)DATABASES=r.databases;if(r.researchers)RESEARCHERS=r.researchers;
       applyDbFields(r.fields||{db_mode:"custom"});
-      window.pywStatus("ok",r.message||"Database created.");}
-    else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent="Create";}
+      window.pywStatus("ok",r.message||(exists?"Database registered.":"Database created."));}
+    else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent=exists?"Register":"Create";}
   });
 }
 
@@ -1860,8 +1888,68 @@ function lsCustomDbRows(){
   if(!list||!list.length)return '<p class="d" style="margin:0">No custom databases yet.</p>';
   return list.map(function(e){
     var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
-    return '<div style="padding:3px 0">'+escapeHtml(e.title)+grey+'</div>';
+    /* Feature 2: each registered database is EDITABLE right here. */
+    return '<div style="padding:3px 0;display:flex;align-items:center;gap:8px">'+
+      '<span style="flex:1;min-width:0">'+escapeHtml(e.title)+grey+'</span>'+
+      '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(e.id)+'\')">Edit</button></div>';
   }).join("");
+}
+/* The selected default's one-line summary + an Edit button (Feature 2): even the
+   lab shared / setup-wizard database is editable now (it was locked before). */
+function lsDefaultDbSummary(){
+  var entry=lsFindDbEntry(defaultDatabase)||{title:"Lab shared database"};
+  var where=(entry.db_name?(" — "+escapeHtml(entry.db_name)+" on "+escapeHtml(entry.db_host||"")):"");
+  return '<div style="padding:2px 0 6px;display:flex;align-items:center;gap:8px">'+
+    '<span style="flex:1;min-width:0"><b>Selected:</b> '+escapeHtml(entry.title||"Lab shared database")+where+'</span>'+
+    '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(defaultDatabase)+'\')">Edit selected</button></div>';
+}
+function lsFindDbEntry(id){
+  var pools=[DEFAULT_DB_OPTIONS,DATABASES];
+  for(var p=0;p<pools.length;p++){var list=pools[p]||[];for(var i=0;i<list.length;i++)if(list[i].id===id)return list[i];}
+  return null;
+}
+function openEditDb(id){
+  var entry=lsFindDbEntry(id);
+  if(!entry){window.pywStatus("warn","That database is not available to edit.");return;}
+  var isLab=(entry.id===DB_LAB_ID);
+  var rosterOpts=(RESEARCHERS||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+  var body='<p class="modal-desc">'+(isLab
+      ?'The lab shared (default) database’s connection details. Saved to lab_info.json; every “Lab shared database” launch uses them.'
+      :'Connection details for this database, shared across all configs. Saved to the launcher’s store.')+'</p>';
+  if(!isLab){
+    body+='<div class="mfield"><label>Title</label><input id="edbTitle" type="text" value="'+escapeHtml(entry.title||"")+'"></div>'+
+      '<div class="mfield"><label>Researcher</label><input id="edbResearcher" type="text" list="edbRosterList" autocomplete="off" value="'+escapeHtml(entry.researcher||"")+'"><datalist id="edbRosterList">'+rosterOpts+'</datalist></div>';
+  }
+  body+='<div class="mfield"><label>Database name</label><input id="edbName" type="text" value="'+escapeHtml(entry.db_name||"")+'"></div>'+
+    '<div class="mfield"><label>User</label><input id="edbUser" type="text" value="'+escapeHtml(entry.db_user||"")+'"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input id="edbPw" type="password" value="'+escapeHtml(entry.db_password||"")+'"><button type="button" class="pw-toggle" data-target="edbPw" onclick="togglePw(this)">Show</button></div></div>'+
+    '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'"></div>'+
+    '<div class="mfield"><label>Port</label><input id="edbPort" type="text" value="'+escapeHtml(entry.db_port||"")+'"></div>'+
+    '<div class="modal-err" id="edbErr"></div>'+
+    '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button>'+
+    '<button class="btn accent" id="edbSave" onclick="doEditDb(\''+escapeHtml(id)+'\','+(isLab?"true":"false")+')">Save</button></div>';
+  openModal(isLab?"Edit the lab shared database":("Edit “"+(entry.title||"database")+"”"),body,true);
+}
+function doEditDb(id,isLab){
+  var name=(val("edbName")||"").trim();
+  var e=el("edbErr");
+  if(!name){e.style.display="block";e.textContent="Enter a database name.";return;}
+  var fields={db_name:name,db_user:val("edbUser")||"",db_password:val("edbPw")||"",
+              db_host:val("edbHost")||"",db_port:val("edbPort")||""};
+  if(!isLab){fields.title=val("edbTitle")||"";fields.researcher=val("edbResearcher")||"";}
+  if(!NATIVE||!API){window.pywStatus("","Editing a database works in the app, not the static preview.");openLabSettings();return;}
+  el("edbSave").textContent="Saving…";
+  API.edit_database(id,fields).then(function(r){
+    if(r&&r.ok){
+      if(r.databases)DATABASES=r.databases;
+      if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
+      if(r.default_database)defaultDatabase=r.default_database;
+      /* If the on-screen config uses this database, repaint its summary/preview. */
+      refreshDbSummary();refreshUrl();
+      window.pywStatus("ok","Database saved.");
+      openLabSettings();
+    }else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not save the database.";}el("edbSave").textContent="Save";}
+  });
 }
 /* The lab-shared-default picker rows: one radio per selectable database (the lab
    built-in + every custom DB), the current default checked. Mirror of the Tk
@@ -1912,7 +2000,7 @@ function openLabSettings(){
        each with its creator researcher (grey). Add here; edit/remove is a
        future idea (append-only). Mirror of the Tk _build_custom_db_card. */
     '<div class="ls-card"><h4>Custom databases</h4>'+
-      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. You can add databases here; editing and removing come later.</p>'+
+      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
       '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
       '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
     /* Database section, part 3: WHICH database is the lab-shared default. It is
@@ -1920,7 +2008,8 @@ function openLabSettings(){
        DB, or any custom DB made later -- chosen by selecting it, not by re-typing
        credentials. Mirror of the Tk _build_default_db_card. */
     '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
-      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time.</p>'+
+      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
+      lsDefaultDbSummary()+
       lsDefaultDbRows()+
       '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
     '<div class="ls-card"><h4>Lab presets</h4>'+
@@ -2185,6 +2274,7 @@ function renderBlIssues(issues){
     if(it.fix==="choose_folder")fixBtn='<button class="btn accent tiny" onclick="blChooseFolder()">'+escapeHtml(it.fix_label||"Choose folder…")+'</button>';
     else if(it.fix==="add_block")fixBtn='<button class="btn accent tiny" onclick="blFix(\'add_block\')">'+escapeHtml(it.fix_label||"Fix")+'</button>';
     else if(it.fix==="change_to_sqlite")fixBtn='<button class="btn accent tiny" onclick="blChangeToSqlite()">'+escapeHtml(it.fix_label||"Change to SQLite")+'</button>';
+    else if(it.fix==="use_lab_default")fixBtn='<button class="btn accent tiny" onclick="blUseLabDefault()">'+escapeHtml(it.fix_label||"Use lab default instead")+'</button>';
     else if(it.fix==="recheck")fixBtn='<button class="btn accent tiny" onclick="blRecheck()">'+escapeHtml(it.fix_label||"Re-check")+'</button>';
     else if(it.fix==="refresh_block")fixBtn='<button class="btn accent tiny" onclick="blRefreshBlock()">'+escapeHtml(it.fix_label||"Refresh lab block")+'</button>';
     else if(it.fix==="use_lab_room")fixBtn='<button class="btn accent tiny" onclick="blUseLabRoom('+jsQuote(it.lab_room||"study")+')">'+escapeHtml(it.fix_label||"Use new default")+'</button>';
@@ -2231,6 +2321,17 @@ function blChangeToSqlite(){
      the config like any other edit. */
   applyDbMode("none");refreshDbSummary();updateDirtyState();
   window.pywStatus&&window.pywStatus("ok","Switched to the oTree default database (SQLite).");
+  blRecheck();
+}
+function blUseLabDefault(){
+  /* Feature 5: the chosen custom database could not be connected to. Switch to
+     the lab shared (default) database so a re-launch works. Writes back to the
+     on-screen config; the backend forces the live LAB_DB at launch. */
+  var lab=lsFindDbEntry(DB_LAB_ID);
+  if(lab&&lab.db_name!==undefined)
+    setDbVals(lab.db_name||"",lab.db_user||"",lab.db_password||"",lab.db_host||"",lab.db_port||"");
+  applyDbMode("lab");refreshDbSummary();updateDirtyState();
+  window.pywStatus&&window.pywStatus("ok","Switched to the lab shared database (Postgres).");
   blRecheck();
 }
 function blPickRoom(idx){
@@ -2425,18 +2526,21 @@ function onExport(){
      refuses otherwise with needs_save; surface that message as a hint. */
   API.save_shortcut(currentConfigName||"",gatherFields()).then(function(r){
     if(r&&r.needs_save){window.pywStatus("warn",r.message||"Save these settings as a named config first, then create the one-click shortcut.");return;}
-    /* Browser mode has no native Save dialog: Python hands the file back and the
-       browser downloads it. (A .command still needs `chmod +x`; a .bat does not.) */
+    /* Browser mode: pywebview's native Save dialog is unavailable, but the
+       browser-mode server runs LOCALLY, so it pops a real Save-as dialog on the
+       server machine (POST /api/save_file_dialog) and writes the SAME content
+       there -- the user picks WHERE to save, like a download prompt. In pywebview
+       mode Python opened create_file_dialog(SAVE_DIALOG) itself (r.pending), so
+       there is nothing to do here. */
     if(r&&r.download){
-      try{
-        var blob=new Blob([r.content||""],{type:"application/octet-stream"});
-        var a=document.createElement("a");a.href=URL.createObjectURL(blob);
-        a.download=r.filename||("otree-shortcut"+(r.ext||".bat"));
-        document.body.appendChild(a);a.click();
-        setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},0);
-        var note=(r.ext===".command")?" On macOS run: chmod +x on the downloaded file to make it double-clickable.":"";
-        window.pywStatus("ok","Downloaded the one-click shortcut "+(r.filename||"")+". The database password is not stored in the file."+note);
-      }catch(e){window.pywStatus("err","Could not download the shortcut: "+String(e&&e.message||e));}
+      var fname=r.filename||("otree-shortcut"+(r.ext||".bat"));
+      API.save_file_dialog(r.content||"",fname,r.ext||".bat").then(function(s){
+        if(!s||!s.ok){window.pywStatus("err",(s&&s.message)||"Could not save the shortcut.");return;}
+        if(!s.path){window.pywStatus("","Save cancelled.");return;}
+        /* A .command was made executable server-side, so no manual chmod needed. */
+        var note=(r.ext===".command")?" It has been made executable, so it is ready to double-click.":"";
+        window.pywStatus("ok","Saved the one-click shortcut to "+s.path+". The database password is not stored in the file."+note);
+      });
     }
   });
 }

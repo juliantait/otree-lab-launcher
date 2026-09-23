@@ -345,6 +345,80 @@ def _native_folder_dialog_subprocess(helper=None, executable=None, timeout=600):
     return lines[-1] if lines else ""
 
 
+def _build_save_dialog_helper(default_name, ext):
+    """The stdlib-tkinter SAVE-dialog helper source, with the suggested filename
+    and default extension embedded as JSON literals (so any quote/backslash is
+    safe). Mirrors :data:`_FOLDER_DIALOG_HELPER` but calls
+    ``filedialog.asksaveasfilename`` -- the browser-mode counterpart of pywebview's
+    ``create_file_dialog(SAVE_DIALOG)``."""
+    extension = str(ext or "")
+    if extension and not extension.startswith("."):
+        extension = "." + extension
+    name_lit = json.dumps(str(default_name or ""))
+    ext_lit = json.dumps(extension)
+    label = ("Shortcut (*%s)" % extension) if extension else "All files (*.*)"
+    label_lit = json.dumps(label)
+    return (
+        "import sys\n"
+        "import tkinter\n"
+        "from tkinter import filedialog\n"
+        "root = tkinter.Tk()\n"
+        "root.withdraw()\n"
+        "try:\n"
+        "    root.attributes('-topmost', True)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "root.lift()\n"
+        "try:\n"
+        "    root.update()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "ext = %s\n" % ext_lit +
+        "ftypes = [(%s, ('*' + ext) if ext else '*.*'), ('All files', '*.*')]\n" % label_lit +
+        "path = filedialog.asksaveasfilename(title='Save the one-click shortcut',\n"
+        "    initialfile=%s, defaultextension=ext, filetypes=ftypes)\n" % name_lit +
+        "try:\n"
+        "    root.destroy()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "sys.stdout.write(path or '')\n"
+        "sys.stdout.flush()\n"
+    )
+
+
+def _native_save_dialog_subprocess(default_name, ext=".bat", helper=None,
+                                   executable=None, timeout=600):
+    """Open a native SAVE dialog in a short-lived subprocess; return the chosen
+    absolute path ("" on cancel, timeout or ANY error).
+
+    The browser-mode counterpart of pywebview's ``create_file_dialog(SAVE_DIALOG)``:
+    the browser-mode server runs on the operator's OWN machine, so a real Save-as
+    dialog can pop here even though a plain browser cannot return a path. Same
+    windowless / ``-topmost`` / ``CREATE_NO_WINDOW`` treatment as
+    :func:`_native_folder_dialog_subprocess`, so no console flashes on Windows.
+    ``helper`` / ``executable`` are injectable for tests. Never raises into the
+    HTTP handler.
+    """
+    exe = executable or _pythonw_executable()
+    if not exe:
+        return ""
+    src = _build_save_dialog_helper(default_name, ext) if helper is None else helper
+    try:
+        proc = subprocess.run(
+            [exe, "-c", src],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout, creationflags=core._no_window_flags())
+    except Exception:
+        LOG.exception("save-dialog subprocess failed")
+        return ""
+    try:
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+    except Exception:
+        return ""
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
 # ---------------------------------------------------------------------------
 # The JS API: every method here is callable from the page as
 # window.pywebview.api.<name>(...). Keep the returns JSON-serializable.
@@ -896,7 +970,8 @@ class Api(object):
                 "default_database": core.default_database_id(self.store_extra)}
 
     @api_call
-    def create_database(self, new_db, new_user="", new_password="", researcher=""):
+    def create_database(self, new_db, new_user="", new_password="", researcher="",
+                        already_exists=False):
         """Create a Postgres database with the stored admin config (Feature 2),
         then, on a confirmed create, register it in the global registry with its
         creator researcher and persist the store (Round 3, Task 2).
@@ -908,7 +983,15 @@ class Api(object):
         must never lose a created database, so a registry error is reported but
         does not fail the create. Returns core.create_database's result dict; on
         success ``fields`` holds the Custom DB config for the page to auto-fill.
+
+        ``already_exists`` (the create dialog's "Database already exists" tick)
+        REGISTERS the connection WITHOUT running CREATE DATABASE, mirroring the Tk
+        ``_run_register_existing_database``. The registry entry is identical either
+        way, so the database is selectable/editable afterward.
         """
+        if already_exists:
+            return self._register_existing_database(new_db, new_user, new_password,
+                                                    researcher)
         admin = core.pg_admin_from_store(self.store_extra)
         result = core.create_database(admin, new_db, new_user, new_password)
         if result.get("ok"):
@@ -923,6 +1006,63 @@ class Api(object):
             except Exception as error:   # registration must never lose the DB
                 result["register_error"] = str(error)
         return result
+
+    def _register_existing_database(self, new_db, new_user, new_password, researcher):
+        """Register an ALREADY-EXISTING database (no CREATE DATABASE). Host/port
+        come from the Lab Settings admin config (where the database lives) and a
+        blank user/password falls back to the admin role, so the resulting registry
+        entry is IDENTICAL in shape to a freshly-created one (mirror of the Tk
+        ``_run_register_existing_database``)."""
+        new_db = (new_db or "").strip()
+        if not new_db:
+            return {"ok": False, "message": "Enter a database name."}
+        admin = core.pg_admin_from_store(self.store_extra)
+        a_user = str(admin.get("admin_username", "")).strip()
+        a_pw = str(admin.get("admin_password", ""))
+        user = (new_user or "").strip()
+        fields = {
+            "db_mode": core.DB_MODE_CUSTOM,
+            "db_name": new_db,
+            "db_user": user or a_user,
+            "db_password": (new_password or "") if user else a_pw,
+            "db_host": str(admin.get("admin_host", "")).strip(),
+            "db_port": str(admin.get("admin_port", "")).strip(),
+        }
+        result = {"ok": True, "created_db": False, "registered_only": True,
+                  "fields": fields,
+                  "message": "Registered the existing database %r (not created)." % new_db}
+        self._register_conn(fields, researcher, result)
+        if result.get("register_error"):
+            return {"ok": False,
+                    "message": "Could not register the database: %s"
+                               % result["register_error"]}
+        return result
+
+    @api_call
+    def edit_database(self, db_id, fields):
+        """Edit an EXISTING database entry (Feature 2): a custom registry database
+        OR the lab shared built-in. All shaping/persistence is
+        ``core.edit_database`` -- a custom entry is written back to the store and a
+        lab-shared edit goes to lab_info.json (re-resolving the live LAB_DB).
+        Returns the refreshed registry + default lists so the page can repaint.
+        """
+        fields = fields or {}
+        updates = {}
+        for key in ("title", "researcher", "db_name", "db_user", "db_password",
+                    "db_host", "db_port"):
+            if key in fields and fields[key] is not None:
+                updates[key] = fields[key]
+        try:
+            entry = self._mutate_store(
+                lambda: core.edit_database(self.store_extra, db_id, **updates))
+        except ValueError as error:
+            return {"ok": False, "message": str(error)}
+        except OSError as error:
+            return {"ok": False, "message": "Could not save: %s" % error}
+        return {"ok": True, "entry": entry,
+                "databases": core.known_databases_from_store(self.store_extra),
+                "default_db_options": core.default_database_options(self.store_extra),
+                "default_database": core.default_database_id(self.store_extra)}
 
     @api_call
     def save_pg_admin(self, fields):
@@ -1297,13 +1437,24 @@ class Api(object):
         if not path:
             LOG.info("save dialog cancelled")
             return
+        written = self._write_export_file(path, text)
+        if written.get("ok"):
+            self._callback("pywOnBatResult", {"ok": True, "path": written["path"]})
+        else:
+            self._callback("pywOnBatResult",
+                           {"ok": False, "message": written.get("message", "Save failed.")})
+
+    def _write_export_file(self, path, text):
+        """Write an exported shortcut to ``path`` (utf-8, no newline translation)
+        and set the executable bit for a shell shortcut. ONE writer, shared by the
+        pywebview ``_dialog_export`` and the browser-mode ``save_file_dialog`` so
+        both save the exact same bytes and permissions. Returns a small result
+        dict; never raises."""
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
                 handle.write(text)
         except OSError as error:
-            self._callback("pywOnBatResult",
-                           {"ok": False, "message": "Could not write %s: %s" % (path, error)})
-            return
+            return {"ok": False, "message": "Could not write %s: %s" % (path, error)}
         # A macOS/Unix shell shortcut (.command/.sh, or a shebang script) must be
         # executable or the OS refuses to run it ("no appropriate access
         # privileges"). Windows .vbs/.bat/.txt need no exec bit -- leave them.
@@ -1313,7 +1464,29 @@ class Api(object):
                 os.chmod(path, os.stat(path).st_mode | 0o111)
             except OSError:
                 LOG.exception("could not set executable bit on %s", path)
-        self._callback("pywOnBatResult", {"ok": True, "path": path})
+        return {"ok": True, "path": path, "filename": os.path.basename(path)}
+
+    @api_call
+    def save_file_dialog(self, content, default_name, ext=".bat"):
+        """BROWSER-MODE server-side Save-as for an exported file (the one-click
+        shortcut, and any future export).
+
+        pywebview's ``create_file_dialog(SAVE_DIALOG)`` does not exist in browser
+        mode, so a plain browser cannot choose WHERE to save. The browser-mode
+        server runs on the operator's OWN machine, so this pops a native Save
+        dialog here (:func:`_native_save_dialog_subprocess`) and writes ``content``
+        to the chosen path with the SAME bytes + executable-bit handling as the
+        pywebview save (:meth:`_write_export_file`). Returns
+        ``{"ok": True, "path": <abs>, "filename": ...}`` on save,
+        ``{"ok": True, "path": ""}`` on cancel, or ``{"ok": False, "message": ...}``
+        on a write error. Blocking is fine: in browser mode every /api call runs on
+        its own HTTP-server thread.
+        """
+        content = "" if content is None else str(content)
+        path = _native_save_dialog_subprocess(default_name, ext)
+        if not path:
+            return {"ok": True, "path": ""}      # cancelled
+        return self._write_export_file(path, content)
 
     # -- the launch --------------------------------------------------------
 

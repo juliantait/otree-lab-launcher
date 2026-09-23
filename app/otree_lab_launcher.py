@@ -2296,10 +2296,21 @@ class LauncherApp(object):
             bd=0, highlightthickness=0, padx=0, cursor="hand2")
         summary_row.add(self.reset_check, gap=18, push_right=True)
 
-        # The connection fields, shown (and editable) ONLY for a custom database;
-        # apply_db_mode grids this in for a custom setup and removes it otherwise.
+        # A "Details" disclosure (Feature 3): the selected database (lab shared OR
+        # custom) shows only the one-line summary above; Details reveals the
+        # connection READ-ONLY. All editing now happens in Lab Settings -> Database,
+        # so the run/config screen never edits a connection inline.
+        self.db_details_shown = tk.BooleanVar(self.root, value=False)
+        self.db_details_toggle = tk.Label(
+            body, text="Details ▸", bg=COLORS["card"], fg=COLORS["accent"],
+            font=self.fonts.small_bold, anchor="w", cursor="hand2")
+        self.db_details_toggle.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.db_details_toggle.bind("<Button-1>", self._toggle_db_details)
+
+        # The connection fields, revealed READ-ONLY by the Details disclosure.
+        # apply_db_mode keeps them read-only; _apply_db_details_view grids them.
         self.db_section = tk.Frame(body, bg=COLORS["card"])
-        self.db_section.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.db_section.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.db_section.columnconfigure(1, weight=1)
         details = self.db_section
         details.columnconfigure(1, weight=1)
@@ -2337,10 +2348,11 @@ class LauncherApp(object):
         preview.bind("<Configure>",
                      lambda e: self.db_url_label.configure(wraplength=max(e.width - 14, 160)))
 
-        # Start on the one-line summary; apply_db_mode reveals the fields for a
-        # custom database (and hides them otherwise).
+        # Start on the one-line summary with Details collapsed; the disclosure
+        # reveals the read-only connection on demand for any database.
         self.db_section.grid_remove()
         self._refresh_db_summary()
+        self._apply_db_details_view()
 
     # (3) Lab (lab + link + participant list + room-layout map) ------------
 
@@ -3210,22 +3222,33 @@ class LauncherApp(object):
 
     def apply_db_mode(self):
         mode = self.var["db_mode"].get()
-        state = {"lab": "readonly", "custom": "normal", "none": "disabled"}[mode]
+        # Feature 3: every database (lab shared, custom, oTree default) shows only
+        # a one-line summary on the run/config screen; the connection fields are
+        # READ-ONLY behind the Details disclosure. Editing a database has moved
+        # entirely to Lab Settings -> Database, so nothing is editable inline here.
         for entry in self.db_entries.values():
-            entry.configure(state=state)
+            entry.configure(state="readonly")
         if mode != DB_MODE_CUSTOM:
             self.set_password_visible("db", False)
-        # The connection fields (host/user/password/name/port + DATABASE_URL
-        # preview) appear, editable, ONLY for a custom database. The lab-shared
-        # default is chosen by reference in Lab Settings and just appears here as
-        # the one-line label "Lab shared database (Postgres)" (no fields), and the
-        # oTree default (SQLite) needs nothing typed either, so the card stays a
-        # single line for both.
-        if mode == DB_MODE_CUSTOM:
+        self._refresh_db_summary()
+        self._apply_db_details_view()
+
+    def _toggle_db_details(self, _event=None):
+        self.db_details_shown.set(not self.db_details_shown.get())
+        self._apply_db_details_view()
+
+    def _apply_db_details_view(self):
+        """Grid or hide the read-only connection block for the Details disclosure."""
+        shown = getattr(self, "db_details_shown", None)
+        toggle = getattr(self, "db_details_toggle", None)
+        if shown is None or toggle is None:
+            return
+        if shown.get():
             self.db_section.grid()
+            toggle.configure(text="Details ▾")
         else:
             self.db_section.grid_remove()
-        self._refresh_db_summary()
+            toggle.configure(text="Details ▸")
 
     def _db_summary_text(self):
         # The reset state is shown by the always-visible "Reset before start"
@@ -3985,15 +4008,18 @@ class LauncherApp(object):
                              suggested_researcher=suggested_researcher)
 
     def _suggested_db_name(self):
-        """A database name prefilled from the project folder name (lower-cased,
-        non-identifier characters replaced), or "" when it would be invalid."""
-        folder = final_folder_name(self.var["project_path"].get())
-        if not folder:
+        """A database name prefilled from the current project FOLDER (or, failing
+        that, the open config's name), slugified to a valid Postgres identifier by
+        the shared ``core.slugify_pg_dbname`` so both launchers prefill the same
+        way. Returns "" only when even the slug fails validation."""
+        source = final_folder_name(self.var["project_path"].get())
+        if not source and self.selected_index is not None \
+                and 0 <= self.selected_index < len(self.presets):
+            source = str(self.presets[self.selected_index].get("name", "")).strip()
+        if not source:
             return ""
-        slug = re.sub(r"[^a-z0-9_]+", "_", folder.lower()).strip("_")
-        if slug and slug[0].isdigit():
-            slug = "db_" + slug
-        ok, _msg = core.validate_pg_identifier(slug) if slug else (False, "")
+        slug = core.slugify_pg_dbname(source)
+        ok, _msg = core.validate_pg_identifier(slug)
         return slug if ok else ""
 
     def _run_create_database(self, name, user, password, researcher, on_done):
@@ -4014,6 +4040,37 @@ class LauncherApp(object):
                 result["registered"] = entry
             except Exception as error:   # registration must never lose the DB
                 result["register_error"] = str(error)
+        self._on_main(lambda: on_done(result))
+
+    def _run_register_existing_database(self, name, user, password, researcher, on_done):
+        """Register an ALREADY-EXISTING database (the create dialog's "already
+        exists" checkbox): record the connection in the global registry WITHOUT
+        running CREATE DATABASE. Host/port come from the Lab Settings admin config
+        (where the database lives) and a blank user/password falls back to the
+        admin role, so the resulting registry entry is IDENTICAL in shape to a
+        freshly-created one and is selectable/editable afterward."""
+        admin = core.pg_admin_from_store(self.store_extra)
+        a_user = str(admin.get("admin_username", "")).strip()
+        a_pw = str(admin.get("admin_password", ""))
+        fields = {
+            "db_mode": core.DB_MODE_CUSTOM,
+            "db_name": name,
+            "db_user": user or a_user,
+            "db_password": password if user else a_pw,
+            "db_host": str(admin.get("admin_host", "")).strip(),
+            "db_port": str(admin.get("admin_port", "")).strip(),
+        }
+        result = {"ok": True, "created_db": False, "registered_only": True,
+                  "fields": fields,
+                  "message": "Registered the existing database %r (not created)." % name}
+        try:
+            entry = self._mutate_store(lambda: core.register_database(
+                self.store_extra, title=name, researcher=researcher,
+                connection=fields, postgres_user=fields.get("db_user", "")))
+            result["registered"] = entry
+        except Exception as error:
+            result["ok"] = False
+            result["message"] = "Could not register the database: %s" % error
         self._on_main(lambda: on_done(result))
 
     def apply_created_database(self, fields):
@@ -4194,6 +4251,24 @@ class LauncherApp(object):
         elif tag == "recheck":
             issue["fix"] = lambda: (True, "Re-checked.")
             issue["fix_label"] = meta.get("fix_label", "Re-check")
+        elif tag == "use_lab_default":
+            def _to_lab_default(cfg=cfg):
+                # The chosen custom database could not be connected to: switch to
+                # the lab shared (default) database so a re-launch works. Mutate
+                # the launch cfg AND the main form so the change sticks either way.
+                switched = core.switch_to_lab_default(cfg)
+                for key in ("db_mode", "db_name", "db_user", "db_password",
+                            "db_host", "db_port"):
+                    cfg[key] = switched[key]
+                    if key in self.var:
+                        self.var[key].set(switched[key])
+                self.db_mode_label.set(DB_MODE_LABELS[core.DB_MODE_LAB])
+                self.apply_db_mode()
+                self.refresh_previews()
+                return True, ("Switched to the lab shared database (Postgres). "
+                              "Re-checking the connection...")
+            issue["fix"] = _to_lab_default
+            issue["fix_label"] = meta.get("fix_label", "Use lab default instead")
         elif tag == "pick_room":
             issue["kind"] = "room_pick"
             issue["rooms"] = meta.get("rooms", [])
@@ -6335,19 +6410,35 @@ class CreateDatabaseDialog(object):
                         command=self._toggle_pw).grid(row=0, column=1, padx=(6, 0))
         self._row(body, 5, "New password (optional)", pwframe)
 
+        # "Already exists" (Feature 4): register the connection in the global
+        # registry WITHOUT running CREATE DATABASE. The entry is identical either
+        # way, so it is selectable/editable afterward. When ticked the button reads
+        # "Register" and the create is skipped.
+        self.already_exists = tk.BooleanVar(top, value=False)
+        exists_row = tk.Frame(body, bg=COLORS["card"])
+        exists_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        tk.Checkbutton(
+            exists_row,
+            text="Database already exists in Postgres (register without creating)",
+            variable=self.already_exists, command=self._on_exists_toggle,
+            bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["card"],
+            activeforeground=COLORS["text"], selectcolor=COLORS["accent"],
+            font=fonts.small, anchor="w", bd=0, highlightthickness=0, padx=0,
+            cursor="hand2", wraplength=420, justify="left").pack(side="left")
+
         self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
                                font=fonts.small, anchor="w", justify="left", wraplength=420)
-        self.status.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.status.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         # A selectable copy of the last message, so an error can be copied out.
         self.detail = tk.Text(body, height=3, font=fonts.mono_small, wrap="word",
                               bg=COLORS["field_off"], fg=COLORS["text"], relief="flat",
                               highlightthickness=1, highlightbackground=COLORS["card_line"])
-        self.detail.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.detail.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.detail.configure(state="disabled")
         self.detail.grid_remove()
 
         buttons = tk.Frame(body, bg=COLORS["card"])
-        buttons.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         buttons.columnconfigure(0, weight=1)
         # "Cancel" until a create succeeds, then "Close".
         self.cancel_button = ttk.Button(buttons, text="Cancel", command=self._close)
@@ -6372,6 +6463,10 @@ class CreateDatabaseDialog(object):
     def _toggle_pw(self):
         self.pw_entry.configure(show="" if self.show_pw.get() else MASK_CHAR)
 
+    def _on_exists_toggle(self):
+        self.create_button.configure(
+            text="Register" if self.already_exists.get() else "Create")
+
     def _create(self):
         name = self.name.get().strip()
         if not name:
@@ -6382,16 +6477,25 @@ class CreateDatabaseDialog(object):
             self._set_status("Enter or pick a researcher: whose database this is.",
                              COLORS["warn"])
             return
-        self.create_button.configure(state="disabled", text="Creating...")
-        self._set_status("Creating the database...", COLORS["muted"])
+        exists = self.already_exists.get()
+        if exists:
+            # Register-only: no CREATE DATABASE is run.
+            self.create_button.configure(state="disabled", text="Registering...")
+            self._set_status("Registering the existing database...", COLORS["muted"])
+            target = self.app._run_register_existing_database
+        else:
+            self.create_button.configure(state="disabled", text="Creating...")
+            self._set_status("Creating the database...", COLORS["muted"])
+            target = self.app._run_create_database
         thread = threading.Thread(
-            target=self.app._run_create_database,
+            target=target,
             args=(name, self.user.get().strip(), self.password.get(), researcher, self._done),
             daemon=True)
         thread.start()
 
     def _done(self, result):
-        self.create_button.configure(state="normal", text="Create")
+        self.create_button.configure(
+            state="normal", text="Register" if self.already_exists.get() else "Create")
         if result.get("ok"):
             self._created = True
             self.cancel_button.configure(text="Close")
@@ -6415,6 +6519,139 @@ class CreateDatabaseDialog(object):
         self.detail.insert("1.0", text)
         self.detail.configure(state="disabled")
         self.detail.grid()
+
+    def _close(self):
+        _modal_close(self.top)
+
+
+class EditDatabaseDialog(object):
+    """Edit an EXISTING database entry from Lab Settings (Feature 2).
+
+    Works for both a custom registry database AND the lab shared built-in (the
+    lab-shared one used to be locked). Connection fields (name, user, password,
+    host, port) are always editable; title + researcher only for a custom
+    database (the built-in synthesizes them). Saving goes through
+    core.edit_database, which persists a custom entry to presets.json and the
+    lab-shared one to lab_info.json, then re-resolves the live LAB_DB. No
+    Postgres is touched -- this only records connection details."""
+
+    def __init__(self, parent, fonts, app, entry, on_saved=None):
+        self.app = app
+        self.fonts = fonts
+        self.entry = entry or {}
+        self.on_saved = on_saved
+        self.is_lab = self.entry.get("id") == core.DB_BUILTIN_LAB
+        top = self.top = tk.Toplevel(parent)
+        top.title("Edit database")
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.resizable(False, False)
+
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=20, pady=18)
+        body.columnconfigure(1, weight=1)
+
+        heading = ("Edit the lab shared database" if self.is_lab
+                   else "Edit “%s”" % (self.entry.get("title") or "database"))
+        tk.Label(body, text=heading, bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew")
+        note = ("These are the lab shared (default) database's connection details. "
+                "Saved to lab_info.json; every “Lab shared database” launch uses them."
+                if self.is_lab else
+                "Connection details for this database, shared across all configs. "
+                "Saved to the launcher's store.")
+        tk.Label(body, text=note, bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small,
+                 anchor="w", justify="left", wraplength=420).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(2, 12))
+
+        self.vars = {}
+        r = 2
+        if not self.is_lab:
+            self.vars["title"] = tk.StringVar(top, value=self.entry.get("title", ""))
+            self._row(body, r, "Title", ttk.Entry(body, textvariable=self.vars["title"])); r += 1
+            self.vars["researcher"] = tk.StringVar(top, value=self.entry.get("researcher", ""))
+            roster = core.list_researchers(app.store_extra, app.presets)
+            self._row(body, r, "Researcher",
+                      ttk.Combobox(body, textvariable=self.vars["researcher"],
+                                   values=list(roster))); r += 1
+        self.vars["db_name"] = tk.StringVar(top, value=self.entry.get("db_name", ""))
+        self._row(body, r, "Database name", ttk.Entry(body, textvariable=self.vars["db_name"])); r += 1
+        self.vars["db_user"] = tk.StringVar(top, value=self.entry.get("db_user", ""))
+        self._row(body, r, "User", ttk.Entry(body, textvariable=self.vars["db_user"])); r += 1
+        self.vars["db_password"] = tk.StringVar(top, value=self.entry.get("db_password", ""))
+        pwframe = tk.Frame(body, bg=COLORS["card"])
+        pwframe.columnconfigure(0, weight=1)
+        self.pw_entry = ttk.Entry(pwframe, textvariable=self.vars["db_password"], show=MASK_CHAR)
+        self.pw_entry.grid(row=0, column=0, sticky="ew")
+        self.show_pw = tk.BooleanVar(top, value=False)
+        ttk.Checkbutton(pwframe, text="Show", variable=self.show_pw,
+                        command=self._toggle_pw).grid(row=0, column=1, padx=(6, 0))
+        self._row(body, r, "Password", pwframe); r += 1
+        hostport = tk.Frame(body, bg=COLORS["card"])
+        hostport.columnconfigure(0, weight=1)
+        self.vars["db_host"] = tk.StringVar(top, value=self.entry.get("db_host", ""))
+        ttk.Entry(hostport, textvariable=self.vars["db_host"]).grid(row=0, column=0, sticky="ew")
+        tk.Label(hostport, text="Port", bg=COLORS["card"], fg=COLORS["muted"]).grid(
+            row=0, column=1, padx=(12, 8))
+        self.vars["db_port"] = tk.StringVar(top, value=self.entry.get("db_port", ""))
+        ttk.Entry(hostport, textvariable=self.vars["db_port"], width=8).grid(row=0, column=2, sticky="w")
+        self._row(body, r, "Host", hostport); r += 1
+
+        self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                               font=fonts.small, anchor="w", justify="left", wraplength=420)
+        self.status.grid(row=r, column=0, columnspan=2, sticky="ew", pady=(6, 0)); r += 1
+
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.grid(row=r, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.columnconfigure(0, weight=1)
+        ttk.Button(buttons, text="Cancel", command=self._close).grid(row=0, column=0, sticky="w")
+        tk.Button(buttons, text="Save", command=self._save, font=fonts.bold,
+                  bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
+                  activeforeground="#ffffff", relief="flat", padx=14, pady=6,
+                  cursor="hand2").grid(row=0, column=1, sticky="e")
+
+        _center_on(parent, top)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+
+    def _row(self, body, r, label, widget):
+        tk.Label(body, text=label, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=self.fonts.body, anchor="w").grid(row=r, column=0, sticky="w",
+                                                        pady=3, padx=(0, 10))
+        widget.grid(row=r, column=1, sticky="ew", pady=3)
+
+    def _toggle_pw(self):
+        self.pw_entry.configure(show="" if self.show_pw.get() else MASK_CHAR)
+
+    def _save(self):
+        if not self.vars["db_name"].get().strip():
+            self.status.configure(text="Enter a database name.", fg=COLORS["warn"])
+            return
+        updates = {key: var.get() for key, var in self.vars.items()}
+        try:
+            with self.app._store_lock:
+                core.edit_database(self.app.store_extra, self.entry.get("id"), **updates)
+                self.app._persist_store()
+        except ValueError as error:
+            self.status.configure(text=str(error), fg=COLORS["error"])
+            return
+        except OSError as error:
+            self.status.configure(text="Could not save: %s" % error, fg=COLORS["error"])
+            return
+        # Editing the lab-shared built-in, or a custom database that is the current
+        # default, changes the live LAB_DB (core.edit_database re-resolves it), so
+        # refresh the module defaults and the main window either way.
+        refresh_defaults_from_core()
+        try:
+            self.app.refresh_previews()
+        except (tk.TclError, AttributeError):
+            pass
+        if callable(self.on_saved):
+            self.on_saved()
+        self._close()
 
     def _close(self):
         _modal_close(self.top)
@@ -6951,8 +7188,8 @@ class LabSettingsDialog(object):
                                                         padx=12, pady=(10, 2))
         tk.Label(card,
                  text="Every database created in the launcher, shared across all configs. The grey "
-                      "name is who created it. You can add databases here; editing and removing "
-                      "come later.",
+                      "name is who created it. Add a database here, or Edit one to change its "
+                      "name, user, host, port or password.",
                  bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small, anchor="w",
                  justify="left", wraplength=560).grid(row=1, column=0, sticky="ew",
                                                       padx=12, pady=(0, 8))
@@ -6979,6 +7216,7 @@ class LabSettingsDialog(object):
                      fg=COLORS["faint"], font=self.fonts.small, anchor="w").grid(
                 row=0, column=0, sticky="ew", pady=2)
             return
+        frame.columnconfigure(0, weight=1)
         for i, entry in enumerate(customs):
             line = tk.Frame(frame, bg=COLORS["card"])
             line.grid(row=i, column=0, sticky="ew", pady=1)
@@ -6987,6 +7225,25 @@ class LabSettingsDialog(object):
             if entry.get("researcher"):
                 tk.Label(line, text="   created by %s" % entry["researcher"], bg=COLORS["card"],
                          fg=COLORS["faint"], font=self.fonts.small, anchor="w").pack(side="left")
+            ttk.Button(line, text="Edit", width=6,
+                       command=lambda e=entry: self._edit_database(e)).pack(side="right")
+
+    def _edit_database(self, entry):
+        EditDatabaseDialog(self.top, self.fonts, self.app, entry,
+                           on_saved=self._after_db_edit)
+
+    def _after_db_edit(self):
+        """Repaint the Database section after an edit (the default's title/creds
+        may have changed) and refresh the main window."""
+        self._reload_db_list()
+        try:
+            self._refresh_default_db_summary()
+        except (tk.TclError, AttributeError):
+            pass
+        try:
+            self.app.refresh_previews()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _add_database(self):
         # Persist any admin creds typed but not yet blurred, so the create flow
@@ -7026,12 +7283,25 @@ class LabSettingsDialog(object):
                  bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small, anchor="w",
                  justify="left", wraplength=560).grid(row=1, column=0, sticky="ew",
                                                       padx=12, pady=(0, 6))
+        # The SELECTED default database shown at the top, and EDITABLE right here
+        # (Feature 2): even the lab shared / setup-wizard database, which used to
+        # be locked. Edit persists to lab_info.json (built-in) or the registry.
+        top_row = tk.Frame(card, bg=COLORS["card"])
+        top_row.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
+        top_row.columnconfigure(0, weight=1)
+        self.default_db_summary = tk.StringVar(self.top, value="")
+        tk.Label(top_row, textvariable=self.default_db_summary, bg=COLORS["card"],
+                 fg=COLORS["text"], font=self.fonts.small_bold, anchor="w",
+                 justify="left", wraplength=440).grid(row=0, column=0, sticky="ew")
+        ttk.Button(top_row, text="Edit selected", width=13,
+                   command=self._edit_default_db).grid(row=0, column=1, sticky="e")
+        self._refresh_default_db_summary()
         current = core.default_database_id(self.app.store_extra)
         self.default_db = tk.StringVar(self.top, value=current)
         options = core.default_database_options(self.app.store_extra)
         for i, entry in enumerate(options):
             line = tk.Frame(card, bg=COLORS["card"])
-            line.grid(row=2 + i, column=0, sticky="w", padx=12, pady=1)
+            line.grid(row=3 + i, column=0, sticky="w", padx=12, pady=1)
             tk.Radiobutton(line, text=entry["title"], variable=self.default_db,
                            value=entry["id"], bg=COLORS["card"], fg=COLORS["text"],
                            activebackground=COLORS["card"], activeforeground=COLORS["text"],
@@ -7042,9 +7312,33 @@ class LabSettingsDialog(object):
                          bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small,
                          anchor="w").pack(side="left")
         tools = tk.Frame(card, bg=COLORS["card"])
-        tools.grid(row=2 + len(options), column=0, sticky="ew", padx=12, pady=(10, 12))
+        tools.grid(row=3 + len(options), column=0, sticky="ew", padx=12, pady=(10, 12))
         ttk.Button(tools, text="View settings.py block…",
                    command=self._view_block).pack(side="left")
+
+    def _refresh_default_db_summary(self):
+        """One-line summary of the currently-selected lab-shared default."""
+        var = getattr(self, "default_db_summary", None)
+        if var is None:
+            return
+        entry = core.resolve_default_database(self.app.store_extra)
+        if not entry:
+            var.set("Lab shared database")
+            return
+        host = entry.get("db_host", "")
+        name = entry.get("db_name", "")
+        where = (" — %s on %s" % (name, host)) if name else ""
+        var.set("Selected: %s%s" % (entry.get("title", "Lab shared database"), where))
+
+    def _edit_default_db(self):
+        """Edit the currently-selected default database (Feature 2). The lab-shared
+        built-in was locked before; core.edit_database now persists its change to
+        lab_info.json and re-resolves the live LAB_DB."""
+        entry = core.resolve_default_database(self.app.store_extra)
+        if not entry:
+            return
+        EditDatabaseDialog(self.top, self.fonts, self.app, entry,
+                           on_saved=self._after_db_edit)
 
     def _save_default_db(self):
         """Promote the chosen database to the lab-shared default (by reference) and
