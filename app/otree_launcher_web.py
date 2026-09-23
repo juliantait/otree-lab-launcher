@@ -241,6 +241,11 @@ class Api(object):
         # another store-mutating method on the same thread does not deadlock.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = core.load_store(self.store_path)
+        # Resolve WHICH database is the lab-shared default from the store's
+        # default_database reference, so core.LAB_DB (what every DB_MODE_LAB launch
+        # uses) points at the chosen database -- the setup-wizard DB by default, or
+        # a custom DB promoted in Lab Settings. Mirrors the Tk app exactly.
+        core.apply_default_database(self.store_extra)
         # This machine's lab identity (lab.local) configures the built-in
         # default's lab AND its room (from that lab's default_room). Applied in
         # memory to the built-in only; user configs are untouched. A no-op on
@@ -413,8 +418,11 @@ class Api(object):
             # picker, create dialog and Lab Settings match the Tk app exactly.
             "databases": core.known_databases_from_store(self.store_extra),
             "researchers": core.list_researchers(self.store_extra, self.presets),
-            "default_database": str(self.store_extra.get(
-                "default_database", core.DB_BUILTIN_LAB)),
+            # The lab-shared default is now a REFERENCE (an id) to one entry in the
+            # one database list; default_db_options is the set a user may pick from
+            # (the lab built-in + every custom DB; SQLite excluded).
+            "default_database": core.default_database_id(self.store_extra),
+            "default_db_options": core.default_database_options(self.store_extra),
         }
 
     @api_call
@@ -449,6 +457,13 @@ class Api(object):
 
     @api_call
     def pick_project_folder(self):
+        # Browser mode has no native file dialog (that is a pywebview-only
+        # power), so the Browse button falls back to the paste-the-path field.
+        # Never import/call pywebview on the browser path.
+        if getattr(self, "browser_mode", False):
+            return {"ok": False, "browser": True,
+                    "message": "Type or paste the project folder path in the box "
+                               "(native folder pickers need the desktop app)."}
         self._spawn(self._dialog_project, "dlg-project")
         return {"ok": True, "pending": True}
 
@@ -469,6 +484,12 @@ class Api(object):
 
     @api_call
     def pick_participant_file(self):
+        # Browser mode: no native dialog -> paste the path instead (see
+        # pick_project_folder). Never touch pywebview on the browser path.
+        if getattr(self, "browser_mode", False):
+            return {"ok": False, "browser": True,
+                    "message": "Type or paste the participant file path in the box "
+                               "(native file pickers need the desktop app)."}
         self._spawn(self._dialog_participant, "dlg-file")
         return {"ok": True, "pending": True}
 
@@ -710,15 +731,21 @@ class Api(object):
 
     @api_call
     def save_default_db(self, db_id):
-        """Persist which built-in database a brand-new config starts on (Lab
-        Settings > Default database). Mirrors the Tk ``_save_default_db``."""
+        """Promote a database to the lab-shared default BY REFERENCE (its id) and
+        re-resolve core.LAB_DB, so every DB_MODE_LAB launch now uses it (Lab
+        Settings > Lab shared (default) database). The chosen database may be the
+        setup-wizard lab DB or any custom DB created later -- the latter is the bug
+        this fixes. Mirrors the Tk ``_save_default_db``."""
         db_id = (db_id or "").strip() or core.DB_BUILTIN_LAB
         try:
             self._mutate_store(
-                lambda: self.store_extra.__setitem__("default_database", db_id))
+                lambda: core.set_default_database(self.store_extra, db_id))
+        except ValueError as error:
+            return {"ok": False, "message": str(error)}
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
-        return {"ok": True, "default_database": db_id}
+        return {"ok": True,
+                "default_database": core.default_database_id(self.store_extra)}
 
     @api_call
     def create_database(self, new_db, new_user="", new_password="", researcher=""):
@@ -864,6 +891,7 @@ class Api(object):
             data = core.build_lab_info(labs or [], database or {}, admin or {})
             core.save_lab_info(data)
             core.reload_lab_info()
+            core.apply_default_database(self.store_extra)
         except Exception as error:
             LOG.exception("create_lab_info failed")
             return {"ok": False,
@@ -883,6 +911,7 @@ class Api(object):
         try:
             core.save_lab_info(example)
             core.reload_lab_info()
+            core.apply_default_database(self.store_extra)
         except Exception as error:
             LOG.exception("use_example_lab_info failed")
             return {"ok": False, "message": "Could not save: %s" % error}
@@ -1094,6 +1123,13 @@ class Api(object):
         launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "otree_lab_launcher.py")
         shortcut = core.headless_shortcut(name, launcher_path)
+        # Browser mode: no native Save dialog -> hand the file back to the page,
+        # which downloads it through the browser. (A .command still needs a
+        # `chmod +x` afterwards, which the page notes; a Windows .bat does not.)
+        if getattr(self, "browser_mode", False):
+            return {"ok": True, "browser": True, "download": True,
+                    "filename": shortcut["filename"], "ext": shortcut["ext"],
+                    "content": shortcut["content"]}
         self._spawn(lambda: self._dialog_export(shortcut["content"], shortcut["filename"],
                                                 shortcut["ext"]), "dlg-export")
         return {"ok": True, "pending": True}
@@ -1656,27 +1692,275 @@ class Api(object):
 
 
 # ---------------------------------------------------------------------------
+# Browser mode: the SAME Api served from a tiny stdlib HTTP server and opened in
+# the default browser, so the web launcher runs on ANY Python (3.13 / 3.14
+# included) with ZERO third-party dependencies -- no pywebview, no pythonnet.
+#
+# The page talks to Python two ways, exactly mirroring the pywebview bridge:
+#   * REQUEST/RESPONSE:  POST /api/<method> with a JSON array of positional args
+#     dispatches to the SAME Api object the pywebview js_api uses and returns the
+#     method's JSON result. (The page's transport shim posts here when
+#     window.pywebview is absent.)
+#   * PUSH (worker -> page):  the Api's worker threads already deliver log lines,
+#     status and launch/handoff results by calling ``self.window.evaluate_js(...)``.
+#     In browser mode ``self.window`` is a BrowserBridge whose ``evaluate_js``
+#     queues the snippet; a Server-Sent-Events stream (GET /events) hands each
+#     snippet to the page, which evals it. So the entire existing launch /
+#     resetdb streaming machinery works UNCHANGED -- only the transport differs.
+#
+# Only the Python standard library is used here (http.server, socketserver via
+# ThreadingHTTPServer, threading, queue, json, webbrowser) plus otree_core.
+# ---------------------------------------------------------------------------
+
+WEB_DIR = os.path.join(HERE, "web")
+
+
+class BrowserBridge(object):
+    """Stand-in for a pywebview ``window`` on the browser path.
+
+    The Api's worker threads call ``self.window.evaluate_js(snippet)`` to push
+    log/status/handoff updates into the page. Here that snippet is fanned out to
+    every connected Server-Sent-Events subscriber (usually one: the open page),
+    which evaluates it -- the same effect pywebview's evaluate_js has, over HTTP.
+    """
+
+    def __init__(self):
+        import queue  # noqa: F401  (imported lazily; stdlib only)
+        self._queue_cls = queue.Queue
+        self._subscribers = []
+        self._lock = threading.Lock()
+
+    def subscribe(self):
+        q = self._queue_cls()
+        with self._lock:
+            self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q):
+        with self._lock:
+            if q in self._subscribers:
+                self._subscribers.remove(q)
+
+    def evaluate_js(self, snippet):
+        """Fan a JS snippet out to every connected page (worker threads only)."""
+        with self._lock:
+            subs = list(self._subscribers)
+        for q in subs:
+            q.put(snippet)
+
+    def destroy(self):
+        """The hand-off 'close the launcher' button. A browser tab cannot be
+        force-closed by script the way a native window can, so we ask the page to
+        try window.close() and otherwise the operator just closes the tab; the
+        server keeps running until its console window is closed."""
+        self.evaluate_js("window.close && window.close()")
+
+
+def _make_browser_handler(api, bridge):
+    """Build the request handler class bound to this Api + bridge."""
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        # Quiet the default one-line-per-request stderr spam; route to our log.
+        def log_message(self, fmt, *args):
+            LOG.debug("http: " + fmt, *args)
+
+        def _send_json(self, obj, code=200):
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, OSError):
+                pass
+
+        def _send_file(self, path):
+            try:
+                with open(path, "rb") as fh:
+                    body = fh.read()
+            except OSError:
+                self.send_error(404, "Not found")
+                return
+            ctype = "text/html; charset=utf-8" if path.endswith(".html") \
+                else "text/plain; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, OSError):
+                pass
+
+        def _serve_static(self):
+            # "/" -> index.html; otherwise a file under web/, path-traversal safe.
+            rel = self.path.split("?", 1)[0].lstrip("/")
+            if rel in ("", "index.html"):
+                self._send_file(INDEX_HTML)
+                return
+            target = os.path.normpath(os.path.join(WEB_DIR, rel))
+            if not target.startswith(os.path.abspath(WEB_DIR) + os.sep):
+                self.send_error(403, "Forbidden")
+                return
+            if os.path.isfile(target):
+                self._send_file(target)
+            else:
+                self.send_error(404, "Not found")
+
+        def _serve_events(self):
+            # A long-lived Server-Sent-Events stream: each queued JS snippet is
+            # delivered as one `data:` event for the page to eval. json.dumps in
+            # the Api escapes newlines, so every snippet is a single SSE line.
+            import queue as _queue
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            q = bridge.subscribe()
+            try:
+                self.wfile.write(b": connected\n\n")
+                self.wfile.flush()
+                while True:
+                    try:
+                        snippet = q.get(timeout=15)
+                    except _queue.Empty:
+                        self.wfile.write(b": ping\n\n")  # heartbeat
+                        self.wfile.flush()
+                        continue
+                    self.wfile.write(("data: %s\n\n" % snippet).encode("utf-8"))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                bridge.unsubscribe(q)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/events":
+                self._serve_events()
+            else:
+                self._serve_static()
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if not path.startswith("/api/"):
+                self.send_error(404, "Not found")
+                return
+            method = path[len("/api/"):]
+            # Only public, callable Api methods are reachable -- never a private
+            # helper or a data attribute.
+            fn = getattr(api, method, None)
+            if method.startswith("_") or not callable(fn):
+                self._send_json({"ok": False, "error": True,
+                                 "message": "Unknown method %r." % method}, code=404)
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length > 0 else b""
+            try:
+                args = json.loads(raw.decode("utf-8")) if raw else []
+            except ValueError:
+                args = []
+            if not isinstance(args, list):
+                args = [args]
+            try:
+                result = fn(*args)
+            except Exception:
+                LOG.exception("api dispatch %s failed", method)
+                result = dict(_SAFE_ERROR)
+            self._send_json(result)
+
+    return Handler
+
+
+def run_browser(host="127.0.0.1", port=0, open_browser=True):
+    """Serve the web UI over a local HTTP server and open it in the browser.
+
+    Binds to 127.0.0.1 only (never a public interface). ``port=0`` picks a free
+    port. Returns 0 when the server stops. Uses only the standard library.
+    """
+    from http.server import ThreadingHTTPServer
+
+    if not os.path.isfile(INDEX_HTML):
+        LOG.error("UI not found at %s", INDEX_HTML)
+        sys.stderr.write("Cannot find the UI at %s\n" % INDEX_HTML)
+        return 2
+
+    api = Api()
+    bridge = BrowserBridge()
+    api.window = bridge          # worker-thread pushes go through the SSE bridge
+    api.browser_mode = True      # dialog methods fall back to paste-the-path
+
+    class _Server(ThreadingHTTPServer):
+        daemon_threads = True    # SSE threads never block shutdown
+        allow_reuse_address = True
+
+    httpd = _Server((host, port), _make_browser_handler(api, bridge))
+    actual_port = httpd.server_address[1]
+    url = "http://%s:%d/" % (host, actual_port)
+    LOG.info("browser mode serving at %s", url)
+    sys.stderr.write("\noTree Lab Launcher (browser mode) is serving at:\n  %s\n" % url)
+    sys.stderr.write("Your browser should open automatically. Leave THIS window "
+                     "open while you work; closing it stops the server.\n\n")
+    if open_browser:
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception:
+            LOG.exception("webbrowser.open failed (open %s manually)", url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        LOG.info("browser mode: interrupted, shutting down")
+    finally:
+        httpd.server_close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # --browser  : force the stdlib HTTP + default-browser mode (no pywebview).
+    # --port N   : bind the browser-mode server to a fixed port (0 = free port).
+    # --no-open  : do not auto-open the browser (used by the headless self-test).
+    browser_mode = "--browser" in argv
+    no_open = "--no-open" in argv
+    port = 0
+    if "--port" in argv:
+        try:
+            port = int(argv[argv.index("--port") + 1])
+        except (ValueError, IndexError):
+            port = 0
+
     LOG.info("=" * 60)
-    LOG.info("startup: otree_launcher_web on %s, python %s",
-             sys.platform, sys.version.split()[0])
+    LOG.info("startup: otree_launcher_web on %s, python %s (browser_mode=%s)",
+             sys.platform, sys.version.split()[0], browser_mode)
     LOG.info("log file: %s", LOG_PATH)
     core.reload_lab_info()
-    try:
-        import webview
-    except ImportError:
-        LOG.error("pywebview not installed")
-        sys.stderr.write(
-            "pywebview is not installed. Run:  pip install pywebview\n"
-            "(On Windows it also needs the Edge WebView2 runtime, which ships "
-            "with Windows 10/11.)\n"
-        )
-        return 2
 
+    if not browser_mode:
+        try:
+            import webview
+        except ImportError:
+            # No pywebview (e.g. Python 3.13/3.14 on Windows, where pythonnet has
+            # no wheel) -> fall back to browser mode automatically instead of
+            # failing. Browser mode needs NOTHING beyond the standard library.
+            LOG.warning("pywebview not importable; falling back to browser mode")
+            sys.stderr.write(
+                "pywebview is not available, so starting in BROWSER mode "
+                "(no pywebview / pythonnet needed).\n")
+            browser_mode = True
+
+    if browser_mode:
+        return run_browser(port=port, open_browser=not no_open)
+
+    import webview  # already importable (checked above)
     LOG.info("pywebview %s", getattr(webview, "__version__", "?"))
 
     if not os.path.isfile(INDEX_HTML):

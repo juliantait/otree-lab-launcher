@@ -760,7 +760,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <div class="pathrow">
             <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
               placeholder="Click Browse to choose your oTree project folder">
-            <button class="btn" onclick="onBrowseProject()">Browse...</button>
+            <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
           </div>
 
           <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
@@ -898,7 +898,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
               <p class="note">Read from a file in your project; the file is never changed.</p>
               <div class="frow">
                 <div class="pathbox empty" id="seatFilePath" style="flex:1">No file chosen yet</div>
-                <button class="btn tiny" onclick="onBrowseFile()">Browse...</button>
+                <button class="btn tiny" id="browseFileBtn" onclick="onBrowseFile()">Browse...</button>
               </div>
             </div>
 
@@ -986,7 +986,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
    runs as a static preview with example data (lab_info.example + maps/).
    ====================================================================== */
 
-var NATIVE=false, API=null, booted=false;
+var NATIVE=false, API=null, booted=false, BROWSER=false;
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
 var lastSettings=null, defaultAuthor="", pendingDelete=null;
 /* The "get ready for the lab" popup fires at most once per project selection;
@@ -1003,6 +1003,10 @@ var mapExpanded=true, prevDbMode="lab";
    ids match otree_core (DB_BUILTIN_SQLITE / DB_BUILTIN_LAB). */
 var DB_SQLITE_ID="otree_default", DB_LAB_ID="lab_shared";
 var DATABASES=[], RESEARCHERS=[], defaultDatabase=DB_LAB_ID;
+/* The databases a user may pick as the lab-shared default: the lab built-in +
+   every custom DB (SQLite excluded). Sent by the backend as default_db_options;
+   the static preview builds an equivalent list from PREVIEW_DATABASES. */
+var DEFAULT_DB_OPTIONS=[];
 
 /* ---------- static preview data (example labs/maps, no real hosts) ---------- */
 var PREVIEW_LABS=[
@@ -1291,8 +1295,10 @@ function applyDbMode(mode){
     fields.forEach(function(f){var e=el(f);e.readOnly=false;e.disabled=false;});
     section.hidden=false;refreshUrl();
   }else{
-    /* lab or none: nothing to type. Lab credentials are forced by the backend
-       at launch (normalize_config); none = the oTree default (SQLite). */
+    /* lab or none: nothing to type or show. The lab-shared default is chosen by
+       reference in Lab Settings and just appears as the one-line label "Lab
+       shared database (Postgres)"; its credentials are forced by the backend at
+       launch (normalize_config). none = the oTree default (SQLite). */
     section.hidden=true;
   }
 }
@@ -1486,8 +1492,12 @@ function applySettings(s){
 /* ======================================================================
    BUTTON HANDLERS: project / file / path
    ====================================================================== */
-function onBrowseProject(){if(NATIVE&&API)API.pick_project_folder();}
-function onBrowseFile(){if(NATIVE&&API)API.pick_participant_file();}
+function onBrowseProject(){
+  if(BROWSER){window.pywStatus("","Type or paste the project folder path in the box above (native folder pickers need the desktop app).");return;}
+  if(NATIVE&&API)API.pick_project_folder();}
+function onBrowseFile(){
+  if(BROWSER){window.pywStatus("","Type or paste the participant file path in the box (native file pickers need the desktop app).");return;}
+  if(NATIVE&&API)API.pick_participant_file();}
 function validateProjectPath(){
   var p=(val("projPathInput")||"").trim();if(!p)return;
   if(!NATIVE||!API){window.pywStatus("","Typing a path works in the app, not the static preview.");return;}
@@ -1795,7 +1805,25 @@ function lsCustomDbRows(){
     return '<div style="padding:3px 0">'+escapeHtml(e.title)+grey+'</div>';
   }).join("");
 }
+/* The lab-shared-default picker rows: one radio per selectable database (the lab
+   built-in + every custom DB), the current default checked. Mirror of the Tk
+   _build_default_db_card radio list. */
+function lsDefaultDbRows(){
+  var opts=DEFAULT_DB_OPTIONS.length?DEFAULT_DB_OPTIONS:
+    [{id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:""}];
+  return opts.map(function(e){
+    var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
+    return '<label class="chk" style="display:flex;align-items:center;margin:4px 0">'+
+      '<input type="radio" name="lsDefaultDb" value="'+escapeHtml(e.id)+'"'+
+      (defaultDatabase===e.id?" checked":"")+' onchange="saveDefaultDb(\''+escapeHtml(e.id)+'\')" '+
+      'style="width:15px;height:15px;accent-color:var(--accent);margin-right:8px"> '+
+      escapeHtml(e.title)+grey+'</label>';
+  }).join("");
+}
 function saveDefaultDb(id){
+  /* Promote a database to the lab-shared default BY REFERENCE. The lab-shared
+     database shows on the config only as the one-line label "Lab shared database
+     (Postgres)", so there are no on-screen fields to repaint here. */
   defaultDatabase=id;
   if(NATIVE&&API&&API.save_default_db)API.save_default_db(id);
 }
@@ -1829,13 +1857,13 @@ function openLabSettings(){
       '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. You can add databases here; editing and removing come later.</p>'+
       '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
       '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
-    /* Database section, part 3: which built-in database a brand-new config
-       starts on, plus the "View settings.py block…" tool. Mirror of the Tk
-       _build_default_db_card. */
-    '<div class="ls-card"><h4>Default database</h4>'+
-      '<p class="d">Which built-in database a brand-new config starts on.</p>'+
-      '<label class="chk" style="display:flex;margin:4px 0"><input type="radio" name="lsDefaultDb" value="'+DB_SQLITE_ID+'"'+(defaultDatabase===DB_SQLITE_ID?" checked":"")+' onchange="saveDefaultDb(\''+DB_SQLITE_ID+'\')" style="width:15px;height:15px;accent-color:var(--accent);margin-right:8px"> oTree default (SQLite)</label>'+
-      '<label class="chk" style="display:flex;margin:4px 0"><input type="radio" name="lsDefaultDb" value="'+DB_LAB_ID+'"'+(defaultDatabase===DB_LAB_ID?" checked":"")+' onchange="saveDefaultDb(\''+DB_LAB_ID+'\')" style="width:15px;height:15px;accent-color:var(--accent);margin-right:8px"> Lab shared database (Postgres)</label>'+
+    /* Database section, part 3: WHICH database is the lab-shared default. It is
+       a REFERENCE to one entry in the one database list above -- the setup-wizard
+       DB, or any custom DB made later -- chosen by selecting it, not by re-typing
+       credentials. Mirror of the Tk _build_default_db_card. */
+    '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
+      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time.</p>'+
+      lsDefaultDbRows()+
       '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
     '<div class="ls-card"><h4>Lab presets</h4>'+
       '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Small lab and Large lab are seeded from the lab constants.</p>'+
@@ -2132,6 +2160,7 @@ function renderBlIssues(issues){
    the main Browse. The pick arrives via pywOnProjectPicked, which re-checks this
    screen when it is the one showing. */
 function blChooseFolder(){
+  if(BROWSER){window.pywStatus&&window.pywStatus("","Type or paste the project folder path in the Project box, then re-check.");return;}
   if(!NATIVE||!API){window.pywStatus&&window.pywStatus("","Choose folder works in the app, not the static preview.");return;}
   API.pick_project_folder();
 }
@@ -2335,7 +2364,20 @@ function onExport(){
      so it needs a saved, unmodified config. Python is the source of truth and
      refuses otherwise with needs_save; surface that message as a hint. */
   API.save_shortcut(currentConfigName||"",gatherFields()).then(function(r){
-    if(r&&r.needs_save)window.pywStatus("warn",r.message||"Save these settings as a named config first, then create the one-click shortcut.");
+    if(r&&r.needs_save){window.pywStatus("warn",r.message||"Save these settings as a named config first, then create the one-click shortcut.");return;}
+    /* Browser mode has no native Save dialog: Python hands the file back and the
+       browser downloads it. (A .command still needs `chmod +x`; a .bat does not.) */
+    if(r&&r.download){
+      try{
+        var blob=new Blob([r.content||""],{type:"application/octet-stream"});
+        var a=document.createElement("a");a.href=URL.createObjectURL(blob);
+        a.download=r.filename||("otree-shortcut"+(r.ext||".bat"));
+        document.body.appendChild(a);a.click();
+        setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},0);
+        var note=(r.ext===".command")?" On macOS run: chmod +x on the downloaded file to make it double-clickable.":"";
+        window.pywStatus("ok","Downloaded the one-click shortcut "+(r.filename||"")+". The database password is not stored in the file."+note);
+      }catch(e){window.pywStatus("err","Could not download the shortcut: "+String(e&&e.message||e));}
+    }
   });
 }
 
@@ -2621,6 +2663,7 @@ function initNative(state){
   if(state.pg_admin)PG_ADMIN=state.pg_admin;
   DATABASES=state.databases||[];RESEARCHERS=state.researchers||[];
   if(state.default_database)defaultDatabase=state.default_database;
+  DEFAULT_DB_OPTIONS=state.default_db_options||[];
   if(!haveLab){el("labBody").hidden=true;openSetupWizard(state.maps||[]);}
   else{el("labBody").hidden=false;el("labNotice").hidden=true;}
   renderConfigList(state.configs,state.selected);currentConfigName=state.selected;
@@ -2641,6 +2684,7 @@ function bootPreview(){
   LAB_PRESETS=PREVIEW_LABS.map(function(l){return {id:l.id,name:l.name,ip:l.host,seats:l.seats,display:true};});
   PG_ADMIN={admin_username:"postgres",admin_password:"postgres",admin_host:"localhost",admin_port:"5432"};
   DATABASES=PREVIEW_DATABASES.slice();RESEARCHERS=PREVIEW_RESEARCHERS.slice();defaultDatabase=DB_LAB_ID;
+  DEFAULT_DB_OPTIONS=[{id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:"",builtin:true,db_mode:"lab"}].concat(PREVIEW_DATABASES);
   labMarker="large";
   renderConfigList(PREVIEW_CONFIGS,"Dictator study");
   currentConfigName="Dictator study";
@@ -2650,10 +2694,59 @@ function bootPreview(){
   applyProject(PREVIEW_PROJECT);setPath(PREVIEW_PATH);
   applySettings({readable:true,has_block:true,uses_lab_room:true});
 }
+/* ======================================================================
+   TRANSPORT SHIM: pywebview window vs local HTTP server (browser mode)
+   ----------------------------------------------------------------------
+   The SAME UI runs three ways and only the CALL TRANSPORT changes:
+     * pywebview native window  -> window.pywebview.api.<m>(...)   (bootNative)
+     * browser mode (served by  -> POST /api/<m> with a JSON arg array, and a
+       otree_launcher_web.py)       Server-Sent-Events stream (/events) carries
+                                    the worker-thread pushes the page evals
+                                    (bootBrowser)
+     * static file preview      -> canned data, no backend            (bootPreview)
+   The Proxy below turns any API.<method>(args...) call into the matching POST,
+   so no method list is hardcoded and the JS logic is untouched. ==================*/
+function makeHttpApi(){
+  return new Proxy({},{get:function(_t,name){
+    if(typeof name!=="string"||name==="then")return undefined; /* not a thenable */
+    return function(){
+      var args=Array.prototype.slice.call(arguments);
+      return fetch("/api/"+name,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(args)}).then(function(r){return r.json();});
+    };
+  }});
+}
+/* The push channel: each snippet the Python worker threads used to deliver via
+   pywebview evaluate_js arrives here as one SSE event and is evaluated in the
+   global scope (it only ever calls the window.pyw* callbacks defined above).
+   The server is bound to 127.0.0.1 and we author the snippets, so this is the
+   same trust model as pywebview's evaluate_js. */
+function startEventStream(){
+  try{
+    var es=new EventSource("/events");
+    es.onmessage=function(e){try{(0,eval)(e.data);}catch(err){}};
+  }catch(e){}
+}
+function hideBrowseButtons(){
+  /* Browser mode has no native file dialog -> paste-the-path is the only way,
+     so the Browse buttons are hidden and the placeholders say so. */
+  var b1=el("browseProjBtn");if(b1)b1.hidden=true;
+  var b2=el("browseFileBtn");if(b2)b2.hidden=true;
+  var pin=el("projPathInput");
+  if(pin)pin.placeholder="Type or paste the full path to your oTree project folder";
+}
+function bootBrowser(){
+  if(booted)return;booted=true;NATIVE=true;BROWSER=true;
+  API=makeHttpApi();startEventStream();clearPreviewContent();
+  API.get_initial_state().then(function(state){initNative(state);hideBrowseButtons();});
+}
 window.addEventListener("pywebviewready",bootNative);
 setTimeout(function(){
   if(booted)return;
   if(window.pywebview&&window.pywebview.api)bootNative();
+  /* Served over http(s) by the browser-mode server (never file://): use fetch. */
+  else if(!window.pywebview&&(location.protocol==="http:"||location.protocol==="https:"))bootBrowser();
   else if(!window.pywebview)bootPreview();
 },700);
 </script>

@@ -1620,6 +1620,12 @@ class LauncherApp(object):
         # on the same thread does not deadlock. See _mutate_store / _persist.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = load_store(self.store_path)
+        # Resolve WHICH database is the lab-shared default from the store's
+        # default_database reference, so core.LAB_DB (what every DB_MODE_LAB launch
+        # uses) points at the chosen database -- the setup-wizard DB by default, or
+        # a custom DB promoted in Lab Settings. Then re-pull the derived defaults.
+        core.apply_default_database(self.store_extra)
+        refresh_defaults_from_core()
         # Lab presets (Feature 4): the lab selector reads these instead of the
         # hardcoded tiles. Seeded from the constants for a fresh store, so the
         # two built-in labs are always present and old configs still resolve.
@@ -3210,8 +3216,11 @@ class LauncherApp(object):
         if mode != DB_MODE_CUSTOM:
             self.set_password_visible("db", False)
         # The connection fields (host/user/password/name/port + DATABASE_URL
-        # preview) appear, editable, ONLY for a custom database; lab and oTree-
-        # default need nothing typed, so the card stays a single line for them.
+        # preview) appear, editable, ONLY for a custom database. The lab-shared
+        # default is chosen by reference in Lab Settings and just appears here as
+        # the one-line label "Lab shared database (Postgres)" (no fields), and the
+        # oTree default (SQLite) needs nothing typed either, so the card stays a
+        # single line for both.
         if mode == DB_MODE_CUSTOM:
             self.db_section.grid()
         else:
@@ -3539,12 +3548,11 @@ class LauncherApp(object):
             ref_lab = ""
         ref_lab = ref_lab or read_lab_marker() or blank.get("lab", "")
         blank["room_name"] = core.lab_default_room(self.lab_presets, ref_lab)
-        # Start a new blank config on the lab's chosen default database (set in
-        # Lab Settings > Default database); falls back to the code default.
-        default_db = str(self.store_extra.get("default_database", "")).strip()
-        entry = core.find_database(self.store_extra, default_db) if default_db else None
-        if entry is not None:
-            blank.update(core.database_config_fields(entry))
+        # A new blank config starts on the lab-shared database (db_mode LAB), which
+        # resolves to whichever database is the current default (set in Lab
+        # Settings > Lab shared (default) database). DEFAULT_CONFIG already carries
+        # db_mode LAB with the resolved lab credentials, so no per-database seeding
+        # is needed here -- switching the default transparently redirects it.
         self.load_fields(blank, None)
         self.inline_status.set("muted", "")
         self.log("New blank config. Choose a project folder, then Save as new.", "info")
@@ -3874,9 +3882,14 @@ class LauncherApp(object):
             return
         name = self.presets[self.selected_index].get("name", "config")
         shortcut = core.headless_shortcut(name, os.path.abspath(__file__))
+        # Default suggested filename: the config name with a "_launcher" suffix
+        # (e.g. MyStudy -> MyStudy_launcher.vbs). Only the SUGGESTION changes -- the
+        # user can still rename it, and the shortcut's contents/behaviour are
+        # untouched (they come from core.headless_shortcut above).
+        suggested = os.path.splitext(shortcut["filename"])[0] + "_launcher" + shortcut["ext"]
         target = filedialog.asksaveasfilename(
             parent=self.root, title="Save one-click shortcut",
-            defaultextension=shortcut["ext"], initialfile=shortcut["filename"],
+            defaultextension=shortcut["ext"], initialfile=suggested,
             filetypes=[("One-click shortcut", "*" + shortcut["ext"]), ("All files", "*.*")])
         if not target:
             return
@@ -5021,8 +5034,18 @@ class NameDialog(object):
 
 def _center_on(parent, top, divisor=3):
     top.update_idletasks()
-    x = parent.winfo_rootx() + (parent.winfo_width() - top.winfo_width()) // 2
-    y = parent.winfo_rooty() + (parent.winfo_height() - top.winfo_height()) // divisor
+    # A withdrawn (not-yet-mapped) window reports winfo_width/height as 1, so fall
+    # back to the requested size. This lets a dialog be centered WHILE still
+    # withdrawn and only then deiconified, so it never flashes at the default
+    # position before jumping to centre.
+    w = top.winfo_width()
+    if w <= 1:
+        w = top.winfo_reqwidth()
+    h = top.winfo_height()
+    if h <= 1:
+        h = top.winfo_reqheight()
+    x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - h) // divisor
     top.geometry("+%d+%d" % (max(x, 0), max(y, 0)))
 
 
@@ -5369,6 +5392,15 @@ class LaunchBriefingDialog(object):
         self._link_reveal = None
         self._reveal_after = None
         top = self.top = tk.Toplevel(parent)
+        # Build the whole dialog WHILE WITHDRAWN so the user never sees an empty
+        # grey placeholder. A Toplevel is mapped as soon as it is created, so
+        # without this the window appears blank at the default position (briefly
+        # showing just its "Before you launch" title), then the content renders and
+        # _center_on jumps it to centre -- which reads as a dead grey window that
+        # closes and reopens. Withdrawn now, deiconified once below only after the
+        # body is built, centred and the grab is ready (same fix class as the
+        # FirstRunWizard hang). Windows/Linux/macOS all benefit; harmless everywhere.
+        top.withdraw()
         top.title("Before you launch")
         top.configure(bg=COLORS["card"])
         _attach_shade(parent, top)
@@ -5433,9 +5465,50 @@ class LaunchBriefingDialog(object):
         self._render_action()
 
         top.bind("<Escape>", lambda _e: self._close())
+        # Centre while still withdrawn (see the withdraw note above), then show the
+        # fully-rendered window exactly once: deiconify, raise and focus, and only
+        # then take the modal grab.
         _center_on(parent, top)
         try:
+            top.deiconify()
+            top.update_idletasks()
+            top.lift()
+            top.focus_force()
+        except tk.TclError:
+            pass
+        try:
             _grab_modal(top)
+        except tk.TclError:
+            pass
+        # Windowless (pythonw / the .vbs shortcut) foreground activation. A
+        # no-console process often CANNOT steal the Windows foreground, so the
+        # modal draws but stays inactive -- greyed and unclickable -- until the
+        # user gives input elsewhere (e.g. physically moves the parent window),
+        # which is exactly the reported symptom. A brief ``-topmost`` flash pulls
+        # the window to the front and activates it, and a second focus_force a
+        # beat later re-asserts it, WITHOUT leaving a permanently always-on-top
+        # window. All guarded and no-ops on macOS/Linux and under a real console,
+        # so the terminal (.bat) path is unchanged.
+        def _drop_topmost(top=top):
+            try:
+                if top.winfo_exists():
+                    top.attributes("-topmost", False)
+            except tk.TclError:
+                pass
+
+        def _reassert_front(top=top):
+            try:
+                if not top.winfo_exists():
+                    return
+                top.lift()
+                top.focus_force()
+            except tk.TclError:
+                pass
+
+        try:
+            top.attributes("-topmost", True)
+            top.after(250, _drop_topmost)
+            top.after(50, _reassert_front)
         except tk.TclError:
             pass
 
@@ -6957,40 +7030,65 @@ class LabSettingsDialog(object):
             pass
 
     def _build_default_db_card(self, outer, row):
-        """Part 3 of the Database section: which built-in database is the default
-        (oTree default SQLite / lab shared Postgres), plus the "View settings.py
-        block" tool that used to sit behind the gear."""
+        """Part 3 of the Database section: WHICH database is the lab-shared default.
+
+        The lab-shared default is now just a REFERENCE to one entry in the one
+        database list -- the setup-wizard database, or any custom database made
+        later. This lists every Postgres database (core.default_database_options)
+        and lets staff pick which one is the default by SELECTING it, not by
+        re-typing credentials; the pick is stored as that database's id and every
+        DB_MODE_LAB launch follows it. Also holds the "View settings.py block"
+        tool that used to sit behind the gear."""
         card = tk.Frame(outer, bg=COLORS["card"], highlightthickness=1,
                         highlightbackground=COLORS["card_line"])
         card.grid(row=row, column=0, sticky="ew", pady=(12, 0))
         card.columnconfigure(0, weight=1)
-        tk.Label(card, text="Default database", bg=COLORS["card"], fg=COLORS["text"],
-                 font=self.fonts.bold, anchor="w").grid(row=0, column=0, sticky="ew",
-                                                        padx=12, pady=(10, 2))
-        tk.Label(card, text="Which built-in database a brand-new config starts on.",
+        tk.Label(card, text="Lab shared (default) database", bg=COLORS["card"],
+                 fg=COLORS["text"], font=self.fonts.bold, anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+        tk.Label(card, text=("Which database is the lab shared one. A config on "
+                             "“Lab shared database (Postgres)” uses whichever "
+                             "you pick here. Add databases above, then switch the "
+                             "default at any time."),
                  bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small, anchor="w",
                  justify="left", wraplength=560).grid(row=1, column=0, sticky="ew",
                                                       padx=12, pady=(0, 6))
-        current = str(self.app.store_extra.get("default_database", core.DB_BUILTIN_LAB))
+        current = core.default_database_id(self.app.store_extra)
         self.default_db = tk.StringVar(self.top, value=current)
-        for i, (db_id, label) in enumerate((
-                (core.DB_BUILTIN_SQLITE, core.DB_BUILTIN_SQLITE_TITLE),
-                (core.DB_BUILTIN_LAB, core.DB_BUILTIN_LAB_TITLE))):
-            tk.Radiobutton(card, text=label, variable=self.default_db, value=db_id,
-                           bg=COLORS["card"], fg=COLORS["text"],
+        options = core.default_database_options(self.app.store_extra)
+        for i, entry in enumerate(options):
+            line = tk.Frame(card, bg=COLORS["card"])
+            line.grid(row=2 + i, column=0, sticky="w", padx=12, pady=1)
+            tk.Radiobutton(line, text=entry["title"], variable=self.default_db,
+                           value=entry["id"], bg=COLORS["card"], fg=COLORS["text"],
                            activebackground=COLORS["card"], activeforeground=COLORS["text"],
                            font=self.fonts.body, anchor="w", highlightthickness=0,
-                           command=self._save_default_db).grid(
-                row=2 + i, column=0, sticky="w", padx=12, pady=1)
+                           command=self._save_default_db).pack(side="left")
+            if entry.get("researcher"):
+                tk.Label(line, text="   created by %s" % entry["researcher"],
+                         bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small,
+                         anchor="w").pack(side="left")
         tools = tk.Frame(card, bg=COLORS["card"])
-        tools.grid(row=4, column=0, sticky="ew", padx=12, pady=(10, 12))
+        tools.grid(row=2 + len(options), column=0, sticky="ew", padx=12, pady=(10, 12))
         ttk.Button(tools, text="View settings.py block…",
                    command=self._view_block).pack(side="left")
 
     def _save_default_db(self):
+        """Promote the chosen database to the lab-shared default (by reference) and
+        re-resolve core.LAB_DB, so every DB_MODE_LAB launch now uses it. The
+        lab-shared database shows on the config only as the one-line label, so
+        there are no on-screen fields to repaint -- just refresh the preview."""
         with self.app._store_lock:
-            self.app.store_extra["default_database"] = self.default_db.get()
+            try:
+                core.set_default_database(self.app.store_extra, self.default_db.get())
+            except ValueError:
+                return
             self.app._persist_store()
+        refresh_defaults_from_core()
+        try:
+            self.app.refresh_previews()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _view_block(self):
         self.app.show_block()

@@ -47,6 +47,13 @@ import webbrowser
 #                                      -> append a custom DB + record researcher
 #     normalize_database_entry(raw)    -> one normalized custom entry
 #
+#   The lab-shared DEFAULT database (a REFERENCE into the one list above):
+#     default_database_id(extra)       -> the chosen default's id (lab built-in fallback)
+#     resolve_default_database(extra)  -> the chosen default entry
+#     default_database_options(extra)  -> the databases a user may pick as default
+#     set_default_database(extra, id)  -> promote a database to the lab-shared default
+#     apply_default_database(extra)    -> re-point the live LAB_DB at that default
+#
 #   Researchers (roster):
 #     list_researchers(extra, presets=None) -> the deduped shared roster
 #     researchers_from_store(extra)    -> only the explicitly-saved names
@@ -444,6 +451,28 @@ def lab_db_from_info(info):
     return out
 
 
+def wizard_lab_db():
+    """The IMMUTABLE lab-shared credentials from the setup wizard (lab_info.json).
+
+    This is the original wizard-time database. It is the fallback for the
+    lab-shared default when no other database has been promoted, and it stays
+    fixed regardless of which database is currently chosen as the default (unlike
+    :data:`LAB_DB`, which reflects the *current* default). Keeping the two apart
+    is what lets the default-database picker offer the wizard DB as a stable
+    choice even after a custom database has been made the default.
+    """
+    return lab_db_from_info(LAB_INFO)
+
+
+# LAB_DB holds the RESOLVED lab-shared database credentials: what DB_MODE_LAB
+# ("Lab shared database (Postgres)") resolves to right now. On a fresh import it
+# is the setup-wizard DB from lab_info.json; once a store is loaded both UIs call
+# apply_default_database(extra), which re-points LAB_DB at whichever database the
+# store's default_database reference names (the wizard DB, or any custom DB
+# promoted to default via Lab Settings). Everything downstream -- normalize_config,
+# build_database_url, build_env, the built-in lab picker entry, database_config_fields
+# -- reads this live module attribute, so promoting a custom database to default
+# transparently redirects every DB_MODE_LAB launch to it.
 LAB_DB = lab_db_from_info(LAB_INFO)
 
 _admin_info = (LAB_INFO or {}).get("admin") or {}
@@ -564,6 +593,20 @@ OTREE_ENV_KEYS = (
 SECRET_ENV_KEYS = ("DB_PASSWORD", "OTREE_ADMIN_PASSWORD", "DATABASE_URL")
 
 CREATE_NEW_CONSOLE = 0x00000010
+# CREATE_NO_WINDOW: run a helper subprocess with NO console window at all. Under
+# the windowless launcher (pythonw.exe / the .vbs shortcut) a child started
+# without this pops a brief console that steals the Windows foreground -- which
+# can leave a just-opened modal inactive/greyed -- and, worse, a child that
+# INHERITS pythonw's (invalid) std handles can block. Every short prep helper
+# below is launched with this flag on Windows and with its std streams
+# explicitly redirected, so it neither flashes a window nor inherits a bad
+# handle. 0 elsewhere (POSIX ignores it).
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _no_window_flags():
+    """CREATE_NO_WINDOW on Windows, 0 elsewhere (for helper subprocesses)."""
+    return CREATE_NO_WINDOW if sys.platform.startswith("win") else 0
 
 
 # ---------------------------------------------------------------------------
@@ -2746,6 +2789,12 @@ def pg_admin_ready(admin):
 DB_BUILTIN_SQLITE = "otree_default"
 DB_BUILTIN_LAB = "lab_shared"
 
+# The store `extra` key that holds WHICH database is the lab-shared default, as a
+# REFERENCE (a database id), not a copy of its credentials. See the "default
+# database" section further down (default_database_id / set_default_database /
+# apply_default_database). Absent -> the lab built-in (the setup-wizard DB).
+DEFAULT_DATABASE_KEY = "default_database"
+
 DB_BUILTIN_SQLITE_TITLE = "oTree default (SQLite)"
 DB_BUILTIN_LAB_TITLE = "Lab shared database (Postgres)"
 
@@ -2900,6 +2949,120 @@ def register_database(extra, title, researcher, connection=None,
     extra["databases"] = stored
     if entry["researcher"]:
         add_researcher(extra, entry["researcher"])
+    return entry
+
+
+# -- The lab-shared DEFAULT database (a reference into the one list) ---------
+#
+# The "default" (lab shared) database is NOT a special, wizard-time database any
+# more: it is simply WHICH entry of the one database list is currently chosen as
+# the lab-shared one. The choice is stored as a REFERENCE -- the entry's id, in
+# ``extra["default_database"]`` (DEFAULT_DATABASE_KEY) -- next to lab_presets /
+# databases / researchers, so it persists in presets.json exactly like the rest
+# of the registry. Storing an id (not a credentials copy) is what makes "switch
+# which database is the default" a one-line change and keeps a single source of
+# truth for each database's connection details.
+#
+# Backward compatibility: an old store / the baked lab_info.json carries no
+# explicit reference, so default_database_id() falls back to the lab built-in
+# (DB_BUILTIN_LAB), whose credentials ARE the lab_info.json database block. So
+# DB_MODE_LAB keeps resolving to the same wizard credentials as before with no
+# migration, and the baked lab_info.json database is, in effect, the seeded
+# default. A custom database created AFTER the wizard can be promoted to default
+# by pointing the reference at its id -- the bug this refactor fixes.
+
+
+def default_database_id(extra):
+    """The id of the database chosen as the lab-shared default.
+
+    Falls back to the lab built-in (:data:`DB_BUILTIN_LAB`) when the store has no
+    explicit reference, so an old store and the baked lab_info.json keep
+    resolving the lab-shared database to the setup-wizard credentials.
+    """
+    value = str((extra or {}).get(DEFAULT_DATABASE_KEY, "")).strip()
+    return value or DB_BUILTIN_LAB
+
+
+def resolve_default_database(extra):
+    """The database entry currently chosen as the lab-shared default.
+
+    Returns the entry the stored reference names (a custom DB, or the lab
+    built-in), falling back to the lab built-in when the reference is unset or no
+    longer resolves (e.g. it named a custom database that was later removed).
+    """
+    entry = find_database(extra, default_database_id(extra))
+    if entry is None:
+        entry = find_database(extra, DB_BUILTIN_LAB)
+    return entry
+
+
+def lab_shared_db_fields(extra):
+    """The connection dict the lab-shared default resolves to right now.
+
+    For the lab built-in (or an unset/unresolved reference, or -- defensively --
+    an old store that pointed the default at SQLite) this is the immutable
+    setup-wizard credentials from lab_info.json; for a custom database promoted
+    to default it is that database's stored connection fields. The result is what
+    :func:`apply_default_database` publishes as the live :data:`LAB_DB`.
+    """
+    entry = resolve_default_database(extra)
+    if entry is None or entry.get("db_mode") != DB_MODE_CUSTOM:
+        return dict(wizard_lab_db())
+    return {key: str(entry.get(key, "") or "") for key in DATABASE_CONN_KEYS}
+
+
+def apply_default_database(extra):
+    """Re-point the live lab-shared credentials at the store's chosen default.
+
+    Sets the module :data:`LAB_DB` (and the DEFAULT_CONFIG db_* seeds) to the
+    connection the ``default_database`` reference resolves to. Both UIs call this
+    right after loading the store and again whenever the default is changed, so
+    every DB_MODE_LAB code path -- normalize_config, build_database_url,
+    build_env, the built-in lab picker entry -- follows the chosen default with
+    no other change. Returns the resolved credentials dict.
+    """
+    global LAB_DB
+    LAB_DB = dict(lab_shared_db_fields(extra))
+    DEFAULT_CONFIG.update({
+        "db_name": LAB_DB["db_name"], "db_user": LAB_DB["db_user"],
+        "db_password": LAB_DB["db_password"], "db_host": LAB_DB["db_host"],
+        "db_port": LAB_DB["db_port"],
+    })
+    return LAB_DB
+
+
+def default_database_options(extra):
+    """The databases selectable as the lab-shared default, in picker order.
+
+    The lab-shared database is a Postgres database, so this offers the lab
+    built-in (the setup-wizard DB) plus every custom database in the registry,
+    and excludes the SQLite built-in (which is the separate "oTree default
+    (SQLite)" / no-database run-config choice, not a shared lab database).
+    """
+    return [entry for entry in list_databases(extra)
+            if entry.get("db_mode") != DB_MODE_NONE]
+
+
+def set_default_database(extra, db_id):
+    """Choose which known database is the lab-shared default, by reference.
+
+    Validates that ``db_id`` names a real Postgres database (built-in lab or a
+    custom in the registry), stores its id in ``extra[DEFAULT_DATABASE_KEY]``, and
+    re-resolves the live :data:`LAB_DB` via :func:`apply_default_database`.
+    Mutates ``extra`` in place and returns the chosen entry. Raises ``ValueError``
+    for an unknown id or the SQLite built-in (which cannot be a shared lab DB).
+    """
+    if extra is None:
+        raise ValueError("set_default_database needs a store `extra` dict to write into")
+    entry = find_database(extra, db_id)
+    if entry is None:
+        raise ValueError("No database with id %r to make the default." % (db_id,))
+    if entry.get("db_mode") == DB_MODE_NONE:
+        raise ValueError(
+            "The lab shared database must be a Postgres database, not the oTree "
+            "default (SQLite).")
+    extra[DEFAULT_DATABASE_KEY] = entry["id"]
+    apply_default_database(extra)
     return entry
 
 
@@ -3649,6 +3812,8 @@ def enumerate_project_rooms(project_path, timeout=8.0, python_exe=None):
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=timeout, text=True,
+            # No console flash + no inherited pythonw handles (see CREATE_NO_WINDOW).
+            creationflags=_no_window_flags(),
         )
     except subprocess.TimeoutExpired:
         result["reason"] = "timeout"
@@ -4101,8 +4266,13 @@ def psycopg2_available():
         try:
             result = subprocess.run(
                 [interp, "-c", "import psycopg2"],
+                # Redirect ALL three streams so a windowless (pythonw) parent
+                # never hands the child an invalid inherited handle to block on,
+                # and no console window flashes (see CREATE_NO_WINDOW).
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=PREFLIGHT_PSYCOPG2_TIMEOUT)
+                timeout=PREFLIGHT_PSYCOPG2_TIMEOUT,
+                creationflags=_no_window_flags())
             return result.returncode == 0
         except (OSError, subprocess.SubprocessError):
             pass   # fall through to the launcher's own interpreter
