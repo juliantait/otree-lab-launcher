@@ -27,6 +27,19 @@
     }
   }catch(e){}
 })();
+/* THEME: apply the saved light/dark choice BEFORE the first paint so there is
+   no flash. Same pattern as the academic site (data-theme attribute + a single
+   localStorage key). DARK is the default: we only set data-theme when the user
+   has explicitly stored "light", so with nothing stored the page stays dark.
+   The header toggle and the Lab-settings control both read/write this same key
+   (see toggleTheme / applyTheme / currentTheme in the main script). */
+(function(){
+  try{
+    if(localStorage.getItem("otreeLabTheme")==="light"){
+      document.documentElement.setAttribute("data-theme","light");
+    }
+  }catch(e){}
+})();
 </script>
 <style>
 /* ===========================================================================
@@ -40,22 +53,64 @@
    Self-contained: all CSS/JS inline, system fonts only, no external requests.
    =========================================================================== */
 :root{
-  --bg:            #1e1e20;
-  --bg-deep:       #171719;
-  --panel:         #252528;
-  --panel-2:       #2e2e31;
-  --panel-3:       #37373b;
-  --line:          #3a3a3e;
-  --line-soft:     #303033;
+  /* ═══════════════════════════════════════════════════════════════════
+     MASTER COLOR CONTROLS — change the accent or core palette in ONE place.
+       • The pink accent is a single RGB triple (--accent-rgb). Every pink
+         fill, tint, ring and glow in the whole UI is built from it with
+         rgba(var(--accent-rgb),…), so editing --accent-rgb re-skins ALL of
+         them at once. The few solid pink SHADES used inside gradients sit
+         right beside it (change those to match a very different hue).
+       • Surfaces, text, borders, focus and state colours are grouped after
+         it. The [data-theme="light"] block further down ONLY overrides these
+         token VALUES — it repeats no rules — so the same CSS paints both
+         themes and light mode is a pure values-only re-skin.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  /* ── ACCENT ─ change the pink here ─────────────────────────────────── */
+  --accent-rgb:    224,70,110;                   /* ← THE accent. change this one. */
+  --accent:        rgb(var(--accent-rgb));       /* solid accent */
+  --accent-hi:     #e85a80;                       /* lighter shade: gradient top (buttons/Launch) */
+  --accent-hover:  #ef688c;                       /* lighter still: gradient top on hover */
+  --accent-dim:    #b7315a;                       /* darker shade: accent borders / gradient base */
+  --accent-subtle: #e79db3;                       /* muted pink text (e.g. active-tile subtitle) */
+  --accent-on:     #fff;                          /* text/icon sitting on a filled accent */
+  --accent-soft:   rgba(var(--accent-rgb),.15);   /* soft pink tint (badges, hovers, panels) */
+
+  /* ── SURFACES / BACKGROUNDS ────────────────────────────────────────── */
+  --bg:            #1e1e20;   /* app background */
+  --bg-deep:       #171719;   /* sidebar + input/path/log wells (deepest) */
+  --panel:         #252528;   /* card surface */
+  --panel-2:       #2e2e31;   /* raised: buttons, selects, hovers */
+  --panel-3:       #37373b;   /* raised, one step further */
+  --surface-pop:   #26262a;   /* popovers / dropdown menus / credential cards */
+  --surface-input-focus:    #232326;  /* input/select background while focused */
+  --surface-input-disabled: #202022;  /* disabled / read-only field background */
+  --head-bg:       rgba(28,28,30,.86);/* sticky translucent header */
+  --fade-0:        rgba(30,30,32,0);  /* transparent end of the launch-bar fade */
+  --overlay:       rgba(0,0,0,.55);   /* modal backdrop scrim */
+  --btn-grad-b:        #292a2d;   /* darker bottom of the button gradient */
+  --btn-grad-b-hover:  #2e2f32;   /*   …its hover state */
+  --seat-grad-b:       #2a2a2d;   /* darker bottom of a seat cell */
+  --tile-grad-b:       #26262a;   /* darker bottom of a lab tile */
+
+  /* ── TEXT ──────────────────────────────────────────────────────────── */
   --text:          #dcdce0;
   --text-strong:   #f4f4f6;
   --muted:         #9d9da3;
   --faint:         #71717a;
-  --accent:        #e0466e;
-  --accent-dim:    #b7315a;
-  --accent-soft:   rgba(224,70,110,.15);
+  --on-bright:     #1b1b1d;   /* dark ink on a bright warm fill (amber / dirty button) */
+
+  /* ── BORDERS / LINES ───────────────────────────────────────────────── */
+  --line:          #3a3a3e;
+  --line-soft:     #303033;
+  --line-strong:   #4c4c50;   /* hover / emphasised border */
+  --scroll-thumb:  #3a3a3d;   /* scrollbar thumb */
+
+  /* ── FOCUS ─────────────────────────────────────────────────────────── */
   --focus:         #5aa3ff;
   --focus-soft:    rgba(90,163,255,.25);
+
+  /* ── STATE ─────────────────────────────────────────────────────────── */
   --ok:            #4ec98a;
   --ok-soft:       rgba(78,201,138,.13);
   --warn:          #e6c069;
@@ -75,13 +130,84 @@
   --mono: "SF Mono","Cascadia Code","JetBrains Mono","Consolas","Menlo","DejaVu Sans Mono",monospace;
   --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LIGHT THEME — opt-in (set data-theme="light" on <html>; the head script
+   restores it from localStorage before first paint). DARK stays the default
+   (plain :root above). This block ONLY re-defines token VALUES — it repeats
+   no layout rules — so every rule above paints light automatically. The pink
+   ACCENT is deliberately NOT re-defined here: it stays exactly as in :root,
+   so the approved light look keeps the identical pink.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root[data-theme="light"]{
+  /* accent (pink) preserved from :root; only the muted-pink text darkens a
+     touch so it stays legible on the light-pink active tile */
+  --accent-subtle: #c23a63;
+
+  /* surfaces */
+  --bg:            #f4f4f6;
+  --bg-deep:       #edeef0;
+  --panel:         #ffffff;
+  --panel-2:       #f2f2f4;
+  --panel-3:       #e8e8ec;
+  --surface-pop:   #ffffff;
+  --surface-input-focus:    #ffffff;
+  --surface-input-disabled: #ececed;
+  --head-bg:       rgba(244,244,246,.86);
+  --fade-0:        rgba(244,244,246,0);
+  --overlay:       rgba(24,24,27,.35);
+  --btn-grad-b:        #ededf0;
+  --btn-grad-b-hover:  #e5e5ea;
+  --seat-grad-b:       #f0f0f3;
+  --tile-grad-b:       #f6f6f8;
+
+  /* text */
+  --text:          #3f3f46;
+  --text-strong:   #18181b;
+  --muted:         #64646c;
+  --faint:         #9a9aa2;
+
+  /* borders */
+  --line:          #e2e2e6;
+  --line-soft:     #ececef;
+  --line-strong:   #d0d0d6;
+  --scroll-thumb:  #cdced3;
+
+  /* focus */
+  --focus:         #2f6fed;
+  --focus-soft:    rgba(47,111,237,.22);
+
+  /* state — darkened so they read on light surfaces */
+  --ok:            #1f9d57;
+  --ok-soft:       rgba(31,157,87,.12);
+  --warn:          #a9760f;
+  --warn-soft:     rgba(230,192,105,.20);
+  --warn-line:     #ddca90;
+  --err:           #d64545;
+  --err-soft:      rgba(214,69,69,.10);
+
+  /* softer shadows on a light background */
+  --shadow-sm:     0 1px 2px rgba(0,0,0,.06);
+  --shadow-md:     0 3px 10px rgba(0,0,0,.08);
+  --shadow-lg:     0 14px 40px rgba(0,0,0,.16);
+}
+/* Two spots can't be expressed as a token swap: the inline select-arrow SVG
+   (its stroke colour is baked into the data-URI) and the activity-log well
+   (kept a dark terminal panel in both themes so its bright syntax colours stay
+   legible). These are the ONLY rule-level light overrides. */
+:root[data-theme="light"] select{
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'><path d='M1 1l4 4 4-4' stroke='%2364646c' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+}
+:root[data-theme="light"] .log-body{background:#1c1c1e;border-color:#2c2c30;color:#e6e6ea}
+:root[data-theme="light"] .log .info{color:#e6e6ea}
+
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%}
 body{
   margin:0;font-family:var(--sans);font-size:13.5px;line-height:1.55;color:var(--text);
   background:
-    radial-gradient(120% 80% at 12% -6%, rgba(224,70,110,.05), transparent 55%),
+    radial-gradient(120% 80% at 12% -6%, rgba(var(--accent-rgb),.05), transparent 55%),
     var(--bg);
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
   /* The window itself never scrolls: each column owns its own scroll region, so
@@ -133,7 +259,7 @@ body{
   color:var(--muted);cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;
   transition:background .12s,color .12s,border-color .12s;
 }
-.side-head .add:hover{background:var(--panel-3);color:var(--text);border-color:#4a4a4d}
+.side-head .add:hover{background:var(--panel-3);color:var(--text);border-color:var(--line-strong)}
 .cfg-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 10px 14px}
 .cfg-row{
   position:relative;display:block;width:100%;text-align:left;cursor:pointer;
@@ -170,12 +296,27 @@ body{
 .main-head{
   position:sticky;top:0;z-index:20;
   display:flex;align-items:flex-start;gap:16px;padding:18px clamp(16px,2.4vw,26px) 14px;
-  background:rgba(28,28,30,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft);
+  background:var(--head-bg);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft);
 }
 .main-head .htext{margin-right:auto;min-width:0}
 .main-head h1{margin:0;font-size:20px;font-weight:650;color:var(--text-strong);letter-spacing:-.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+/* header appearance toggle: one icon button that flips dark<->light. It shows a
+   SUN while dark (click -> light) and a MOON while light (click -> dark); the CSS
+   below swaps which glyph is visible from the <html> data-theme attribute, so no
+   JS has to touch the icon. Styled to sit quietly beside "Save as new config…". */
+.theme-toggle{
+  flex:none;width:34px;height:34px;border-radius:var(--r-sm);border:1px solid var(--line);
+  background:var(--panel-2);color:var(--muted);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .14s,border-color .14s,color .14s;
+}
+.theme-toggle:hover{background:var(--panel-3);border-color:var(--line-strong);color:var(--text-strong)}
+.theme-toggle svg{width:17px;height:17px;display:block}
+.theme-toggle .i-moon{display:none}
+:root[data-theme="light"] .theme-toggle .i-sun{display:none}
+:root[data-theme="light"] .theme-toggle .i-moon{display:block}
 .content{
   flex:1;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
   gap:clamp(12px,1.6vw,18px);padding:22px clamp(16px,2.4vw,26px) 8px;align-items:start;
@@ -194,12 +335,12 @@ body{
 }
 .card-num .n{
   flex:none;min-width:22px;height:22px;padding:0 6px;border-radius:6px;
-  background:var(--accent-soft);border:1px solid rgba(224,70,110,.28);color:var(--accent);
+  background:var(--accent-soft);border:1px solid rgba(var(--accent-rgb),.28);color:var(--accent);
   font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;
 }
 .card--lab{
   position:relative;overflow:hidden;
-  background:radial-gradient(150% 120% at 100% -14%, rgba(224,70,110,.09), transparent 46%),var(--panel);
+  background:radial-gradient(150% 120% at 100% -14%, rgba(var(--accent-rgb),.09), transparent 46%),var(--panel);
 }
 .card--lab::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;
   background:linear-gradient(90deg,transparent 26%,var(--accent-dim) 68%,var(--accent))}
@@ -268,7 +409,7 @@ html[data-webmode="browser"] .pathhint{display:block}
    collapsed-detail pattern as the database selector). The inputs stay in the
    DOM while it is closed, so the form still gathers them. */
 .creds{position:absolute;z-index:55;left:0;top:calc(100% + 8px);width:min(400px,100%);box-sizing:border-box;
-  background:#26262a;border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:13px 14px;
+  background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:13px 14px;
   display:grid;grid-template-columns:112px 1fr;gap:9px 12px;align-items:center}
 .creds[hidden]{display:none}
 .creds > label{font-size:12.5px;color:var(--muted)}
@@ -285,9 +426,9 @@ select{cursor:pointer;background:var(--panel-2);appearance:none;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'><path d='M1 1l4 4 4-4' stroke='%239d9da3' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
   background-repeat:no-repeat;background-position:right 11px center;padding-right:30px}
 select.auto{width:auto;min-width:104px}
-input:hover:not(:disabled):not([readonly]),select:hover{border-color:#4c4c50}
-input:focus,select:focus{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus-soft);outline:none;background:#232326}
-input[readonly],input:disabled{background:#202022;color:var(--faint);cursor:not-allowed;border-color:var(--line-soft)}
+input:hover:not(:disabled):not([readonly]),select:hover{border-color:var(--line-strong)}
+input:focus,select:focus{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus-soft);outline:none;background:var(--surface-input-focus)}
+input[readonly],input:disabled{background:var(--surface-input-disabled);color:var(--faint);cursor:not-allowed;border-color:var(--line-soft)}
 input::placeholder{color:var(--faint)}
 .pwrap{display:flex;gap:8px}
 .pwrap input{flex:1}
@@ -301,17 +442,17 @@ input::placeholder{color:var(--faint)}
 /* buttons */
 .btn{
   font-family:inherit;font-size:12.5px;font-weight:500;border:1px solid var(--line);border-radius:var(--r-sm);
-  background:linear-gradient(180deg,var(--panel-2),#292a2d);color:var(--text);
+  background:linear-gradient(180deg,var(--panel-2),var(--btn-grad-b));color:var(--text);
   padding:8px 15px;cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-sm);
   transition:background .14s,border-color .14s,transform .05s,box-shadow .14s;
 }
-.btn:hover{background:linear-gradient(180deg,var(--panel-3),#2e2f32);border-color:#4c4c50;box-shadow:var(--shadow-md)}
+.btn:hover{background:linear-gradient(180deg,var(--panel-3),var(--btn-grad-b-hover));border-color:var(--line-strong);box-shadow:var(--shadow-md)}
 .btn:active{background:var(--panel);transform:translateY(1px);box-shadow:var(--shadow-sm)}
 .btn.tiny{padding:6px 11px;font-size:11.5px;border-radius:var(--r-xs)}
 .btn.ghost{background:transparent;box-shadow:none}
 .btn.ghost:hover{background:var(--panel-2);box-shadow:none}
-.btn.accent{background:linear-gradient(180deg,#e85a80,var(--accent));border-color:var(--accent-dim);color:#fff}
-.btn.accent:hover{background:linear-gradient(180deg,#ef688c,#e85a80)}
+.btn.accent{background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-color:var(--accent-dim);color:var(--accent-on)}
+.btn.accent:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi))}
 .btn.danger{background:var(--err);border-color:var(--err);color:#fff}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
@@ -319,7 +460,7 @@ input::placeholder{color:var(--faint)}
 /* "Save as new config" grows + turns amber when the form has unsaved changes,
    so it reads as "you have changes to save" rather than a passive reminder. */
 #saveAsBtn.dirty{
-  font-size:13.5px;font-weight:650;color:#1c1c1e;padding:9px 18px;
+  font-size:13.5px;font-weight:650;color:var(--on-bright);padding:9px 18px;
   background:linear-gradient(180deg,#f0d284,var(--warn));border-color:var(--warn-line);
   box-shadow:0 2px 12px rgba(230,192,105,.30);
 }
@@ -340,7 +481,7 @@ input::placeholder{color:var(--faint)}
 .db-details-toggle{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:700;padding:4px 0 0;margin:0}
 .db-details-toggle:hover{color:var(--accent-dim,var(--accent))}
 /* the database dropdown opened by the pen icon */
-.db-menu{position:fixed;z-index:60;background:#26262a;border:1px solid var(--line);border-radius:var(--r-sm);
+.db-menu{position:fixed;z-index:60;background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
 .db-menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);
   font-family:inherit;font-size:12.5px;padding:7px 9px;border-radius:6px;cursor:pointer}
@@ -376,18 +517,18 @@ input::placeholder{color:var(--faint)}
 /* lab tiles */
 .lab-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .lab-tile{
-  border:1px solid var(--line);border-radius:var(--r-md);background:linear-gradient(180deg,var(--panel-2),#26262a);
+  border:1px solid var(--line);border-radius:var(--r-md);background:linear-gradient(180deg,var(--panel-2),var(--tile-grad-b));
   padding:13px 12px;text-align:center;cursor:pointer;box-shadow:var(--shadow-sm);
   transition:border-color .12s,background .12s,transform .06s,box-shadow .14s;
 }
-.lab-tile:hover{border-color:#4c4c50;transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.lab-tile:hover{border-color:var(--line-strong);transform:translateY(-1px);box-shadow:var(--shadow-md)}
 .lab-tile .nm{font-size:14px;font-weight:650;color:var(--text-strong)}
 .lab-tile .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
 .lab-tile.active{
-  background:radial-gradient(120% 120% at 50% 0%, rgba(224,70,110,.22), var(--accent-soft));
-  border-color:var(--accent);box-shadow:0 3px 14px rgba(224,70,110,.28);
+  background:radial-gradient(120% 120% at 50% 0%, rgba(var(--accent-rgb),.22), var(--accent-soft));
+  border-color:var(--accent);box-shadow:0 3px 14px rgba(var(--accent-rgb),.28);
 }
-.lab-tile.active .nm{color:var(--accent)} .lab-tile.active .sub{color:#e79db3}
+.lab-tile.active .nm{color:var(--accent)} .lab-tile.active .sub{color:var(--accent-subtle)}
 .lab-tile.faded{opacity:.45}
 .single-lab{font-size:14px;font-weight:650;color:var(--text-strong);padding:2px 0 4px}
 .otherhost{margin-top:11px}
@@ -398,8 +539,8 @@ input::placeholder{color:var(--faint)}
 .host-pick{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
 .host-pick .host-pill{flex:none}
 .host-pick .host-pill.active,.host-pick .host-pill.active:hover{
-  background:radial-gradient(120% 140% at 50% 0%, rgba(224,70,110,.22), var(--accent-soft));
-  border-color:var(--accent);color:var(--accent);font-weight:650;box-shadow:0 2px 10px rgba(224,70,110,.24)}
+  background:radial-gradient(120% 140% at 50% 0%, rgba(var(--accent-rgb),.22), var(--accent-soft));
+  border-color:var(--accent);color:var(--accent);font-weight:650;box-shadow:0 2px 10px rgba(var(--accent-rgb),.24)}
 .custom-fields{margin-top:12px}
 
 /* room + participant rows */
@@ -423,7 +564,7 @@ input::placeholder{color:var(--faint)}
 .seatcell{
   min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;
   font-family:var(--mono);font-size:11px;color:var(--text);
-  background:linear-gradient(180deg,var(--panel-2),#2a2a2d);
+  background:linear-gradient(180deg,var(--panel-2),var(--seat-grad-b));
   border:1px solid var(--line);border-radius:var(--r-xs);box-shadow:var(--shadow-sm);
   /* Hover must never change layout/size (no transform/height/padding) or the
      grid reflows. Only colour + a non-reflowing box-shadow ring change. */
@@ -477,7 +618,7 @@ input::placeholder{color:var(--faint)}
 .launchbar::before{
   content:"";position:absolute;left:0;right:0;bottom:100%;height:34px;
   pointer-events:none;
-  background:linear-gradient(180deg,rgba(30,30,32,0),var(--bg));
+  background:linear-gradient(180deg,var(--fade-0),var(--bg));
 }
 /* "Activity log" button: left-aligned on the launch bar (margin-right:auto
    pushes Save-one-click + Launch to the right). Nothing is printed inline, so
@@ -489,28 +630,28 @@ input::placeholder{color:var(--faint)}
   background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);
   padding:9px 14px;cursor:pointer;transition:background .14s,border-color .14s,color .14s;
 }
-.btn-logexpand:hover{background:var(--panel-2);border-color:#4c4c50;color:var(--text)}
+.btn-logexpand:hover{background:var(--panel-2);border-color:var(--line-strong);color:var(--text)}
 .btn-logexpand:active{transform:translateY(1px)}
 .btn-launch{
-  font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:#fff;
-  background:linear-gradient(180deg,#e85a80,var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
+  font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:var(--accent-on);
+  background:linear-gradient(180deg,var(--accent-hi),var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
   padding:13px 40px;cursor:pointer;
-  box-shadow:0 2px 12px rgba(224,70,110,.32),inset 0 1px 0 rgba(255,255,255,.14);
+  box-shadow:0 2px 12px rgba(var(--accent-rgb),.32),inset 0 1px 0 rgba(255,255,255,.14);
   transition:background .14s,box-shadow .18s,transform .05s;
 }
-.btn-launch:hover{background:linear-gradient(180deg,#ef688c,#e85a80);box-shadow:0 6px 26px rgba(224,70,110,.5),inset 0 1px 0 rgba(255,255,255,.18)}
+.btn-launch:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi));box-shadow:0 6px 26px rgba(var(--accent-rgb),.5),inset 0 1px 0 rgba(255,255,255,.18)}
 .btn-launch:active{transform:translateY(1px)}
 .btn-shortcut{
   font-family:inherit;font-size:14px;font-weight:600;color:var(--accent);
   background:transparent;border:1px solid var(--accent-dim);border-radius:var(--r-md);
   padding:12px 20px;cursor:pointer;transition:background .14s,border-color .14s;
 }
-.btn-shortcut:hover{background:rgba(224,70,110,.10);border-color:var(--accent)}
+.btn-shortcut:hover{background:rgba(var(--accent-rgb),.10);border-color:var(--accent)}
 .btn-shortcut:active{transform:translateY(1px)}
 
 /* ============================ MODALS ============================ */
 .modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
-  background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+  background:var(--overlay);backdrop-filter:blur(3px);padding:24px}
 .modal-card{position:relative;max-width:560px;width:100%;max-height:86vh;overflow:auto;overscroll-behavior:contain;
   background:var(--panel);border:1px solid var(--line);border-radius:var(--r-xl);
   box-shadow:var(--shadow-lg);padding:24px 26px}
@@ -552,11 +693,11 @@ input::placeholder{color:var(--faint)}
 .room-note{font-size:11.5px;color:var(--faint);margin:10px 0 6px}
 .room-type{display:flex;gap:8px;align-items:center;margin-top:14px}
 .room-type input{flex:1}
-.info-panel{background:var(--accent-soft);border:1px solid rgba(224,70,110,.3);border-radius:var(--r-md);
+.info-panel{background:var(--accent-soft);border:1px solid rgba(var(--accent-rgb),.3);border-radius:var(--r-md);
   padding:11px 13px;font-size:12px;color:var(--text);margin:0 0 12px;line-height:1.55}
 .i-btn{width:24px;height:24px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);
   color:var(--muted);cursor:pointer;font-style:italic;font-weight:700;font-size:12px}
-.i-btn:hover{color:var(--text);border-color:#4c4c50}
+.i-btn:hover{color:var(--text);border-color:var(--line-strong)}
 /* Small inline info badge whose tip reveals on hover, keyboard focus, or click.
    Used instead of a title= tooltip, which does NOT display in the pywebview
    (WKWebView) window; the &#9432; glyph also fell back to a bare "?" there. */
@@ -595,13 +736,13 @@ input::placeholder{color:var(--faint)}
 .wiz-step .dot{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);display:flex;
   align-items:center;justify-content:center;font-size:11.5px;font-weight:600;color:var(--faint);background:var(--bg-deep)}
 .wiz-step.active{color:var(--text-strong)}
-.wiz-step.active .dot{border-color:var(--accent);color:#fff;background:linear-gradient(180deg,#e85a80,var(--accent))}
+.wiz-step.active .dot{border-color:var(--accent);color:var(--accent-on);background:linear-gradient(180deg,var(--accent-hi),var(--accent))}
 .wiz-step.done{color:var(--muted)}
 .wiz-step.done .dot{border-color:var(--accent-dim);color:var(--accent);background:var(--accent-soft)}
 .wiz-rail .bar{flex:1;height:1px;background:var(--line);margin:0 10px;min-width:12px}
 .wiz-body{min-height:236px}
-.ls-card.primary{border-color:rgba(224,70,110,.32);
-  background:radial-gradient(140% 120% at 0% 0%,rgba(224,70,110,.06),var(--bg-deep))}
+.ls-card.primary{border-color:rgba(var(--accent-rgb),.32);
+  background:radial-gradient(140% 120% at 0% 0%,rgba(var(--accent-rgb),.06),var(--bg-deep))}
 .db-mode-note{font-size:11.5px;color:var(--faint);margin:4px 0 2px 24px}
 .db-mode-note.create{color:var(--accent)}
 .db-create-hint{font-size:11.5px;color:var(--faint);font-style:italic;margin:2px 0 2px 24px}
@@ -618,7 +759,7 @@ input::placeholder{color:var(--faint)}
 .wiz-review .rv{color:var(--text-strong);font-size:12.5px}
 .wiz-review .rv .mut{color:var(--muted);font-weight:400}
 .pill{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:11px}
-.pill.create{color:var(--accent);background:var(--accent-soft);border:1px solid rgba(224,70,110,.3)}
+.pill.create{color:var(--accent);background:var(--accent-soft);border:1px solid rgba(var(--accent-rgb),.3)}
 .pill.link{color:var(--muted);background:var(--panel-2);border:1px solid var(--line)}
 .wiz-foot{margin-top:18px;display:flex;align-items:center;justify-content:space-between;gap:10px}
 .wiz-foot .right{display:flex;gap:9px}
@@ -630,7 +771,7 @@ input::placeholder{color:var(--faint)}
 .server-name{font-size:15px;font-weight:700;color:var(--text-strong);margin:0 0 12px}
 .open-line{font-size:13.5px;color:var(--text);margin:0 0 6px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .room-chip{display:inline-flex;align-items:center;font-size:12.5px;font-weight:600;color:var(--accent);
-  background:var(--accent-soft);border:1px solid rgba(224,70,110,.3);border-radius:20px;padding:4px 13px}
+  background:var(--accent-soft);border:1px solid rgba(var(--accent-rgb),.3);border-radius:20px;padding:4px 13px}
 .creds-box{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:13px 15px;margin:14px 0 6px}
 .creds-box .intro{font-size:12.5px;color:var(--muted);margin:0 0 10px}
 .cred-row{display:grid;grid-template-columns:78px 1fr auto auto;gap:8px;align-items:center;margin:6px 0}
@@ -650,7 +791,7 @@ input::placeholder{color:var(--faint)}
    sticky bottom bar, the ONLY place a launch / "Launch anyway" is offered.
    Presentation only; levels/fixes come from the backend. */
 .bl-ic{flex:none;width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;
-  font-size:11px;font-weight:800;line-height:1;color:#1b1b1d}
+  font-size:11px;font-weight:800;line-height:1;color:var(--on-bright)}
 .bl-ic.block{background:var(--err)} .bl-ic.warn{background:var(--warn)} .bl-ic.ok{background:var(--ok)}
 .bl-issue{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:11px;align-items:start;
   background:var(--warn-soft);border-left:3px solid var(--warn);border-radius:var(--r-xs);
@@ -683,7 +824,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 .bl-info{flex:none;width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;
   border:1px solid var(--accent);color:var(--accent);font-size:12px;font-weight:700;font-style:italic;
   font-family:Georgia,"Times New Roman",serif;line-height:1;transition:background .12s,color .12s}
-.bl-lab>summary:hover .bl-info,.bl-lab[open] .bl-info{background:var(--accent);color:#fff}
+.bl-lab>summary:hover .bl-info,.bl-lab[open] .bl-info{background:var(--accent);color:var(--accent-on)}
 .bl-lab>summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:var(--r-xs)}
 .bl-labinfo{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-sm);
   padding:10px 12px;margin:9px 0 0}
@@ -736,8 +877,8 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 .bl-callout .n{font-size:13px;font-weight:700;color:var(--warn);margin-right:4px}
 .btn.bl-primary{padding:9px 20px;font-size:13px;font-weight:650}
 .btn.bl-launch-off,.btn.bl-launch-off:hover,.btn.bl-launch-off:active{background:var(--panel-2);color:#6e6e74;
-  border:1px dashed #4a4a4e;box-shadow:none;cursor:not-allowed;transform:none}
-.btn.bl-anyway{background:var(--warn);border-color:var(--warn);color:#1b1b1d}
+  border:1px dashed var(--line-strong);box-shadow:none;cursor:not-allowed;transform:none}
+.btn.bl-anyway{background:var(--warn);border-color:var(--warn);color:var(--on-bright)}
 .btn.bl-anyway:hover{filter:brightness(1.08)}
 
 /* gear popup menu */
@@ -750,8 +891,8 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 
 /* scrollbars */
 ::-webkit-scrollbar{width:11px;height:11px}
-::-webkit-scrollbar-thumb{background:#3a3a3d;border-radius:6px;border:3px solid transparent;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:#4a4a4d;background-clip:content-box}
+::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:6px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--line-strong);background-clip:content-box}
 ::-webkit-scrollbar-track{background:transparent}
 </style>
 </head>
@@ -780,6 +921,11 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
         <h1 id="cfgTitle">Config: Dictator study</h1>
         <p class="sub">Save this setup as a named config so you can reuse it.</p>
       </div>
+      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()"
+        title="Switch light / dark theme" aria-label="Switch light or dark theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M2.5 12h2.6M18.9 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.2 8.2 0 1 1 9.7 3.5a6.4 6.4 0 0 0 10.8 10.8Z"/></svg>
+      </button>
       <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save as new config...</button>
     </div>
 
@@ -1034,6 +1180,30 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
    through window.pywebview.api.*. In a plain browser the whole page still
    runs as a static preview with example data (lab_info.example + maps/).
    ====================================================================== */
+
+/* ---------- theme (light / dark) ------------------------------------------
+   One localStorage key ("otreeLabTheme") is the single source of truth, shared
+   by the header sun/moon toggle AND the Appearance control in Lab settings, so
+   changing either keeps the other in sync. DARK is the default: light is stored
+   as "light" and applied by setting data-theme="light" on <html>; dark clears
+   the attribute (and stores "dark"). The pre-paint head script restores it. */
+function currentTheme(){
+  return document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
+}
+function applyTheme(theme){
+  var t=(theme==="light")?"light":"dark";
+  if(t==="light")document.documentElement.setAttribute("data-theme","light");
+  else document.documentElement.removeAttribute("data-theme");
+  try{localStorage.setItem("otreeLabTheme",t);}catch(e){}
+  syncThemeControls();
+}
+function toggleTheme(){ applyTheme(currentTheme()==="light"?"dark":"light"); }
+/* Keep the Lab-settings Appearance <select> matching the live theme (the header
+   toggle needs no update -- its icon swap is pure CSS from the data-theme attr). */
+function syncThemeControls(){
+  var s=document.getElementById("lsTheme");
+  if(s)s.value=currentTheme();
+}
 
 var NATIVE=false, API=null, booted=false, BROWSER=false;
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
@@ -1984,6 +2154,10 @@ function openLabSettings(){
       '<button class="btn tiny" onclick="deleteLabPreset(\''+pid+'\')">Delete</button></td></tr>';
   }).join("");
   openModal("Lab settings",
+    '<div class="ls-card"><h4>Appearance</h4>'+
+      '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
+      '<div class="mfield" style="grid-template-columns:110px 1fr"><label>Theme</label>'+
+      '<select id="lsTheme" onchange="applyTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option></select></div></div>'+
     '<div class="ls-card"><h4>Which lab is this computer</h4>'+
       '<p class="d">Sets the machine’s lab (saved to lab.local) and shows only that lab in the main selector. No file editing needed.</p>'+
       '<div class="mfield" style="grid-template-columns:110px 1fr auto"><label>This computer</label>'+
@@ -2020,6 +2194,7 @@ function openLabSettings(){
     '<div class="cta spread"><div><button class="btn" onclick="labPresetEdit(null)">Add lab</button></div>'+
       '<button class="btn" onclick="closeModal()">Close</button></div>',true);
   ["pgUser","pgPw","pgHost","pgPort"].forEach(function(id){var e=el(id);if(e)e.addEventListener("change",savePgAdmin);});
+  syncThemeControls();
 }
 function makeThisTheLab(){
   var lab=val("lsMarker");
