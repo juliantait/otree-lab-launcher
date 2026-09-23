@@ -1,44 +1,34 @@
 ' oTree Lab Launcher, web version (Windows) - double-click for a zero-window start.
 '
-' The web app needs its own private virtualenv. This script creates and populates
-' it on first run (invisibly), then launches the app under pythonw.exe with a
-' HIDDEN window, so no black console box is left behind. The .bat launchers were
-' removed; this .vbs is the Windows entry point and does the setup itself.
+' This is the WINDOWLESS web launcher. It runs the web UI in BROWSER mode: a tiny
+' local HTTP server (standard library only) that opens the UI in your DEFAULT
+' BROWSER. There is NO pywebview, NO venv and NO pip install, so it works on ANY
+' Python on PATH (including 3.13 / 3.14). It runs under pythonw.exe with a HIDDEN
+' window (the "0" in the Run call), so NO black console box is left behind.
 '
-' VERSION PINS (see _ai\WEB_FREEZE_DIAGNOSIS.md for why): use Python 3.11 or 3.12
-' (pythonnet crashes on 3.13+), with pywebview==5.4 and pythonnet==3.0.5, pinned
-' in app\requirements-web.txt.
+' Use this .vbs for a clean, no-window start. Use
+' "Win_Start oTree Lab Launcher (web, terminal).bat" instead when you want a
+' VISIBLE console to watch the server or close it by hand.
+'
+' The server keeps running in the background after this script exits; close the
+' browser tab and the server keeps serving. To stop it, use the (web, terminal)
+' .bat (whose console you can close) or end the pythonw.exe task.
 '
 ' The script resolves its own folder (the repo root) and runs the app code in
-' app\. Your config and maps live in data\ at the repo root. If the app fails to
-' start before its window appears, look for the crash log at
-'   <repo root>\data\otree-lab-launcher.log
-' and the detailed web log at  <repo root>\data\web_launcher.log
+' app\ with --browser. Config and maps live in data\ at the repo root. Because
+' pythonw has no console, stdout/stderr are redirected to the logs; if nothing
+' opens, look at
+'   <repo root>\data\otree-lab-launcher.log   (startup crashes)
+'   <repo root>\data\web_launcher.log         (detailed web log, incl. the URL)
 
 Option Explicit
-Dim fso, sh, q, scriptDir, venv, py, pyw, appPath, req, rc
+Dim fso, sh, q, scriptDir, appPath
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
-q = Chr(34)   ' a double-quote character, for quoting paths
+q = Chr(34)   ' a double-quote character, for quoting the path
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-
-venv = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.otree-lab-launcher-venv"
-py = venv & "\Scripts\python.exe"
-pyw = venv & "\Scripts\pythonw.exe"
 appPath = scriptDir & "\app\otree_launcher_web.py"
-req = scriptDir & "\app\requirements-web.txt"
 
-' 1) First run: create the private venv (hidden, wait for it to finish).
-If Not fso.FileExists(py) Then
-  sh.Run "python -m venv " & q & venv & q, 0, True
-End If
-
-' 2) Install pinned deps only when pywebview is not already importable.
-rc = sh.Run(q & py & q & " -c ""import webview""", 0, True)
-If rc <> 0 Then
-  sh.Run q & py & q & " -m pip install --upgrade pip", 0, True
-  sh.Run q & py & q & " -m pip install -r " & q & req & q, 0, True
-End If
-
-' 3) Launch windowless (hidden) and do not wait, so this script exits at once.
-sh.Run q & pyw & q & " " & q & appPath & q, 0, False
+' Run pythonw hidden (0) and do not wait (False), so this script exits at once.
+' --browser forces the stdlib HTTP + default-browser mode (no pywebview).
+sh.Run "pythonw " & q & appPath & q & " --browser", 0, False

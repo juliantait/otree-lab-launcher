@@ -4,6 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>oTree Lab Launcher</title>
+<script>
+/* Decide browser-mode vs pywebview BEFORE the first paint, so the Browse
+   button is NEVER shown-then-hidden (no flicker). Browser mode is served over
+   http(s) by the local otree_launcher_web.py server; pywebview native loads
+   this file over file:// (and injects window.pywebview shortly after), and the
+   static preview is file:// too. So http(s) with no pywebview present === the
+   plain-browser launcher, where a native folder picker can NEVER hand the app a
+   real folder PATH. In that mode we mark the document so CSS below hides Browse
+   and reveals the paste-the-path hint before anything renders. The file:// /
+   pywebview path is left completely untouched (Browse renders as before). */
+(function(){
+  try{
+    var p=location.protocol;
+    if((p==="http:"||p==="https:")&&!(window.pywebview&&window.pywebview.api)){
+      document.documentElement.setAttribute("data-webmode","browser");
+    }
+  }catch(e){}
+})();
+</script>
 <style>
 /* ===========================================================================
    oTree Lab Launcher: web re-skin (v2, rebuilt on the Tk layout)
@@ -189,6 +208,13 @@ body{
 }
 .pathbox.empty{color:var(--faint);font-family:var(--sans);direction:ltr}
 .pathrow input.pathinput{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px}
+/* Browser mode (see the head <script>): no native folder picker exists, so the
+   Browse buttons are hidden before first paint and the paste-the-path hint is
+   shown. The paste field (#projPathInput) is always visible and editable. */
+.pathhint{display:none;margin:8px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
+html[data-webmode="browser"] #browseProjBtn,
+html[data-webmode="browser"] #browseFileBtn{display:none!important}
+html[data-webmode="browser"] .pathhint{display:block}
 
 /* validation status line */
 .statusline{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;margin-top:11px;line-height:1.5}
@@ -762,6 +788,17 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
               placeholder="Click Browse to choose your oTree project folder">
             <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
           </div>
+          <p class="pathhint" id="projPathHint">Paste the full path to your oTree project folder, then press Enter. (The Browse button is not available in the browser &mdash; it needs the desktop app.)</p>
+          <script>
+          /* In browser mode Browse is hidden (see head + CSS), so the paste
+             field is the only way to choose the folder: give it a matching
+             placeholder now, synchronously during parse, so it is right on the
+             first paint with no flicker. */
+          if(document.documentElement.getAttribute("data-webmode")==="browser"){
+            var _pin=document.getElementById("projPathInput");
+            if(_pin)_pin.placeholder="Paste the full path to your oTree project folder";
+          }
+          </script>
 
           <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
           <ul class="bullets" id="appBullets" hidden></ul>
@@ -2729,12 +2766,16 @@ function startEventStream(){
   }catch(e){}
 }
 function hideBrowseButtons(){
-  /* Browser mode has no native file dialog -> paste-the-path is the only way,
-     so the Browse buttons are hidden and the placeholders say so. */
+  /* Browser mode has no native file dialog -> paste-the-path is the only way.
+     The head <script> already set data-webmode="browser" before first paint, so
+     CSS has hidden the Browse buttons and shown the paste hint with no flicker;
+     this is belt-and-suspenders (and re-asserts the mode if the early check was
+     ever skipped). The paste field stays visible and editable. */
+  document.documentElement.setAttribute("data-webmode","browser");
   var b1=el("browseProjBtn");if(b1)b1.hidden=true;
   var b2=el("browseFileBtn");if(b2)b2.hidden=true;
   var pin=el("projPathInput");
-  if(pin)pin.placeholder="Type or paste the full path to your oTree project folder";
+  if(pin)pin.placeholder="Paste the full path to your oTree project folder";
 }
 function bootBrowser(){
   if(booted)return;booted=true;NATIVE=true;BROWSER=true;

@@ -5392,18 +5392,21 @@ class LaunchBriefingDialog(object):
         self._link_reveal = None
         self._reveal_after = None
         top = self.top = tk.Toplevel(parent)
-        # Build the whole dialog WHILE WITHDRAWN so the user never sees an empty
-        # grey placeholder. A Toplevel is mapped as soon as it is created, so
-        # without this the window appears blank at the default position (briefly
-        # showing just its "Before you launch" title), then the content renders and
-        # _center_on jumps it to centre -- which reads as a dead grey window that
-        # closes and reopens. Withdrawn now, deiconified once below only after the
-        # body is built, centred and the grab is ready (same fix class as the
-        # FirstRunWizard hang). Windows/Linux/macOS all benefit; harmless everywhere.
-        top.withdraw()
+        # Shown as a PLAIN, normal modal: created mapped, transient to the root,
+        # and grabbed exactly once after it is genuinely on screen. Deliberately
+        # NO dim-shade overlay here (unlike some lighter dialogs). The shade is a
+        # borderless grey Toplevel sized over the whole main window; if it ever
+        # stacks above this heavy, canvas-based dialog it both greys the dialog
+        # out and - with the grab held on the now-hidden dialog - swallows every
+        # click, which is exactly the "grey ghost the shape of the main window
+        # that grabs input, cannot be clicked and cannot be closed" regression.
+        # A plain transient modal with no overlay cannot produce that. Likewise
+        # no withdraw/deiconify + -topmost flash + focus_force dance (an earlier
+        # revision of that left an unreachable grab on an invisible window).
+        # Correctness beats polish here: a brief harmless grey flash is fine, a
+        # locked app is not.
         top.title("Before you launch")
         top.configure(bg=COLORS["card"])
-        _attach_shade(parent, top)
         top.transient(parent)
         top.resizable(False, False)
 
@@ -5465,50 +5468,20 @@ class LaunchBriefingDialog(object):
         self._render_action()
 
         top.bind("<Escape>", lambda _e: self._close())
-        # Centre while still withdrawn (see the withdraw note above), then show the
-        # fully-rendered window exactly once: deiconify, raise and focus, and only
-        # then take the modal grab.
+        # Centre the fully-rendered window, then take the modal grab exactly once
+        # and ONLY after the window is genuinely viewable. _wait_viewable is a
+        # BOUNDED wait (it polls winfo_viewable with a deadline), so the grab is
+        # never held while the window is invisible - which is what leaves an
+        # unreachable "ghost" grab - and it can never hang the app if the window
+        # somehow never maps. A single grab_set, no shade, no flashing.
         _center_on(parent, top)
         try:
-            top.deiconify()
             top.update_idletasks()
-            top.lift()
-            top.focus_force()
         except tk.TclError:
             pass
+        _wait_viewable(top)
         try:
-            _grab_modal(top)
-        except tk.TclError:
-            pass
-        # Windowless (pythonw / the .vbs shortcut) foreground activation. A
-        # no-console process often CANNOT steal the Windows foreground, so the
-        # modal draws but stays inactive -- greyed and unclickable -- until the
-        # user gives input elsewhere (e.g. physically moves the parent window),
-        # which is exactly the reported symptom. A brief ``-topmost`` flash pulls
-        # the window to the front and activates it, and a second focus_force a
-        # beat later re-asserts it, WITHOUT leaving a permanently always-on-top
-        # window. All guarded and no-ops on macOS/Linux and under a real console,
-        # so the terminal (.bat) path is unchanged.
-        def _drop_topmost(top=top):
-            try:
-                if top.winfo_exists():
-                    top.attributes("-topmost", False)
-            except tk.TclError:
-                pass
-
-        def _reassert_front(top=top):
-            try:
-                if not top.winfo_exists():
-                    return
-                top.lift()
-                top.focus_force()
-            except tk.TclError:
-                pass
-
-        try:
-            top.attributes("-topmost", True)
-            top.after(250, _drop_topmost)
-            top.after(50, _reassert_front)
+            top.grab_set()
         except tk.TclError:
             pass
 

@@ -85,13 +85,31 @@ def _resolve_crash_log_path():
 CRASH_LOG_PATH = _resolve_crash_log_path()
 
 
+class _NullStream(object):
+    """A no-op stdout/stderr used only as a last resort, when running under
+    pythonw (no console, so the real streams are None) AND the crash log cannot
+    be opened. It swallows every write so that ``sys.stdout``/``sys.stderr`` are
+    never None -- otherwise a plain ``sys.stderr.write(...)`` later in startup
+    (e.g. in run_browser) would raise AttributeError and kill the windowless
+    launcher before anything appeared."""
+
+    def write(self, *_a, **_k):
+        return 0
+
+    def flush(self):
+        pass
+
+
 def _install_crash_log():
     if sys.stdout is not None and sys.stderr is not None:
         return
+    # pythonw gives no console, so the missing stream(s) are None. Point them at
+    # the crash log if we can; if even that fails, use an inert sink so the
+    # streams are guaranteed non-None (no AttributeError on a later write).
     try:
         stream = open(CRASH_LOG_PATH, "a", buffering=1, encoding="utf-8")
     except OSError:
-        return
+        stream = _NullStream()
     if sys.stdout is None:
         sys.stdout = stream
     if sys.stderr is None:
@@ -1597,10 +1615,13 @@ class Api(object):
         }
 
     def _run_resetdb(self, project, env):
+        # CREATE_NO_WINDOW so the resetdb child never flashes its own console when
+        # this launcher runs windowless under pythonw (the browser-mode .vbs). Its
+        # stdio is fully piped here, so no console is needed. No-op off Windows.
         proc = subprocess.Popen(
             core.resetdb_command(), cwd=project, env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True,
+            text=True, creationflags=core._no_window_flags(),
         )
         try:
             proc.stdin.write("y\n")
