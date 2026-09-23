@@ -5594,6 +5594,18 @@ class LaunchBriefingDialog(object):
                 _copyable_line(linkrow, fonts, template).grid(
                     row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
+        # The welcome_page_ok=1 explainer: this per-seat link is THE one to
+        # document / put on the lab PCs, it skips oTree 6's Welcome page (zero
+        # clicks), and it just shows a self-advancing wait page until the room
+        # session is created. Text comes from core so both launchers match.
+        welcome_note = briefing.get("welcome_note", "")
+        if welcome_note:
+            tk.Label(summary, text=welcome_note, bg=COLORS["card"], fg=COLORS["muted"],
+                     font=fonts.small, anchor="w", justify="left",
+                     wraplength=self.WRAP - 10).grid(row=sr, column=0, sticky="ew",
+                                                     pady=(0, 8))
+            sr += 1
+
         # Dashboard login: collapsed by default, so the username/password are not
         # on screen until asked for (the password stays masked behind Show).
         if admin_username or admin_password:
@@ -6414,12 +6426,13 @@ class RoomPickerDialog(object):
                  anchor="w", justify="left", wraplength=440,
                  text=("Rooms marked \"with participant PC links\" are the ones the lab computers "
                        "are already set up for: their desktop shortcuts open "
-                       "http://HOST:8000/room/ROOM?participant_label=SEAT, so participants can "
-                       "join straight from the lab PCs. Right now that is the %r room, "
-                       "highlighted in the list below.\n\n"
+                       "http://HOST:8000/room/ROOM?participant_label=SEAT&welcome_page_ok=1, so "
+                       "participants can join straight from the lab PCs. Right now that is the %r "
+                       "room, highlighted in the list below.\n\n"
                        "If you pick a room WITHOUT participant PC links, the desktop shortcuts do "
                        "not point at it, so the lab PCs will not open it on their own. You would "
-                       "then have to open the correct /room/YOURROOM?participant_label=SEAT link "
+                       "then have to open the correct "
+                       "/room/YOURROOM?participant_label=SEAT&welcome_page_ok=1 link "
                        "on each computer yourself." % DEFAULT_ROOM_NAME)
                  ).pack(fill="x", padx=10, pady=8)
         self.info.grid(row=2, column=0, sticky="ew", pady=(0, 8))

@@ -1707,7 +1707,7 @@ function renderRoomPicker(rooms,loading,note){
   openModal("Choose the room to serve",
     '<div style="display:flex;justify-content:flex-end;margin:-8px 0 6px"><button class="i-btn" onclick="toggleRoomInfo()">i</button></div>'+
     '<div class="info-panel" id="roomInfo" hidden>The lab desktop shortcuts open a per-machine link like '+
-      '<code>http://HOST:8000/room/'+escapeHtml(labDefault)+'?participant_label=B3</code>, so every computer is a known fixed seat with a presence board. '+
+      '<code>http://HOST:8000/room/'+escapeHtml(labDefault)+'?participant_label=B3&welcome_page_ok=1</code>, so every computer is a known fixed seat with a presence board. '+
       'Only change the room if the computers will open a different room’s link.</div>'+
     '<p class="modal-desc">The '+escapeHtml(labDefault)+' room is the lab default: the lab computers’ desktop shortcuts open its participant PC links. Only change it if the computers will open a different room’s link.</p>'+
     '<button class="btn-launch room-primary" onclick="useStudyRoom()">Use '+escapeHtml(labDefault)+' (lab default) with participant PC links</button>'+
@@ -2008,7 +2008,9 @@ function briefingSummaryHtml(b){
       '<button class="btn tiny" onclick="blCopyLink(this)">Copy link</button></div>';
   };
   var linkLabel=b.open_room?"Each participant computer opens":"Per-seat link (replace SEAT with the seat number)";
-  var link=b.open_room?loc:(loc+'?participant_label=SEAT');
+  /* Every per-seat link carries welcome_page_ok=1 so oTree 6 admits the seat
+     with no Welcome-page click. The open-room link has no seat and no flag. */
+  var link=b.open_room?loc:(loc+'?participant_label=SEAT&welcome_page_ok=1');
   /* 1. top line: the Lab + (i). The (i) folds in what the lab is, Server and Room. */
   html+='<details class="bl-lab" id="blLab"'+(window._blInfoOpen?' open':'')+' ontoggle="window._blInfoOpen=this.open">'+
     '<summary title="About this lab, server and room"><span class="bl-labname">'+escapeHtml(b.lab_label)+'</span>'+
@@ -2035,6 +2037,11 @@ function briefingSummaryHtml(b){
     html+='<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
     html+=linkRow(linkLabel,link);
   }
+  /* The welcome_page_ok=1 explainer: THE link to document / put on the lab PCs,
+     it skips oTree 6's Welcome page (zero clicks), and it just shows a
+     self-advancing wait page until the room session is created. Text from core
+     (welcome_note) so both launchers match. */
+  if(b.welcome_note)html+='<p class="bl-linklabel" style="font-weight:400;color:var(--muted)">'+escapeHtml(b.welcome_note)+'</p>';
   /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
   html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
     '<div class="creds-box"><p class="intro">The dashboard should open already logged in. If the browser DOES ask, type or paste:</p>'+

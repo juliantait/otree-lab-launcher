@@ -801,7 +801,7 @@ def build_url(cfg, lab_presets=None):
     to the admin /rooms list when no room is resolvable. If the user set an
     explicit `page` other than the default, that page is respected. This does
     NOT change the per-seat participant links the launcher tells staff to open on
-    the lab PCs (those stay /room/<name>?participant_label=SEAT).
+    the lab PCs (those stay /room/<name>?participant_label=SEAT&welcome_page_ok=1).
     """
     c = normalize_config(cfg)
     host = resolve_host(c, lab_presets)
@@ -3413,9 +3413,25 @@ def open_dashboard_authenticated(host, port, room, username, password,
 CAUTION_TEXT = ("Caution: shared lab database. It may be reset between sessions. "
                 "Download your data as soon as the experiment finishes.")
 
+# oTree 6 shows a Welcome/Start page on a bare room seat link, which needs a
+# click before the participant is admitted. Appending this flag makes oTree
+# admit the seat straight into the experiment with zero clicks (verified
+# empirically), so it is part of EVERY per-seat link the launcher builds, shows
+# or documents. See WELCOME_NOTE for the wording shown to lab staff.
+WELCOME_FLAG = "welcome_page_ok=1"
+
+# What the launch briefing tells staff about the per-seat link. Kept in one place
+# so the Tk popup, the web popup and the docs all say the same thing.
+WELCOME_NOTE = ("This exact link (with welcome_page_ok=1) is THE link to put in "
+                "all lab documentation and on the lab computers. welcome_page_ok=1 "
+                "skips oTree 6's Welcome/Start page, so each seat auto-admits with "
+                "no click. Create the room session first: until it exists the link "
+                "shows a wait page that advances on its own the moment the session "
+                "opens (no re-click needed).")
+
 
 # Rooms whose per-seat participant links the lab PCs' desktop shortcuts open
-# (http://HOST:PORT/room/ROOM?participant_label=SEAT). The lab-shortcut room is
+# (http://HOST:PORT/room/ROOM?participant_label=SEAT&welcome_page_ok=1). The lab-shortcut room is
 # per-lab now (a lab's ``default_room``); this tuple is only the fallback used
 # when no lab room is supplied. See _ai/ROOM_PARTICIPANT_LINKS_NOTE.md.
 PARTICIPANT_LINK_ROOMS = (DEFAULT_ROOM_NAME,)
@@ -3495,7 +3511,12 @@ def launch_briefing(cfg, lab_presets=None):
 
     def link(seat):
         base = "http://%s:%s/room/%s" % (host, port, room)
-        return base if not seat else base + "?participant_label=%s" % seat
+        # Every per-seat link carries welcome_page_ok=1 so oTree 6 admits the
+        # seat with no Welcome-page click. The open-room link has no seat and no
+        # such flag.
+        if not seat:
+            return base
+        return base + "?participant_label=%s&%s" % (seat, WELCOME_FLAG)
 
     caution = (c["db_mode"] == DB_MODE_LAB)
     # A room with participant PC links has a lab desktop shortcut (which encodes
@@ -3525,6 +3546,9 @@ def launch_briefing(cfg, lab_presets=None):
         "shortcut_label": shortcut_label,
         "caution": caution,
         "caution_text": CAUTION_TEXT if caution else "",
+        # Guidance for staff about the per-seat link: it already includes
+        # welcome_page_ok=1, and this is the link to document / put on the PCs.
+        "welcome_note": WELCOME_NOTE,
     }
 
 

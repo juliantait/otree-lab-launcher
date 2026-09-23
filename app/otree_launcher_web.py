@@ -1140,8 +1140,10 @@ class Api(object):
         A pure description: it starts nothing. The web UI shows this in a
         confirmation modal and only calls ``launch`` after an explicit OKAY.
         The behaviour described is the real, verified one: the lab machines
-        open a per-seat link ``http://HOST:PORT/room/ROOM?participant_label=SEAT``
-        (always active), and a participant arriving turns their seat from a grey
+        open a per-seat link
+        ``http://HOST:PORT/room/ROOM?participant_label=SEAT&welcome_page_ok=1``
+        (always active; welcome_page_ok=1 skips oTree 6's Welcome page so the
+        seat auto-admits), and a participant arriving turns their seat from a grey
         to a green presence badge on the monitor. If the room the researcher
         chose is NOT the ``study`` room the desktop shortcuts point at, that is
         flagged so they know the computers must open the chosen room's link

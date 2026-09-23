@@ -86,14 +86,19 @@ Room layouts (the top-down seat maps the launcher draws) live in `data/maps/`. E
 Each lab PC opens its own fixed link:
 
 ```
-http://HOST:8000/room/study?participant_label=SEAT
+http://HOST:8000/room/study?participant_label=SEAT&welcome_page_ok=1
 ```
 
 - `HOST` is the machine that launches the session (the one running the launcher).
 - `study` is the room.
 - `SEAT` is that computer's seat label.
+- `welcome_page_ok=1` skips oTree 6's Welcome/Start page, so the seat auto-admits with no click.
+
+**This exact URL (with `welcome_page_ok=1`) is the link to put in all lab documentation and on the lab computers.** Without the flag, oTree 6 first shows a Welcome/Start page that needs a click; with it, opening the link drops the participant straight into the experiment.
 
 Each link is always active. Put the correct link on each desktop once: set it as the browser homepage, or save it as a bookmark, one seat per machine. Do this once per lab and you never touch it again.
+
+One caveat: the room session must be created first. Before it exists the link shows a wait page, which advances on its own the moment the session opens — no need to re-click or refresh.
 
 When a participant opens their machine's link, that seat flips from grey to green on the experimenter's monitor. That is how the consistent links track who's who in practice: one machine, one seat, always the same person's spot.
 
@@ -102,7 +107,7 @@ When a participant opens their machine's link, that seat flips from grey to gree
 The desktop shortcuts point at the `study` room. If a study uses a different room, the links must point at that room instead:
 
 ```
-http://HOST:8000/room/THEIRROOM?participant_label=SEAT
+http://HOST:8000/room/THEIRROOM?participant_label=SEAT&welcome_page_ok=1
 ```
 
 The launch confirmation popup warns you about this when the chosen room is not `study`, and shows the correct link to use.
