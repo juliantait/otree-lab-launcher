@@ -16,7 +16,12 @@ Two versions, same app:
 - **Simple** - Tkinter launcher.
 - **Web** - a prettier UI over the same app.
 
-Runs on macOS (the `Mac_...command` files) and Windows (the `Win_...vbs` files). Both run the app code in `app/`; use whichever you prefer.
+Runs on macOS (the `Mac_...command` files) and Windows (the `Win_...` files). Both run the app code in `app/`; use whichever you prefer.
+
+On Windows each launcher comes in two flavors:
+
+- **`.vbs` (windowless)** - a clean, no-console start. Double-click it for normal lab use.
+- **`.bat` (visible terminal)** - the same launcher, but it opens a console window so you can watch the logs and see any crash. Use it for first-time setup or troubleshooting. The window stays open on exit so errors are readable.
 
 ## Quick start
 
@@ -40,10 +45,12 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
 
 ```
 <repo root>/
-  Mac_Start oTree Lab Launcher.command            (Simple, macOS)
-  Win_Start oTree Lab Launcher.vbs                (Simple, Windows)
-  Mac_Start oTree Lab Launcher (web).command      (Web, macOS)
-  Win_Start oTree Lab Launcher (web).vbs          (Web, Windows)
+  Mac_Start oTree Lab Launcher.command                  (Simple, macOS)
+  Win_Start oTree Lab Launcher.vbs                       (Simple, Windows, windowless)
+  Win_Start oTree Lab Launcher (terminal).bat           (Simple, Windows, visible terminal)
+  Mac_Start oTree Lab Launcher (web).command            (Web, macOS)
+  Win_Start oTree Lab Launcher (web).vbs                 (Web, Windows, windowless)
+  Win_Start oTree Lab Launcher (web, terminal).bat      (Web, Windows, visible terminal)
   app/    the app code
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```
