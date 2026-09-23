@@ -103,51 +103,30 @@ SEAT_ENV_KEYS = ("OTREE_LAB_LABEL_FILE", "OTREE_LAB_ROOM_NAME")
 MASK_CHAR = "•"
 MASKED_PASSWORD = MASK_CHAR * 8
 
-DEFAULT_CONFIG = {
-    "project_path": "",
-    "db_mode": DB_MODE_LAB,
-    "db_name": core.LAB_DB["db_name"],
-    "db_user": core.LAB_DB["db_user"],
-    "db_password": core.LAB_DB["db_password"],
-    "db_host": core.LAB_DB["db_host"],
-    "db_port": core.LAB_DB["db_port"],
-    "admin_username": core.DEFAULT_ADMIN_USERNAME,
-    "admin_password": core.DEFAULT_ADMIN_PASSWORD,
-    "production": True,
-    "auth_level": "STUDY",
-    "lab": core.DEFAULT_LAB_ID,
-    "custom_host": "",
-    "port": "8000",
-    "page": "/rooms",
-    "resetdb": True,
-    "open_browser": True,
-    "wait_seconds": 2,
-    "room_name": DEFAULT_ROOM_NAME,
-    "seat_mode": SEAT_DEFAULT,
-    "seat_excluded": [],
-    "seat_file": "",
-}
+# The Tk launcher now SHARES core's config model rather than keeping its own copy
+# (fable review item 10, step 1): DEFAULT_CONFIG IS core.DEFAULT_CONFIG (the same
+# object, not a copy) and FIELD_KEYS IS core.FIELD_KEYS. core.reload_lab_info /
+# core.apply_default_database update that one dict in place, so the Tk defaults
+# track lab_info.json / the chosen lab-shared database with no separate refresh,
+# and the old wait_seconds 2-vs-5 drift between the two faces (which made a
+# Tk-saved config report phantom "unsaved changes" in the web one-click shortcut,
+# item 2) is gone. auto_login (item 1) rides along because it is in core's model.
+DEFAULT_CONFIG = core.DEFAULT_CONFIG
 
 # The user-editable settings of a config.  Anything outside this list
 # (name, created, last_run, plus keys written by a future version) is
 # metadata and is never compared or overwritten.
-FIELD_KEYS = tuple(DEFAULT_CONFIG.keys())
+FIELD_KEYS = core.FIELD_KEYS
 
 
 def refresh_defaults_from_core():
-    """Re-pull the database/admin/lab defaults from core after lab_info.json is
-    (re)loaded, used once the first-run wizard has written the file so the app
-    picks up the real values without a restart."""
-    DEFAULT_CONFIG.update({
-        "db_name": core.LAB_DB["db_name"],
-        "db_user": core.LAB_DB["db_user"],
-        "db_password": core.LAB_DB["db_password"],
-        "db_host": core.LAB_DB["db_host"],
-        "db_port": core.LAB_DB["db_port"],
-        "admin_username": core.DEFAULT_ADMIN_USERNAME,
-        "admin_password": core.DEFAULT_ADMIN_PASSWORD,
-        "lab": core.DEFAULT_LAB_ID,
-    })
+    """Retained no-op for its existing callers.
+
+    DEFAULT_CONFIG is now the SAME object as core.DEFAULT_CONFIG (see above), and
+    core.reload_lab_info / core.apply_default_database update it in place, so the
+    Tk defaults already reflect any lab_info.json / default-database change with
+    nothing to re-pull here. Kept so the call sites (main, dialogs) stay valid."""
+    return
 
 # Environment variables this launcher owns.  Listed so the log can name them.
 DB_ENV_KEYS = ("DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DATABASE_URL")
@@ -994,6 +973,380 @@ def export_bat_text(cfg, name="config"):
 # Look
 # ---------------------------------------------------------------------------
 
+# On Windows the windowless launcher runs under pythonw.exe (no console), so a
+# startup crash before the GUI appears would be invisible. This is the safety
+# net: point stdout/stderr at a log file and record any unhandled startup
+# exception there. A normal run with a real console is left untouched (the
+# Activity Log panel shows runtime output there). The log lives in the app's
+# data/ folder like everything else the launcher writes, and falls back to the
+# user's home folder only if data/ cannot be created or written.
+_CRASH_LOG_RESOLVED = None
+
+
+def _resolve_crash_log_path():
+    """data/otree-lab-launcher.log, created on demand; falls back to
+    ~/otree-lab-launcher.log only if data/ cannot be created or written.
+    Resolved once and cached so every writer agrees on one path."""
+    global _CRASH_LOG_RESOLVED
+    if _CRASH_LOG_RESOLVED is not None:
+        return _CRASH_LOG_RESOLVED
+    data_target = os.path.join(data_dir(), "otree-lab-launcher.log")
+    try:
+        os.makedirs(data_dir(), exist_ok=True)
+        with open(data_target, "a", encoding="utf-8"):
+            pass
+        _CRASH_LOG_RESOLVED = data_target
+    except OSError:
+        _CRASH_LOG_RESOLVED = os.path.join(
+            os.path.expanduser("~"), "otree-lab-launcher.log")
+    return _CRASH_LOG_RESOLVED
+
+
+def _install_crash_log():
+    """Redirect stdout/stderr to the crash log when they are missing.
+
+    Under pythonw both are ``None``; a stray ``print`` would then raise. We only
+    touch a stream that is ``None`` so a normal console launch is unaffected.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        stream = open(_resolve_crash_log_path(), "a", buffering=1, encoding="utf-8")
+    except OSError:
+        return
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
+def _log_startup_crash(exc):
+    try:
+        import traceback
+        with open(_resolve_crash_log_path(), "a", encoding="utf-8") as fh:
+            fh.write("\n" + "=" * 60 + "\n")
+            fh.write("otree_lab_launcher startup crash %s\n"
+                     % _dt.datetime.now().isoformat())
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=fh)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Headless run (--run "<config>"): the live one-click shortcut's entry point.
+# Loads a SAVED config from presets.json and runs the SAME launch sequence the
+# GUI runs (env + DATABASE_URL + room + label file, resetdb, prodserver in its
+# own terminal, then the authenticated dashboard open) with NO Tk window built.
+# The launch logic itself is the shared code (build_env / prepare_label_file /
+# resetdb_command / build_server_launch / core.open_dashboard_authenticated);
+# this only drives it without a UI.
+# ---------------------------------------------------------------------------
+
+
+def _hlog(msg):
+    """Print one headless-run progress line to stdout AND mirror it to the log.
+
+    Under ``pythonw`` (the Windows no-console shortcut) ``_install_crash_log``
+    has already pointed stdout at the crash log, so ``print`` alone lands in the
+    log; we only append a second copy when stdout is a separate real console, to
+    avoid duplicating every line into the file.
+    """
+    try:
+        print(msg, flush=True)
+    except (OSError, ValueError):
+        pass
+    try:
+        crash_log = _resolve_crash_log_path()
+        if getattr(sys.stdout, "name", None) != crash_log:
+            with open(crash_log, "a", encoding="utf-8") as fh:
+                fh.write(msg + "\n")
+    except OSError:
+        pass
+
+
+def _headless_resetdb(path, env):
+    """Run ``otree resetdb`` (answering the y) and stream its output. Returns the
+    exit code, or ``None`` if it could not be started."""
+    command = resetdb_command()
+    _hlog("$ " + " ".join(command) + '     (answering "y" on stdin)')
+    kwargs = {}
+    if sys.platform.startswith("win"):
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    try:
+        process = subprocess.Popen(
+            command, cwd=path, env=env, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            universal_newlines=True, bufsize=1, **kwargs)
+    except OSError as error:
+        _hlog("Could not run otree resetdb: %s" % error)
+        return None
+    try:
+        process.stdin.write("y\n")
+        process.stdin.flush()
+        process.stdin.close()
+    except (OSError, ValueError):
+        pass
+    for line in process.stdout:
+        line = line.rstrip()
+        if line:
+            _hlog(line)
+    return process.wait()
+
+
+def _headless_start_server(cfg, path, env):
+    """Start ``otree prodserver`` in its own terminal, exactly as the GUI does
+    (via build_server_launch). Returns ``(ok, process)``: ``ok`` is True on a
+    successful spawn; ``process`` is the linux-background child (so the caller can
+    surface an early exit) or None on the terminal paths / on failure."""
+    spec = build_server_launch(cfg, path, env)
+    _hlog("Starting the server in a %s." % spec["description"])
+    _hlog("$ " + " ".join(spec["cmd"][:2]) + (" ..." if len(spec["cmd"]) > 2 else ""))
+    kwargs = {"cwd": path, "env": env}
+    if spec["creationflags"]:
+        kwargs["creationflags"] = spec["creationflags"]
+    process = None
+    try:
+        if spec["kind"] == "linux-background":
+            process = subprocess.Popen(
+                spec["cmd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                universal_newlines=True, bufsize=1, **kwargs)
+            threading.Thread(
+                target=lambda: [_hlog(l.rstrip()) for l in process.stdout if l.rstrip()],
+                daemon=True).start()
+        else:
+            subprocess.Popen(spec["cmd"], **kwargs)
+    except OSError as error:
+        _hlog("Could not start otree prodserver: %s" % error)
+        return False, None
+    _hlog("otree prodserver started.")
+    return True, process
+
+
+def _headless_startup_failure_message(process=None):
+    """Message logged when a headless prodserver never became ready: point at the
+    server terminal window (real traceback) and surface an early child exit when
+    the linux-background handle shows one."""
+    base = ("ERROR: the oTree server did not become ready — it may have crashed on "
+            "startup (a missing project, a database error, or the port already in "
+            "use). Nothing was marked as launched. Check the server terminal window "
+            "for the real error.")
+    try:
+        if process is not None:
+            code = process.poll()
+            if code is not None:
+                base += " (The server process already exited with code %s.)" % code
+    except Exception:
+        pass
+    return base
+
+
+def headless_run(config_name, store_path=None):
+    """Launch a SAVED config by name with no UI. Returns a process exit code.
+
+    ``0`` means the server was started and the dashboard was opened. A missing
+    config name is a loud, non-zero failure (so a broken shortcut is obvious, not
+    a silent no-op): it lists the available config names on stderr and returns 2.
+    """
+    store_path = store_path or presets_path()
+    presets, store_extra = load_store(store_path)
+    # This machine's lab identity configures the built-in default's lab AND its
+    # room (from that lab's default_room), exactly as at GUI startup, so a shortcut
+    # for the built-in "Lab default" re-derives the room the lab uses instead of
+    # leaving the code default (fable review item 9). lab_presets is resolved
+    # first so apply_lab_marker can read the room; user configs are untouched.
+    lab_presets = core.lab_presets_from_store(store_extra)
+    apply_lab_marker(presets, lab_presets=lab_presets)
+
+    wanted = str(config_name or "").strip()
+    match = None
+    for preset in presets:
+        if str(preset.get("name", "")).strip() == wanted:
+            match = preset
+            break
+    if match is None:
+        names = [str(p.get("name", "")).strip() for p in presets
+                 if str(p.get("name", "")).strip()]
+        sys.stderr.write('ERROR: no saved config named "%s" in %s.\n' % (wanted, store_path))
+        if names:
+            sys.stderr.write("Available configs:\n")
+            for name in names:
+                sys.stderr.write("  - %s\n" % name)
+        else:
+            sys.stderr.write("There are no saved configs yet. Open the launcher and "
+                             "save one first.\n")
+        sys.stderr.flush()
+        return 2
+
+    cfg = normalize_config(match)
+    _hlog("=" * 60)
+    _hlog('%s headless run of saved config "%s"' % (APP_NAME, wanted))
+    _hlog("Started %s" % _dt.datetime.now().isoformat(timespec="seconds"))
+
+    path = cfg["project_path"].strip()
+    if not path or not os.path.isdir(path):
+        _hlog("ERROR: the config's project folder does not exist: %r" % path)
+        return 3
+    _hlog("Project folder: %s" % path)
+
+    # 1. Settle the participant seat / label file for this run.
+    try:
+        label_file, note = core.prepare_label_file(cfg, wanted, lab_presets)
+    except OSError as error:
+        _hlog("ERROR: could not write the seat file: %s" % error)
+        return 4
+    _hlog(note)
+
+    # 2. Resolve the environment (DATABASE_URL, admin/auth, room + label file).
+    env = build_env(cfg, label_file=label_file)
+    keys = launcher_env_keys(cfg, label_file=label_file)
+    _hlog("Environment variables set for this run: %s" % ", ".join(keys))
+    for key in keys:
+        _hlog("    %s = %s" % (key, describe_env_value(key, env.get(key, ""))))
+    if cfg["db_mode"] == DB_MODE_NONE:
+        _hlog("    DATABASE_URL is not set at all, so oTree uses its own default.")
+
+    # 3. Reset the database if the config asks for it.
+    if cfg["resetdb"]:
+        code = _headless_resetdb(path, env)
+        if code is None:
+            return 5
+        if code != 0:
+            _hlog("ERROR: otree resetdb exited with code %d; the server was not started."
+                  % code)
+            return 5
+        _hlog("otree resetdb finished with exit code 0.")
+    else:
+        _hlog("Reset database is off, so otree resetdb was skipped.")
+
+    # 4. Start the server in its own terminal window (the wanted Launch terminal).
+    ok, server_proc = _headless_start_server(cfg, path, env)
+    if not ok:
+        return 6
+
+    # 5. Open the admin dashboard already authenticated (auto-login on by default,
+    #    the GUI default), via the SAME core entry point the GUI uses. The open
+    #    also polls readiness and now RETURNS whether the server actually came up.
+    use_auto = cfg.get("auto_login", True)
+    if cfg["open_browser"]:
+        _hlog("Waiting for the server to respond, then opening the dashboard.")
+        # block_relay=True: this headless process exits the instant we return, so
+        # wait for the one-shot cookie relay to actually serve the browser (bounded
+        # by its idle_timeout) before exiting -- otherwise the daemon relay thread
+        # dies before the browser connects and Safari shows "cannot connect to
+        # localhost:<port>". The GUI/web paths leave block_relay at its default.
+        result = core.open_dashboard_authenticated(
+            core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
+            cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
+            block_relay=True,
+            on_wait=lambda s: _hlog("Still waiting for the server to respond (%d s)…" % s))
+        server_ready = bool(result.get("server_ready"))
+        if result.get("method") == "cookie":
+            _hlog("Opened the dashboard already logged in (auto-login: form-login + "
+                  "cookie relay): %s" % result.get("monitor_url"))
+        else:
+            _hlog("Opened the dashboard login page: %s" % result.get("monitor_url"))
+            _hlog("    %s" % result.get("reason", ""))
+    else:
+        monitor_url = "http://%s:%s%s" % (
+            core.AUTOLOGIN_HOST, cfg["port"], core.room_monitor_path(cfg["room_name"]))
+        _hlog("Open in browser is off. Confirming the server is up. The monitor page "
+              "would be %s" % monitor_url)
+        server_ready = core.wait_for_server(
+            core.AUTOLOGIN_HOST, cfg["port"],
+            on_wait=lambda s: _hlog("Still waiting for the server to respond (%d s)…" % s))
+
+    if not server_ready:
+        # A startup crash / missing project / port race: prodserver never
+        # answered. Do NOT stamp last_run; report the honest failure and a non-zero
+        # exit so a broken one-click shortcut is obvious. Fail-soft: a page may
+        # already be open (manual fallback), so the operator can still retry.
+        _hlog(_headless_startup_failure_message(server_proc))
+        return 7
+
+    # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
+    # but ONLY now that the server is confirmed ready, and NEVER for the built-in
+    # Lab default (it is a launch TEMPLATE, not a saved config -- Job 2).
+    if not is_builtin(match):
+        try:
+            match["last_run"] = core.now_iso()
+            save_store(presets, store_extra, store_path)
+        except OSError:
+            pass
+
+    _hlog("Done. The server keeps running in its own window.")
+    return 0
+
+
+def _cli_config_name(argv):
+    """The name after ``--run`` on the command line, or None for the GUI.
+
+    Kept deliberately tiny so no UI is imported to decide it. Accepts both
+    ``--run "Name"`` and ``--run=Name``.
+    """
+    for index, token in enumerate(argv):
+        if token == "--run":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--run="):
+            return token[len("--run="):]
+    return None
+
+
+def _notify_headless_failure(message):
+    """Show ONE native message box on a headless one-click failure, so a
+    windowless (pythonw) shortcut failure is not silent (fable review item 9).
+    Windows: ctypes MessageBoxW; macOS: osascript 'display alert'; otherwise a
+    stderr line. Never raises."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, str(message),
+                                             "oTree Lab Launcher", 0x10)  # MB_ICONERROR
+            return
+        if sys.platform == "darwin":
+            script = ('display alert "oTree Lab Launcher" message %s as critical'
+                      % core._applescript_string(str(message)))
+            subprocess.run(["osascript", "-e", script],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    except Exception:
+        pass
+    try:
+        sys.stderr.write(str(message) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Headless one-click shortcut dispatch, placed ABOVE the module-level tkinter
+# import below, so a ``--run "<config>"`` shortcut runs and exits WITHOUT ever
+# importing tkinter -- it builds no window, so it must work on a Python that has
+# no Tk (fable review item 9). A normal GUI launch falls through to the tkinter
+# import and the bottom-of-file main() dispatch.
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    _install_crash_log()
+    _run_name = _cli_config_name(sys.argv[1:])
+    if _run_name is not None:
+        try:
+            _code = headless_run(_run_name)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - report, don't vanish silently
+            _log_startup_crash(exc)
+            _notify_headless_failure(
+                "The oTree Lab Launcher one-click shortcut failed to start: %s: %s"
+                % (type(exc).__name__, exc))
+            sys.stderr.write("Headless run failed: %s: %s\n" % (type(exc).__name__, exc))
+            sys.exit(1)
+        if _code != 0:
+            _notify_headless_failure(
+                "The oTree Lab Launcher one-click shortcut could not launch "
+                "(exit code %s). See the log for details:\n%s"
+                % (_code, _resolve_crash_log_path()))
+        sys.exit(_code)
+
+
 import tkinter as tk  # noqa: E402  (kept below the logic so tests import cheaply)
 from tkinter import filedialog, messagebox, ttk  # noqa: E402
 from tkinter import font as tkfont  # noqa: E402
@@ -1620,6 +1973,10 @@ class LauncherApp(object):
         # on the same thread does not deadlock. See _mutate_store / _persist.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = load_store(self.store_path)
+        # presets.json mtime at load, so _mutate_store can detect another process
+        # (the headless one-click shortcut) writing the store and merge its change
+        # in before re-applying ours (cross-process lost-update guard, item 11).
+        self._store_mtime = self._store_mtime_now()
         # Resolve WHICH database is the lab-shared default from the store's
         # default_database reference, so core.LAB_DB (what every DB_MODE_LAB launch
         # uses) points at the chosen database -- the setup-wizard DB by default, or
@@ -2125,8 +2482,11 @@ class LauncherApp(object):
         header.add(auth_part, gap=10)
         header.add(middle_dot(), gap=10, separator=True)
 
-        # (c) Auto login: unchanged, a plain tickbox.
-        self.auto_login = tk.BooleanVar(self.root, value=True)
+        # (c) Auto login: a plain tickbox, now bound to the config field
+        # var["auto_login"] (auto_login is a first-class config field, item 1), so
+        # it round-trips through save/load and marks the config dirty like any
+        # other field instead of a separate, never-saved BooleanVar.
+        self.auto_login = self.var["auto_login"]
         header.add(tk.Checkbutton(
             header, text="Auto login", variable=self.auto_login,
             bg=card_bg, fg=COLORS["text"], activebackground=card_bg,
@@ -3208,15 +3568,20 @@ class LauncherApp(object):
         # list, so it drops to an open room; a real lab pins the shortcut room and
         # comes with a seat list.
         if lab not in (LAB_CUSTOM, LAB_LOCAL):
-            if self.var["room_name"].get().strip() != DEFAULT_ROOM_NAME:
-                self.var["room_name"].set(DEFAULT_ROOM_NAME)
+            # Pin the room to THIS lab's own default_room, not a hardcoded "study",
+            # so clicking a lab whose default room differs sets the right room and
+            # keeps the "(lab default)" tag (fable review item 5).
+            room = core.lab_default_room(self.lab_presets, lab)
+            if self.var["room_name"].get().strip() != room:
+                self.var["room_name"].set(room)
             if self.var["seat_mode"].get() == SEAT_NONE:
                 self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_DEFAULT])
         elif lab == LAB_CUSTOM:
             self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_NONE])
-        else:  # LAB_LOCAL: keep the room the study default, but no seat board
-            if self.var["room_name"].get().strip() != DEFAULT_ROOM_NAME:
-                self.var["room_name"].set(DEFAULT_ROOM_NAME)
+        else:  # LAB_LOCAL: keep the room at the lab default, but no seat board
+            room = core.lab_default_room(self.lab_presets, lab)
+            if self.var["room_name"].get().strip() != room:
+                self.var["room_name"].set(room)
             self.seat_mode_label.set(SEAT_MODE_LABELS[SEAT_NONE])
         self._apply_lab_view()
 
@@ -3733,9 +4098,41 @@ class LauncherApp(object):
         save without deadlocking.
         """
         with self._store_lock:
+            # Cross-process lost-update guard: if another process wrote the store
+            # since our last save, merge its change in (identity-preserving) before
+            # applying ours, so e.g. a headless --run last_run stamp is not lost.
+            self._reconcile_store()
             result = mutate()
             save_store(self.presets, self.store_extra, self.store_path)
+            self._store_mtime = self._store_mtime_now()
             return result
+
+    def _store_mtime_now(self):
+        """The presets.json modification time, or None when it does not exist."""
+        try:
+            return os.path.getmtime(self.store_path)
+        except OSError:
+            return None
+
+    def _reconcile_store(self):
+        """Re-read the store and merge in another process's changes when the file
+        changed on disk since our last save (see core.merge_store_from_disk).
+        Called under the store lock at the top of _mutate_store."""
+        current = self._store_mtime_now()
+        if current is None or current == self._store_mtime:
+            return
+        try:
+            disk_presets, disk_extra = load_store(self.store_path)
+        except Exception:
+            return
+        self.presets, self.store_extra = core.merge_store_from_disk(
+            self.presets, self.store_extra, disk_presets, disk_extra)
+        # Keep the derived state consistent after adopting disk content: the live
+        # LAB_DB, the lab presets, and the app-owned built-in Lab default.
+        core.apply_default_database(self.store_extra)
+        self.lab_presets = core.lab_presets_from_store(self.store_extra)
+        apply_lab_marker(self.presets, lab_presets=self.lab_presets)
+        clear_builtin_last_run(self.presets)
 
     def _persist(self):
         # Lock-guarded so a background worker's stamp-and-save cannot serialise
@@ -4413,7 +4810,7 @@ class LauncherApp(object):
         if cfg["lab"] == LAB_CUSTOM and not cfg["custom_host"].strip():
             problems.append(
                 "Custom host is selected in section 3 but the address box is empty. Type an "
-                "address, or choose Small lab or Large lab.")
+                "address, or pick a lab.")
 
         # Seats are NEVER a hard block (Julian): no seat file / no default seats
         # falls back to the open (none) room. The ONLY genuine seat block is a
@@ -4571,7 +4968,9 @@ class LauncherApp(object):
             self.log("Waiting for the server to respond, then opening the dashboard.", "info")
             result = core.open_dashboard_authenticated(
                 core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
-                cfg["admin_username"], cfg["admin_password"], auto_login=use_auto)
+                cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
+                on_wait=lambda s: self.log(
+                    "Still waiting for the server to respond (%d s)…" % s, "muted"))
             if result["method"] == "cookie":
                 self.log("Opened the dashboard already logged in (auto-login: form-login + "
                          "cookie relay): %s" % result["monitor_url"], "ok")
@@ -4584,7 +4983,10 @@ class LauncherApp(object):
             # reporting success, so a crash is not mis-reported as "Launched".
             self.log("Open in browser is off. Confirming the server is up. The page would be %s"
                      % monitor_url, "muted")
-            ready = core.wait_for_server(core.AUTOLOGIN_HOST, cfg["port"])
+            ready = core.wait_for_server(
+                core.AUTOLOGIN_HOST, cfg["port"],
+                on_wait=lambda s: self.log(
+                    "Still waiting for the server to respond (%d s)…" % s, "muted"))
             result = {"ok": True, "method": "manual", "monitor_url": monitor_url,
                       "server_ready": ready}
 
@@ -4889,9 +5291,11 @@ class GetReadyDialog(object):
             "  •  the lab database  (DATABASES)\n"
             "  •  the admin login  (ADMIN_USERNAME / ADMIN_PASSWORD)\n"
             "  •  the access level  (AUTH_LEVEL) and DEBUG / production\n\n"
-            "A timestamped .bak copy of your settings.py is saved first. Every override "
-            "is guarded by the launcher's environment variables, so with no lab "
-            "environment set your project is byte-for-byte unchanged. It is fully "
+            "A timestamped .bak copy of your settings.py is saved first, right next to "
+            "it — that .bak is the ONLY file the launcher writes into your project "
+            "(its lock file lives in the launcher's own data folder, not here). Every "
+            "override is guarded by the launcher's environment variables, so with no "
+            "lab environment set your project is byte-for-byte unchanged. It is fully "
             "revertible: delete from the banner line to the end of settings.py.")
 
     def _toggle_info(self):
@@ -5456,6 +5860,13 @@ class LaunchBriefingDialog(object):
         self._issues = []
         self._fix_note = None
         self._launching = False
+        # Preflight (psycopg2 connect, a settings.py import subprocess, a psycopg2
+        # probe subprocess) is SLOW on a lab PC with the DB host down, so it runs
+        # OFF the Tk thread: the modal opens at once in a "checking" state and the
+        # issues are filled from a worker via _on_main (fable review item 8). A
+        # monotonically-increasing token lets a newer render supersede a slow one.
+        self._checking = False
+        self._issues_token = 0
         # The two "What will launch" reveals (the lab (i) details, the dashboard
         # login) start COLLAPSED, and keep their state across the in-place
         # re-renders an inline fix / re-check triggers.
@@ -5851,13 +6262,67 @@ class LaunchBriefingDialog(object):
         return link
 
     def _render_issues(self):
-        """(Re)build the issues area: every must-fix card first, then every
-        warning card, each with its inline fix button or a short hint. No banner,
-        no "launch anyway" here, that lives only in the bottom bar. Called again
-        after an inline fix or a re-check, so a resolved issue simply disappears."""
+        """Show a "checking" placeholder immediately, then compute the (possibly
+        slow) issues OFF the Tk thread and fill them in via _on_main, so the modal
+        never freezes while core.preflight connects to the DB / imports settings.py
+        on a slow lab PC (fable review item 8). Called again after an inline fix or
+        a re-check; a stale worker's result is discarded via the token."""
+        self._checking = True
+        self._issues_token += 1
+        token = self._issues_token
         for child in list(self.issues_frame.winfo_children()):
             child.destroy()
-        self._issues = list(self.gather_issues())
+        tk.Label(self.issues_frame, text="Checking your setup…", bg=COLORS["card"],
+                 fg=COLORS["muted"], font=self.fonts.small, anchor="w",
+                 justify="left").grid(row=0, column=0, sticky="ew", pady=(2, 6))
+        self._sync_issues_scroll()
+        self._render_action()
+
+        # The worker ONLY stores its result; the Tk main thread polls for it with
+        # after() and does all the widget work, so no Tk call is ever made from
+        # the worker thread (the RoomPickerDialog._start_enumerate pattern). A Tk
+        # call from a non-main thread does not reliably run, which is why the
+        # result must be handed back by polling, not by after() inside the worker.
+        self._issues_result = None
+
+        def work():
+            try:
+                issues = list(self.gather_issues())
+            except Exception:
+                issues = []
+            self._issues_result = (token, issues)
+
+        threading.Thread(target=work, name="preflight", daemon=True).start()
+        self._poll_issues(token)
+
+    def _poll_issues(self, token):
+        """Poll (on the Tk thread) for the worker's issues, then fill them in."""
+        if token != self._issues_token:
+            return
+        result = self._issues_result
+        if result is not None and result[0] == token:
+            self._issues_result = None
+            self._fill_issues(result[1], token)
+            return
+        try:
+            self.top.after(120, lambda: self._poll_issues(token))
+        except tk.TclError:
+            pass
+
+    def _fill_issues(self, issues, token):
+        """Render the issue cards computed by the worker, unless a newer render has
+        superseded this one (token mismatch) or the window has closed."""
+        if token != self._issues_token:
+            return
+        try:
+            if not self.top.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        self._checking = False
+        for child in list(self.issues_frame.winfo_children()):
+            child.destroy()
+        self._issues = list(issues)
         r = 0
         blocks = [i for i in self._issues if i.get("level") == "block"]
         warns = [i for i in self._issues if i.get("level") != "block"]
@@ -5874,6 +6339,14 @@ class LaunchBriefingDialog(object):
                      wraplength=450).grid(row=r, column=0, sticky="ew", pady=(2, 6))
             r += 1
         self._sync_issues_scroll()
+        # The bottom bar (Launch / Launch anyway / disabled) depends on the issue
+        # counts we just filled in, so re-render it now the real issues are known.
+        self._render_action()
+        try:
+            self.top.update_idletasks()
+            _center_on(self.parent, self.top)
+        except tk.TclError:
+            pass
 
     def _max_issues_height(self):
         """Tallest the issues area may grow before it scrolls: roughly three
@@ -6037,10 +6510,27 @@ class LaunchBriefingDialog(object):
         """
         for child in list(self.action.winfo_children()):
             child.destroy()
-        n_block = sum(1 for i in self._issues if i.get("level") == "block")
-        n_warn = sum(1 for i in self._issues if i.get("level") == "warn")
         tk.Frame(self.action, bg=COLORS["card_line"], height=1).grid(
             row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        # While the checks run off-thread, offer only Cancel and a disabled,
+        # "Checking…" Launch so nobody launches before the setup has been verified
+        # (fable review item 8).
+        if self._checking:
+            left = tk.Frame(self.action, bg=COLORS["card"])
+            left.grid(row=1, column=0, sticky="w")
+            ttk.Button(left, text="Cancel", command=self._close).pack(side="left")
+            tk.Label(self.action, text="Checking your setup…", bg=COLORS["card"],
+                     fg=COLORS["muted"], font=self.fonts.small,
+                     anchor="e").grid(row=1, column=1, sticky="e", padx=(0, 10))
+            tk.Button(self.action, text="Launch", state="disabled", relief="flat", bd=0,
+                      font=self.fonts.bold, bg=COLORS["field_off"], fg=COLORS["faint"],
+                      padx=16, pady=6, disabledforeground=COLORS["faint"],
+                      highlightthickness=1, highlightbackground=COLORS["card_line"],
+                      cursor="arrow").grid(row=1, column=2, sticky="e")
+            self.top.bind("<Return>", lambda _e: None)
+            return
+        n_block = sum(1 for i in self._issues if i.get("level") == "block")
+        n_warn = sum(1 for i in self._issues if i.get("level") == "warn")
         left = tk.Frame(self.action, bg=COLORS["card"])
         left.grid(row=1, column=0, sticky="w")
         ttk.Button(left, text="Cancel", command=self._close).pack(side="left")
@@ -6696,9 +7186,9 @@ class RoomPickerDialog(object):
                    command=self._toggle_info).grid(row=0, column=1, sticky="e")
 
         tk.Label(body,
-                 text="The study room is the lab default: the lab computers' desktop shortcuts "
+                 text="The %s room is the lab default: the lab computers' desktop shortcuts "
                       "open its participant PC links. Only change it if the computers will open a "
-                      "different room's link.",
+                      "different room's link." % self.lab_room,
                  bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small, anchor="w",
                  justify="left", wraplength=460).grid(row=1, column=0, sticky="ew", pady=(2, 8))
 
@@ -6716,7 +7206,7 @@ class RoomPickerDialog(object):
                        "not point at it, so the lab PCs will not open it on their own. You would "
                        "then have to open the correct "
                        "/room/YOURROOM?participant_label=SEAT&welcome_page_ok=1 link "
-                       "on each computer yourself." % DEFAULT_ROOM_NAME)
+                       "on each computer yourself." % self.lab_room)
                  ).pack(fill="x", padx=10, pady=8)
         self.info.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         self.info.grid_remove()
@@ -6725,8 +7215,8 @@ class RoomPickerDialog(object):
         # accent button so a user naturally picks it. The "with participant PC
         # links" wording lives ONLY here on the button, so it is clear why you
         # press it; the list row below just reads "study (lab default)".
-        tk.Button(body, text="Use %s (lab default) with participant PC links" % DEFAULT_ROOM_NAME,
-                  command=lambda: self._choose(DEFAULT_ROOM_NAME),
+        tk.Button(body, text="Use %s (lab default) with participant PC links" % self.lab_room,
+                  command=lambda: self._choose(self.lab_room),
                   font=fonts.bold, bg=COLORS["accent"], fg="#ffffff",
                   activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
                   relief="flat", padx=14, pady=10, cursor="hand2").grid(
@@ -7048,7 +7538,7 @@ class LabSettingsDialog(object):
                                                    padx=12, pady=(10, 2))
         tk.Label(presets_card,
                  text="Shown labs appear in the main lab selector. When only one lab is shown it "
-                      "is auto-selected. Small lab and Large lab are seeded from the lab constants.",
+                      "is auto-selected. Labs are seeded from lab_info.json.",
                  bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small, anchor="w",
                  justify="left", wraplength=560).grid(row=1, column=0, sticky="ew",
                                                       padx=12, pady=(0, 8))
@@ -7724,302 +8214,7 @@ def _clear_topmost(top):
         pass
 
 
-# On Windows the windowless launcher runs under pythonw.exe (no console), so a
-# startup crash before the GUI appears would be invisible. This is the safety
-# net: point stdout/stderr at a log file and record any unhandled startup
-# exception there. A normal run with a real console is left untouched (the
-# Activity Log panel shows runtime output there). The log lives in the app's
-# data/ folder like everything else the launcher writes, and falls back to the
-# user's home folder only if data/ cannot be created or written.
-_CRASH_LOG_RESOLVED = None
 
-
-def _resolve_crash_log_path():
-    """data/otree-lab-launcher.log, created on demand; falls back to
-    ~/otree-lab-launcher.log only if data/ cannot be created or written.
-    Resolved once and cached so every writer agrees on one path."""
-    global _CRASH_LOG_RESOLVED
-    if _CRASH_LOG_RESOLVED is not None:
-        return _CRASH_LOG_RESOLVED
-    data_target = os.path.join(data_dir(), "otree-lab-launcher.log")
-    try:
-        os.makedirs(data_dir(), exist_ok=True)
-        with open(data_target, "a", encoding="utf-8"):
-            pass
-        _CRASH_LOG_RESOLVED = data_target
-    except OSError:
-        _CRASH_LOG_RESOLVED = os.path.join(
-            os.path.expanduser("~"), "otree-lab-launcher.log")
-    return _CRASH_LOG_RESOLVED
-
-
-def _install_crash_log():
-    """Redirect stdout/stderr to the crash log when they are missing.
-
-    Under pythonw both are ``None``; a stray ``print`` would then raise. We only
-    touch a stream that is ``None`` so a normal console launch is unaffected.
-    """
-    if sys.stdout is not None and sys.stderr is not None:
-        return
-    try:
-        stream = open(_resolve_crash_log_path(), "a", buffering=1, encoding="utf-8")
-    except OSError:
-        return
-    if sys.stdout is None:
-        sys.stdout = stream
-    if sys.stderr is None:
-        sys.stderr = stream
-
-
-def _log_startup_crash(exc):
-    try:
-        import traceback
-        with open(_resolve_crash_log_path(), "a", encoding="utf-8") as fh:
-            fh.write("\n" + "=" * 60 + "\n")
-            fh.write("otree_lab_launcher startup crash %s\n"
-                     % _dt.datetime.now().isoformat())
-            traceback.print_exception(type(exc), exc, exc.__traceback__, file=fh)
-    except OSError:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Headless run (--run "<config>"): the live one-click shortcut's entry point.
-# Loads a SAVED config from presets.json and runs the SAME launch sequence the
-# GUI runs (env + DATABASE_URL + room + label file, resetdb, prodserver in its
-# own terminal, then the authenticated dashboard open) with NO Tk window built.
-# The launch logic itself is the shared code (build_env / prepare_label_file /
-# resetdb_command / build_server_launch / core.open_dashboard_authenticated);
-# this only drives it without a UI.
-# ---------------------------------------------------------------------------
-
-
-def _hlog(msg):
-    """Print one headless-run progress line to stdout AND mirror it to the log.
-
-    Under ``pythonw`` (the Windows no-console shortcut) ``_install_crash_log``
-    has already pointed stdout at the crash log, so ``print`` alone lands in the
-    log; we only append a second copy when stdout is a separate real console, to
-    avoid duplicating every line into the file.
-    """
-    try:
-        print(msg, flush=True)
-    except (OSError, ValueError):
-        pass
-    try:
-        crash_log = _resolve_crash_log_path()
-        if getattr(sys.stdout, "name", None) != crash_log:
-            with open(crash_log, "a", encoding="utf-8") as fh:
-                fh.write(msg + "\n")
-    except OSError:
-        pass
-
-
-def _headless_resetdb(path, env):
-    """Run ``otree resetdb`` (answering the y) and stream its output. Returns the
-    exit code, or ``None`` if it could not be started."""
-    command = resetdb_command()
-    _hlog("$ " + " ".join(command) + '     (answering "y" on stdin)')
-    kwargs = {}
-    if sys.platform.startswith("win"):
-        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-    try:
-        process = subprocess.Popen(
-            command, cwd=path, env=env, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True, bufsize=1, **kwargs)
-    except OSError as error:
-        _hlog("Could not run otree resetdb: %s" % error)
-        return None
-    try:
-        process.stdin.write("y\n")
-        process.stdin.flush()
-        process.stdin.close()
-    except (OSError, ValueError):
-        pass
-    for line in process.stdout:
-        line = line.rstrip()
-        if line:
-            _hlog(line)
-    return process.wait()
-
-
-def _headless_start_server(cfg, path, env):
-    """Start ``otree prodserver`` in its own terminal, exactly as the GUI does
-    (via build_server_launch). Returns ``(ok, process)``: ``ok`` is True on a
-    successful spawn; ``process`` is the linux-background child (so the caller can
-    surface an early exit) or None on the terminal paths / on failure."""
-    spec = build_server_launch(cfg, path, env)
-    _hlog("Starting the server in a %s." % spec["description"])
-    _hlog("$ " + " ".join(spec["cmd"][:2]) + (" ..." if len(spec["cmd"]) > 2 else ""))
-    kwargs = {"cwd": path, "env": env}
-    if spec["creationflags"]:
-        kwargs["creationflags"] = spec["creationflags"]
-    process = None
-    try:
-        if spec["kind"] == "linux-background":
-            process = subprocess.Popen(
-                spec["cmd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                universal_newlines=True, bufsize=1, **kwargs)
-            threading.Thread(
-                target=lambda: [_hlog(l.rstrip()) for l in process.stdout if l.rstrip()],
-                daemon=True).start()
-        else:
-            subprocess.Popen(spec["cmd"], **kwargs)
-    except OSError as error:
-        _hlog("Could not start otree prodserver: %s" % error)
-        return False, None
-    _hlog("otree prodserver started.")
-    return True, process
-
-
-def _headless_startup_failure_message(process=None):
-    """Message logged when a headless prodserver never became ready: point at the
-    server terminal window (real traceback) and surface an early child exit when
-    the linux-background handle shows one."""
-    base = ("ERROR: the oTree server did not become ready — it may have crashed on "
-            "startup (a missing project, a database error, or the port already in "
-            "use). Nothing was marked as launched. Check the server terminal window "
-            "for the real error.")
-    try:
-        if process is not None:
-            code = process.poll()
-            if code is not None:
-                base += " (The server process already exited with code %s.)" % code
-    except Exception:
-        pass
-    return base
-
-
-def headless_run(config_name, store_path=None):
-    """Launch a SAVED config by name with no UI. Returns a process exit code.
-
-    ``0`` means the server was started and the dashboard was opened. A missing
-    config name is a loud, non-zero failure (so a broken shortcut is obvious, not
-    a silent no-op): it lists the available config names on stderr and returns 2.
-    """
-    store_path = store_path or presets_path()
-    presets, store_extra = load_store(store_path)
-    # This machine's lab identity configures the built-in default's lab, exactly
-    # as it does at GUI startup; user configs are untouched.
-    apply_lab_marker(presets)
-    lab_presets = core.lab_presets_from_store(store_extra)
-
-    wanted = str(config_name or "").strip()
-    match = None
-    for preset in presets:
-        if str(preset.get("name", "")).strip() == wanted:
-            match = preset
-            break
-    if match is None:
-        names = [str(p.get("name", "")).strip() for p in presets
-                 if str(p.get("name", "")).strip()]
-        sys.stderr.write('ERROR: no saved config named "%s" in %s.\n' % (wanted, store_path))
-        if names:
-            sys.stderr.write("Available configs:\n")
-            for name in names:
-                sys.stderr.write("  - %s\n" % name)
-        else:
-            sys.stderr.write("There are no saved configs yet. Open the launcher and "
-                             "save one first.\n")
-        sys.stderr.flush()
-        return 2
-
-    cfg = normalize_config(match)
-    _hlog("=" * 60)
-    _hlog('%s headless run of saved config "%s"' % (APP_NAME, wanted))
-    _hlog("Started %s" % _dt.datetime.now().isoformat(timespec="seconds"))
-
-    path = cfg["project_path"].strip()
-    if not path or not os.path.isdir(path):
-        _hlog("ERROR: the config's project folder does not exist: %r" % path)
-        return 3
-    _hlog("Project folder: %s" % path)
-
-    # 1. Settle the participant seat / label file for this run.
-    try:
-        label_file, note = core.prepare_label_file(cfg, wanted, lab_presets)
-    except OSError as error:
-        _hlog("ERROR: could not write the seat file: %s" % error)
-        return 4
-    _hlog(note)
-
-    # 2. Resolve the environment (DATABASE_URL, admin/auth, room + label file).
-    env = build_env(cfg, label_file=label_file)
-    keys = launcher_env_keys(cfg, label_file=label_file)
-    _hlog("Environment variables set for this run: %s" % ", ".join(keys))
-    for key in keys:
-        _hlog("    %s = %s" % (key, describe_env_value(key, env.get(key, ""))))
-    if cfg["db_mode"] == DB_MODE_NONE:
-        _hlog("    DATABASE_URL is not set at all, so oTree uses its own default.")
-
-    # 3. Reset the database if the config asks for it.
-    if cfg["resetdb"]:
-        code = _headless_resetdb(path, env)
-        if code is None:
-            return 5
-        if code != 0:
-            _hlog("ERROR: otree resetdb exited with code %d; the server was not started."
-                  % code)
-            return 5
-        _hlog("otree resetdb finished with exit code 0.")
-    else:
-        _hlog("Reset database is off, so otree resetdb was skipped.")
-
-    # 4. Start the server in its own terminal window (the wanted Launch terminal).
-    ok, server_proc = _headless_start_server(cfg, path, env)
-    if not ok:
-        return 6
-
-    # 5. Open the admin dashboard already authenticated (auto-login on by default,
-    #    the GUI default), via the SAME core entry point the GUI uses. The open
-    #    also polls readiness and now RETURNS whether the server actually came up.
-    use_auto = cfg.get("auto_login", True)
-    if cfg["open_browser"]:
-        _hlog("Waiting for the server to respond, then opening the dashboard.")
-        # block_relay=True: this headless process exits the instant we return, so
-        # wait for the one-shot cookie relay to actually serve the browser (bounded
-        # by its idle_timeout) before exiting -- otherwise the daemon relay thread
-        # dies before the browser connects and Safari shows "cannot connect to
-        # localhost:<port>". The GUI/web paths leave block_relay at its default.
-        result = core.open_dashboard_authenticated(
-            core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
-            cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
-            block_relay=True)
-        server_ready = bool(result.get("server_ready"))
-        if result.get("method") == "cookie":
-            _hlog("Opened the dashboard already logged in (auto-login: form-login + "
-                  "cookie relay): %s" % result.get("monitor_url"))
-        else:
-            _hlog("Opened the dashboard login page: %s" % result.get("monitor_url"))
-            _hlog("    %s" % result.get("reason", ""))
-    else:
-        monitor_url = "http://%s:%s%s" % (
-            core.AUTOLOGIN_HOST, cfg["port"], core.room_monitor_path(cfg["room_name"]))
-        _hlog("Open in browser is off. Confirming the server is up. The monitor page "
-              "would be %s" % monitor_url)
-        server_ready = core.wait_for_server(core.AUTOLOGIN_HOST, cfg["port"])
-
-    if not server_ready:
-        # A startup crash / missing project / port race: prodserver never
-        # answered. Do NOT stamp last_run; report the honest failure and a non-zero
-        # exit so a broken one-click shortcut is obvious. Fail-soft: a page may
-        # already be open (manual fallback), so the operator can still retry.
-        _hlog(_headless_startup_failure_message(server_proc))
-        return 7
-
-    # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
-    # but ONLY now that the server is confirmed ready, and NEVER for the built-in
-    # Lab default (it is a launch TEMPLATE, not a saved config -- Job 2).
-    if not is_builtin(match):
-        try:
-            match["last_run"] = core.now_iso()
-            save_store(presets, store_extra, store_path)
-        except OSError:
-            pass
-
-    _hlog("Done. The server keeps running in its own window.")
-    return 0
 
 
 def main():
@@ -8044,31 +8239,9 @@ def main():
     root.mainloop()
 
 
-def _cli_config_name(argv):
-    """The name after ``--run`` on the command line, or None for the GUI.
-
-    Kept deliberately tiny so no UI is imported to decide it. Accepts both
-    ``--run "Name"`` and ``--run=Name``.
-    """
-    for index, token in enumerate(argv):
-        if token == "--run":
-            return argv[index + 1] if index + 1 < len(argv) else ""
-        if token.startswith("--run="):
-            return token[len("--run="):]
-    return None
-
-
 if __name__ == "__main__":
-    _install_crash_log()
-    _run_name = _cli_config_name(sys.argv[1:])
-    if _run_name is not None:
-        # Headless one-click shortcut path: never construct Tk.
-        try:
-            sys.exit(headless_run(_run_name))
-        except Exception as exc:  # noqa: BLE001 - report, don't vanish silently
-            _log_startup_crash(exc)
-            sys.stderr.write("Headless run failed: %s: %s\n" % (type(exc).__name__, exc))
-            sys.exit(1)
+    # The headless --run path already dispatched and exited ABOVE, before the
+    # tkinter import, so reaching here is always a normal GUI launch.
     try:
         main()
     except Exception as exc:  # noqa: BLE001 - last-resort startup diagnostics

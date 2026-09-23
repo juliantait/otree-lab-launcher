@@ -572,6 +572,11 @@ input::placeholder{color:var(--faint)}
 }
 .seatcell[data-seat]:hover{border-color:var(--accent-dim);color:var(--text-strong);
   box-shadow:0 0 0 1px var(--accent-dim),var(--shadow-sm)}
+/* "Edit for this run": clickable seat cells, and the struck-out look of a seat
+   excluded from tonight's run (fable review item 1). */
+.seatcell.editable{cursor:pointer}
+.seatcell.excluded{color:var(--faint);border-style:dashed;border-color:var(--line-soft);
+  text-decoration:line-through;opacity:.6}
 .seatcell.exp{color:var(--faint);background:transparent;border-style:dashed;border-color:var(--line-soft);font-size:8.5px;letter-spacing:.05em}
 .seatcell.wall{
   background:repeating-linear-gradient(45deg,var(--bg-deep),var(--bg-deep) 4px,transparent 4px,transparent 8px);
@@ -1208,6 +1213,21 @@ function syncThemeControls(){
 var NATIVE=false, API=null, booted=false, BROWSER=false;
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
 var lastSettings=null, defaultAuthor="", pendingDelete=null;
+/* The most-recently-rendered config rows, so selectConfig can show the config's
+   full display name incl. the built-in "(Large lab)" suffix (fable review #13). */
+var CONFIG_ROWS=[];
+/* The full field dict of the loaded config, echoed back by gatherFields for the
+   fields the UI does NOT edit (port, page, wait_seconds, open_browser), so a
+   Tk-saved config round-trips unchanged and stops reporting phantom "unsaved
+   changes" (items 1 & 2). */
+var hiddenFields={};
+/* The seat exclusions for the config on screen; maintained by the edit-mode seat
+   click toggles and echoed back on save, so Tk-saved exclusions are not wiped on
+   a web re-save (item 1). */
+var currentSeatExcluded=[];
+/* True while the first-run "create a new lab" flow is open, so on save the new
+   lab is adopted as this machine's lab via set_lab_marker (item 6). */
+var pendingIdentityAdopt=false;
 /* The "get ready for the lab" popup fires at most once per project selection;
    this remembers the path already offered so re-inspecting the same folder
    (or a config load) does not nag again. Cleared implicitly by a new path. */
@@ -1324,6 +1344,7 @@ window.pywOnBatResult=function(r){if(!r)return;
 function labSuffix(lab){var l=LAB_BY_ID[lab];return l?(" ("+l.name+")"):"";}
 function configDisplay(c){return c.name+(c.builtin?labSuffix(c.lab):"");}
 function renderConfigList(configs,selected){
+  CONFIG_ROWS=configs||[];
   var list=el("cfgList");list.innerHTML="";
   el("cfgCount").textContent=configs.length;
   configs.forEach(function(c){
@@ -1369,7 +1390,13 @@ function selectConfig(name,row){
     });
   }
 }
-function lastConfigDisplay(name){return name;}
+function lastConfigDisplay(name){
+  /* Keep the built-in's "(Large lab)" suffix after a click (fable review #13):
+     look the row up in the last-rendered list and reuse configDisplay, instead
+     of returning the bare name (which dropped the suffix). */
+  var c=CONFIG_ROWS.filter(function(x){return x.name===name;})[0];
+  return c?configDisplay(c):name;
+}
 
 /* ======================================================================
    CARD 1: oTree project
@@ -1618,6 +1645,28 @@ function renderSeatMap(labId){
   var map=lab.map;
   if(map&&map.cells&&map.cells.length)renderMappedSeats(box,map,lab.seats);else renderPlainGrid(box,lab.seats);
 }
+/* "Edit for this run" makes each seat cell a click toggle that excludes/includes
+   the seat, maintaining currentSeatExcluded (fable review item 1). Off edit mode
+   the cells are inert but still show which seats a loaded (e.g. Tk-saved) config
+   has excluded, so a web re-save preserves them. */
+function seatEditMode(){var m=el("seat_mode");return !!(m&&m.value==="edit");}
+function decorateSeatCell(d,label){
+  if(!label)return;
+  d.setAttribute("data-seat",label);
+  if(currentSeatExcluded.indexOf(label)>=0)d.classList.add("excluded");
+  if(seatEditMode()){
+    d.classList.add("editable");
+    d.title="Click to include/exclude this seat for this run";
+    d.onclick=function(){toggleSeatExclusion(label,d);};
+  }
+}
+function toggleSeatExclusion(label,d){
+  if(!seatEditMode())return;
+  var i=currentSeatExcluded.indexOf(label);
+  if(i>=0){currentSeatExcluded.splice(i,1);d.classList.remove("excluded");}
+  else{currentSeatExcluded.push(label);d.classList.add("excluded");}
+  updateDirtyState();
+}
 function renderMappedSeats(box,map,seats){
   var maxC=0;(map.cells||[]).forEach(function(c){var cc=parseInt(c.c,10);if(!isNaN(cc)&&cc>maxC)maxC=cc;});
   var cols=parseInt(map.cols,10)||maxC||1;box.style.gridTemplateColumns="repeat("+cols+",1fr)";
@@ -1630,14 +1679,14 @@ function renderMappedSeats(box,map,seats){
     d.style.gridRow=cell.rowspan?(r+" / span "+Math.round(cell.rowspan)):r;
     if(kind==="wall")d.setAttribute("aria-hidden","true");
     else if(kind==="exp")d.textContent="EXP";
-    else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;if(lab)d.setAttribute("data-seat",lab);}
+    else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;decorateSeatCell(d,lab);}
     box.appendChild(d);
   });
 }
 function renderPlainGrid(box,seats){
   seats=seats||[];var cols=Math.min(Math.max(Math.ceil(Math.sqrt(seats.length||1)),1),8);
   box.style.gridTemplateColumns="repeat("+cols+",1fr)";
-  seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;d.setAttribute("data-seat",s);box.appendChild(d);});
+  seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;decorateSeatCell(d,s);box.appendChild(d);});
 }
 function setSeatFilePath(p){var b=el("seatFilePath");if(p){b.textContent=p;b.classList.remove("empty");}else{b.textContent="No file chosen yet";b.classList.add("empty");}updateDirtyState();}
 
@@ -1656,6 +1705,11 @@ function setRoom(name){
    ====================================================================== */
 function applyFields(f){
   f=f||{};
+  /* Remember the full loaded config so gatherFields can echo back the fields the
+     UI does not edit (port/page/wait_seconds/open_browser) and the seat
+     exclusions, so a Tk-saved config round-trips unchanged (items 1 & 2). */
+  hiddenFields=Object.assign({},f);
+  currentSeatExcluded=(f.seat_excluded||[]).slice();
   currentProjectPath=f.project_path||"";setPath(currentProjectPath);
   currentSeatFile=f.seat_file||"";setSeatFilePath(currentSeatFile);
   el("admin_user").value=f.admin_username||"admin";
@@ -1678,7 +1732,12 @@ function applyFields(f){
 }
 function gatherFields(){
   var lab=selectedLabId;var custom=(lab==="custom");var pseudo=(custom||lab==="local");
-  return {
+  /* Only the fields the UI actually edits. port/page/wait_seconds/open_browser are
+     NOT edited here, so they are echoed from the loaded config (hiddenFields)
+     rather than hardcoded, and seat_excluded carries the maintained exclusions
+     -- so a Tk-saved config re-saves byte-identical and its exclusions survive
+     (fable review items 1 & 2). */
+  var gathered={
     project_path:currentProjectPath,
     db_mode:currentDbMode,
     db_name:val("db_name"),db_user:val("db_user"),db_password:val("db_pw"),
@@ -1687,11 +1746,12 @@ function gatherFields(){
     production:el("production").checked,auth_level:val("auth_level"),
     auto_login:el("auto_login").checked,
     lab:pseudo?lab:currentLab(),custom_host:val("custom_host"),
-    port:"8000",page:"/rooms",
-    resetdb:el("resetdb").checked,open_browser:true,
+    resetdb:el("resetdb").checked,
     room_name:custom?val("custom_room"):el("roomVal").textContent,
-    seat_mode:val("seat_mode"),seat_excluded:[],seat_file:currentSeatFile
+    seat_mode:val("seat_mode"),seat_excluded:currentSeatExcluded.slice(),
+    seat_file:currentSeatFile
   };
+  return Object.assign({},hiddenFields,gathered);
 }
 /* ---- unsaved-changes (dirty) tracking for the "Save as new config" button ----
    A light flag: snapshot the whole form whenever a config is loaded or saved,
@@ -1700,10 +1760,10 @@ function gatherFields(){
 var cleanSnapshot=null;
 function formSnapshot(){try{return JSON.stringify(gatherFields());}catch(e){return "";}}
 function markFormClean(){cleanSnapshot=formSnapshot();updateDirtyState();}
+function isFormDirty(){return (cleanSnapshot!==null&&formSnapshot()!==cleanSnapshot);}
 function updateDirtyState(){
   var b=el("saveAsBtn");if(!b)return;
-  var dirty=(cleanSnapshot!==null&&formSnapshot()!==cleanSnapshot);
-  b.classList.toggle("dirty",dirty);
+  b.classList.toggle("dirty",isFormDirty());
 }
 function applySettings(s){
   lastSettings=s;
@@ -1812,7 +1872,7 @@ function doSaveAs(){
 function deleteConfig(name){
   if(!NATIVE||!API){window.pywStatus("","Delete works in the app, not the static preview.");return;}
   pendingDelete=name;
-  openModal("Delete lab",'<p>Delete the config <strong>'+escapeHtml(name)+'</strong>? This cannot be undone.</p>'+
+  openModal("Delete config",'<p>Delete the config <strong>'+escapeHtml(name)+'</strong>? This cannot be undone.</p>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
     '<button class="btn danger" id="btnConfirmDelete">Delete</button></div>');
   setTimeout(function(){var b=el("btnConfirmDelete");if(b)b.onclick=doDelete;},30);
@@ -2187,7 +2247,7 @@ function openLabSettings(){
       lsDefaultDbRows()+
       '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
     '<div class="ls-card"><h4>Lab presets</h4>'+
-      '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Small lab and Large lab are seeded from the lab constants.</p>'+
+      '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Labs are seeded from lab_info.json.</p>'+
       '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
       '<p class="ls-tip">Tip: click a lab’s ✓ / – in the Shown column to show or hide it.</p>'+
       '<div class="ls-status" id="lsLabStatus"></div></div>'+
@@ -2199,7 +2259,7 @@ function openLabSettings(){
 function makeThisTheLab(){
   var lab=val("lsMarker");
   if(!NATIVE||!API){labMarker=lab;el("lsIdentityStatus").textContent="This computer is now "+((LAB_BY_ID[lab]||{}).name||lab)+".";el("lsIdentityStatus").className="ls-status";return;}
-  API.change_lab_marker(lab).then(function(r){if(r&&r.ok){labMarker=lab;
+  API.change_lab_marker(lab,currentConfigName||"",isFormDirty()).then(function(r){if(r&&r.ok){labMarker=lab;
     // BUG A: shift the shown/default lab LIVE. The marker path now collapses the
     // displayed labs to the chosen one server-side; consume the refreshed rows +
     // tiles so the main selector and the Lab Settings "Shown" column update at
@@ -2236,7 +2296,7 @@ function labPresetEdit(id){
     '<div class="mfield"><label>Shortcut label</label><input id="lpShortcut" type="text" placeholder="(optional) name of the participant-PC desktop shortcuts" value="'+escapeHtml(shortcut)+'"></div>'+
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
     '<div class="ls-status" id="lpStatus"></div>'+
-    '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
+    '<div class="cta"><button class="btn" onclick="cancelLabPreset()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
 }
 function saveLabPreset(id){
   var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
@@ -2245,6 +2305,22 @@ function saveLabPreset(id){
   if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
   var colsNum=cols?(parseInt(cols,10)||0):0;
   var done=function(r){
+    if(r&&r.ok&&pendingIdentityAdopt&&!id&&r.new_id){
+      /* First-run "create a new lab": adopt the just-added lab as this machine's
+         lab so the first-run chooser does not reappear (fable review item 6). */
+      pendingIdentityAdopt=false;
+      API.set_lab_marker(r.new_id,currentConfigName||"",isFormDirty()).then(function(rr){
+        closeModal();
+        if(rr&&rr.ok){labMarker=r.new_id;
+          if(rr.lab_presets)LAB_PRESETS=rr.lab_presets;
+          if(rr.labs)setLabs(rr.labs);
+          renderConfigList(rr.configs,rr.selected);
+          if(rr.selected)currentConfigName=rr.selected;
+          if(rr.fields)applyFields(rr.fields);
+          window.pywStatus("ok","This machine is set to the "+(rr.lab_name||r.new_id)+" lab.");}
+        else{showChooseLab();window.pywStatus("err",(rr&&rr.message)||"Could not set the lab.");}});
+      return;
+    }
     if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
       /* A changed default_room re-derives the built-in Lab default live. */
       if(r.configs){renderConfigList(r.configs,currentConfigName);
@@ -2288,12 +2364,25 @@ function showChooseLab(){
   openModal("Which lab is this computer in?",
     '<p class="modal-desc">First launch on this machine: pick the lab it sits in. The launcher then shows just that lab.</p>'+
     buttons+
-    '<button class="room-item" style="border:1px solid var(--line);margin:8px 0 0;padding:12px 14px;color:var(--accent);font-weight:600" onclick="labPresetEdit(null)">This is a different lab: create a new lab</button>'+
+    '<button class="room-item" style="border:1px solid var(--line);margin:8px 0 0;padding:12px 14px;color:var(--accent);font-weight:600" onclick="createLabForIdentity()">This is a different lab: create a new lab</button>'+
     '<p class="room-note" style="margin-top:14px">Saved to lab.local on this machine and remembered next time. You can change it later in Lab Settings.</p>');
+}
+function createLabForIdentity(){
+  /* First-run "this is a different lab": add the lab, then ADOPT it as this
+     machine's lab (set_lab_marker), so the first-run chooser does not come back
+     on the next start (fable review item 6). The adoption happens in
+     saveLabPreset's success handler, gated by this flag. */
+  pendingIdentityAdopt=true;labPresetEdit(null);
+}
+function cancelLabPreset(){
+  /* Back out of the add/edit-lab modal: to the first-run chooser when we came
+     from there, otherwise to Lab Settings. */
+  if(pendingIdentityAdopt){pendingIdentityAdopt=false;showChooseLab();}
+  else openLabSettings();
 }
 function chooseLab(lab){
   if(!NATIVE||!API){closeModal();labMarker=lab;return;}
-  API.set_lab_marker(lab).then(function(r){closeModal();
+  API.set_lab_marker(lab,currentConfigName||"",isFormDirty()).then(function(r){closeModal();
     if(r&&r.ok){labMarker=lab;
       // BUG A: collapse the main selector to the chosen lab live (the marker
       // path now hides the other labs server-side and returns refreshed tiles).
@@ -2308,12 +2397,18 @@ function chooseLab(lab){
    LAUNCH  ->  briefing  ->  handoff
    ====================================================================== */
 function onLaunch(){
-  /* ONE consolidated "Before you launch" screen: fetch the briefing AND every
-     issue at once, then show a single modal (summary + all issues + action). */
+  /* ONE consolidated "Before you launch" screen. The preflight checks (DB
+     connect, settings.py import, psycopg2 probe) can be slow on a lab PC, so the
+     modal opens IMMEDIATELY in a "checking" state after the fast briefing, and
+     the issues fill in from launch_issues when it resolves (fable review #8),
+     instead of the modal appearing late after the whole preflight. */
   if(NATIVE&&API){
     var f=gatherFields();
-    Promise.all([API.launch_briefing(f),API.launch_issues(f)]).then(function(res){
-      showBeforeLaunch(res[0]||{},(res[1]&&res[1].issues)||[]);
+    API.launch_briefing(f).then(function(b){
+      showBeforeLaunch(b||{},null);   /* null => checking state */
+      API.launch_issues(f).then(function(r){
+        fillBeforeLaunchIssues((r&&r.issues)||[]);
+      });
     });
   }else{
     showBeforeLaunch(previewBriefing(),[]);
@@ -2418,9 +2513,12 @@ function blCopyLink(btn){
 }
 /* The ONE consolidated pre-launch screen: summary + every issue (blocks and
    warnings, each with its inline one-click fix or a hint) + the action row. */
-window._blBriefing=null;window._blIssues=[];
+window._blBriefing=null;window._blIssues=[];window._blChecking=false;
 function showBeforeLaunch(b,issues){
-  window._blBriefing=b||{};window._blIssues=issues||[];
+  /* issues===null => open in the "checking" state and fill in later
+     (fillBeforeLaunchIssues); an array (incl. []) renders straight away. */
+  window._blChecking=(issues===null);
+  window._blBriefing=b||{};window._blIssues=window._blChecking?[]:(issues||[]);
   window._blInfoOpen=false;window._blCredsOpen=false;   /* both reveals start collapsed */
   /* Order: what needs action first (must-fix, then warnings), then what will
      launch, then the sticky bottom bar. */
@@ -2431,8 +2529,17 @@ function showBeforeLaunch(b,issues){
   renderBlIssues(window._blIssues);
   renderBlActions(window._blIssues);
 }
+function fillBeforeLaunchIssues(issues){
+  /* The preflight finished: leave the checking state and render the real issues
+     (and the real bottom bar). Ignored if the modal has been closed. */
+  if(el("infoModal").hidden||!el("blIssues"))return;
+  window._blChecking=false;window._blIssues=issues||[];
+  renderBlIssues(window._blIssues);
+  renderBlActions(window._blIssues);
+}
 function renderBlIssues(issues){
   var box=el("blIssues");if(!box)return;issues=issues||[];
+  if(window._blChecking){box.innerHTML='<div class="bl-hint" style="padding:6px 0">Checking your setup…</div>';return;}
   /* Straight into the items (no banner): every MUST-FIX card first, then every
      warning card. idx stays the index into the ORIGINAL list so the room
      selector ids keep matching blPickRoom(idx). */
@@ -2552,6 +2659,12 @@ function blAddRoom(room){
 }
 function renderBlActions(issues){
   var box=el("blActions");if(!box)return;issues=issues||[];
+  if(window._blChecking){
+    box.innerHTML='<button class="btn ghost bl-cancel" onclick="closeModal()">Cancel</button>'+
+      '<span class="bl-blocknote">Checking your setup…</span>'+
+      '<button class="btn bl-primary bl-launch-off" disabled aria-disabled="true">Launch</button>';
+    return;
+  }
   var nBlock=issues.filter(function(i){return i.level==="block";}).length;
   var nWarn=issues.filter(function(i){return i.level==="warn";}).length;
   /* The state-dependent bottom bar, the ONLY place a launch is offered:
@@ -3050,8 +3163,14 @@ function makeHttpApi(){
     if(typeof name!=="string"||name==="then")return undefined; /* not a thenable */
     return function(){
       var args=Array.prototype.slice.call(arguments);
+      /* Send the per-run launcher token the server injected next to the
+         browser-mode marker. A custom header also forces a CORS preflight for a
+         cross-origin caller, which the server never answers, so only this
+         same-origin page can POST to the local API (see the origin/token check
+         in otree_launcher_web.do_POST). */
       return fetch("/api/"+name,{method:"POST",
-        headers:{"Content-Type":"application/json"},
+        headers:{"Content-Type":"application/json",
+                 "X-Launcher-Token":(window.__LAUNCHER_TOKEN__||"")},
         body:JSON.stringify(args)}).then(function(r){return r.json();});
     };
   }});

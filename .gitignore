@@ -27,6 +27,9 @@ data/presets.json.broken-*
 data/lab.local
 data/seats/
 data/*.log
+# per-settings.py append locks the launcher keeps in its OWN data folder (so no
+# stray .lock is written into a researcher's project — see core._settings_lock_path)
+data/locks/
 
 # settings.py backups the launcher writes (those land in the user's own project)
 *.bak

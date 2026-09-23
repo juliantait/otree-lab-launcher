@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import datetime as _dt
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -575,6 +576,12 @@ DEFAULT_CONFIG = {
     "page": "/rooms",
     "resetdb": True,
     "open_browser": True,
+    # Auto-login the admin dashboard after launch (real form-login + one-shot
+    # cookie relay). A first-class config field so it round-trips through
+    # normalize_config, is saved with the config and reaches
+    # open_dashboard_authenticated on every launch path (GUI, web, headless
+    # --run). Old stores with no auto_login get True here via normalize_config.
+    "auto_login": True,
     "wait_seconds": 5,
     "room_name": DEFAULT_ROOM_NAME,
     "seat_mode": SEAT_DEFAULT,
@@ -1227,6 +1234,23 @@ def settings_path_for(project_path):
     return os.path.join((project_path or "").strip(), "settings.py")
 
 
+def _settings_lock_path(settings_path):
+    """The launcher-owned lock file for serialising appends to one settings.py.
+
+    PRINCIPLE 1: the launcher writes NO file into a researcher's project. The old
+    ``settings.py.lock`` sat next to their settings.py and was never removed, so a
+    project made lab-ready gained a stray file researchers would commit. This
+    keeps the lock in the launcher's own ``data/locks/`` folder instead, keyed by
+    a hash of the ABSOLUTE settings.py path so two clicks / two launchers on the
+    same file still serialise, while nothing is written into the project (only the
+    intended timestamped ``.bak`` is, on an explicit Add-block click).
+    """
+    digest = hashlib.sha1(os.path.abspath(settings_path).encode("utf-8", "surrogateescape")).hexdigest()
+    folder = os.path.join(data_dir(), "locks")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, digest + ".lock")
+
+
 def _normalize_block_text(text):
     """The lab block text with per-line trailing whitespace and surrounding blank
     lines dropped, so two copies that differ only in trailing whitespace / a
@@ -1303,9 +1327,30 @@ def inspect_settings(project_path, lab_room=None):
                                    and (result["stale"] or not result["complete"]))
 
     # Does the project already wire up the lab's experimental room? Either the
-    # lab support block does it, or the project defines a room named like ours itself.
-    own_room = bool(re.search(
-        r"""name\s*=\s*['"]%s['"]""" % re.escape(lab_room), text))
+    # lab support block does it, or the project defines a room named like ours
+    # itself. The room name is matched ONLY within the project's own ROOMS
+    # assignment region (from a top-level ``ROOMS =`` line down to the next
+    # top-level statement), so an unrelated ``name='study'`` elsewhere (e.g. a
+    # SESSION_CONFIGS entry) no longer counts as the project defining the room.
+    # No top-level ROOMS assignment -> the project defines no rooms of its own.
+    own_room = False
+    rooms_start = None
+    for index, line in enumerate(lines):
+        if re.match(r"^ROOMS\s*=", line):
+            rooms_start = index
+            break
+    if rooms_start is not None:
+        region = [lines[rooms_start]]
+        for line in lines[rooms_start + 1:]:
+            # Stop at the next top-level statement (an unindented assignment or
+            # keyword); the ROOMS list literal's own lines are indented or start
+            # with a bracket, so they stay inside the region.
+            if re.match(r"^[A-Za-z_]\w*\s*=", line) or \
+                    re.match(r"^(def|class|if|for|while|with|try|import|from)\b", line):
+                break
+            region.append(line)
+        own_room = bool(re.search(
+            r"""name\s*=\s*['"]%s['"]""" % re.escape(lab_room), "\n".join(region)))
     result["own_room"] = own_room
     # A STALE block cannot be trusted to define the lab room at launch (the old
     # body guarded the room on the seat-file variable), so it does not count.
@@ -1359,8 +1404,11 @@ def append_block(project_path):
     """
     path = settings_path_for(project_path)
     folder = os.path.dirname(path) or "."
-    with exclusive_file_lock(path + ".lock"):
-        with open(path, "r", encoding="utf-8") as handle:
+    with exclusive_file_lock(_settings_lock_path(path)):
+        # surrogateescape so a settings.py with a non-UTF-8 byte (a Latin-1
+        # comment) round-trips byte-for-byte instead of raising UnicodeDecodeError
+        # (which is not OSError, so it used to escape as a generic failure).
+        with open(path, "r", encoding="utf-8", errors="surrogateescape") as handle:
             text = handle.read()
         # Re-check the marker under the lock: refuse a second append even if
         # another appender slipped in between our caller's check and here.
@@ -1378,7 +1426,8 @@ def append_block(project_path):
         separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
         new_text = text + separator + LAB_BLOCK
         handle = tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=folder, prefix=".settings-", suffix=".tmp", delete=False
+            "w", encoding="utf-8", errors="surrogateescape", dir=folder,
+            prefix=".settings-", suffix=".tmp", delete=False
         )
         tmp_name = handle.name
         try:
@@ -1404,9 +1453,12 @@ def append_block(project_path):
 
 def _write_settings_atomically(path, folder, new_text):
     """Fsync ``new_text`` to a same-dir temp file and os.replace it onto ``path``,
-    preserving the original file mode. Shared by append_block/refresh_block."""
+    preserving the original file mode. Shared by append_block/refresh_block.
+    surrogateescape on write so a settings.py carrying non-UTF-8 bytes round-trips
+    unchanged (matches the surrogateescape reads in append_block/refresh_block)."""
     handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=folder, prefix=".settings-", suffix=".tmp", delete=False
+        "w", encoding="utf-8", errors="surrogateescape", dir=folder,
+        prefix=".settings-", suffix=".tmp", delete=False
     )
     tmp_name = handle.name
     try:
@@ -1447,8 +1499,10 @@ def refresh_block(project_path):
     """
     path = settings_path_for(project_path)
     folder = os.path.dirname(path) or "."
-    with exclusive_file_lock(path + ".lock"):
-        with open(path, "r", encoding="utf-8") as handle:
+    with exclusive_file_lock(_settings_lock_path(path)):
+        # surrogateescape (see append_block): preserve any non-UTF-8 bytes rather
+        # than raising UnicodeDecodeError.
+        with open(path, "r", encoding="utf-8", errors="surrogateescape") as handle:
             text = handle.read()
         lines = text.splitlines(keepends=True)
         start = end = -1
@@ -1800,6 +1854,52 @@ def save_store(presets, extra=None, path=None):
             raise
     secure_chmod(path)
     return path
+
+
+def merge_store_from_disk(mem_presets, mem_extra, disk_presets, disk_extra):
+    """Merge a freshly re-read on-disk store into the in-memory one for the
+    cross-process lost-update guard (both faces' ``_mutate_store``).
+
+    When ANOTHER process (e.g. the headless one-click shortcut stamping
+    ``last_run`` while the GUI is open) has written presets.json since this
+    process last saved, each face re-loads the store and calls this before
+    re-applying its own pending mutation, so the other process's change is not
+    blindly overwritten by this process's stale in-memory snapshot.
+
+    The IDENTITY of existing in-memory preset dicts (matched by name) is
+    preserved -- their contents are replaced in place with the disk version -- so
+    a mutation callback that captured a specific preset object (a ``last_run``
+    stamp, a delete-by-identity) still targets a live object in the returned list.
+    In-memory presets not on disk (e.g. one just appended but not yet saved) are
+    kept. Disk wins for ``extra`` keys; the caller's pending mutation runs
+    afterwards and still has the last word on whatever it touches. Returns
+    ``(presets, extra)``.
+    """
+    by_name = {}
+    for preset in mem_presets:
+        by_name.setdefault(str(preset.get("name", "")), preset)
+    out = []
+    seen = set()
+    for disk in disk_presets:
+        name = str(disk.get("name", ""))
+        if name in seen:
+            out.append(disk)
+            continue
+        obj = by_name.get(name)
+        if obj is not None:
+            obj.clear()
+            obj.update(disk)
+            out.append(obj)
+        else:
+            out.append(disk)
+        seen.add(name)
+    for preset in mem_presets:
+        if str(preset.get("name", "")) not in seen:
+            out.append(preset)
+            seen.add(str(preset.get("name", "")))
+    merged_extra = dict(mem_extra or {})
+    merged_extra.update(disk_extra or {})
+    return out, merged_extra
 
 
 def is_builtin(item):
@@ -2375,6 +2475,10 @@ def reload_lab_info(path=None):
     new labs/credentials without a restart.
     """
     global LAB_INFO, LAB_DB, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, DEFAULT_LAB_ID
+    # A map added or edited while the app runs would otherwise need a restart
+    # because load_map_file caches by name; clear the cache so a reload picks up
+    # new/edited maps/<name>.json immediately.
+    _MAP_FILE_CACHE.clear()
     LAB_INFO = load_lab_info(path)
     LAB_DB = lab_db_from_info(LAB_INFO)
     admin = (LAB_INFO or {}).get("admin") or {}
@@ -3521,7 +3625,16 @@ def start_cookie_relay(cookie_value, monitor_url, host=AUTOLOGIN_HOST,
     return relay_url, server, serve_thread
 
 
-def wait_for_server(host, port, timeout=8.0, interval=0.25):
+# How long to wait for prodserver to answer before reporting a launch as failed.
+# A named constant (was a bare 8.0 in three places): 30 s is safer on an old lab
+# PC booting a project with many apps, which could take longer than 8 s and be
+# wrongly reported as "did not become ready" while the server then came up fine.
+# The wait is still a POLL (we open the instant the server responds), so a fast
+# server is unaffected -- only a slow start is given more room (fable review #8).
+READINESS_TIMEOUT = 30.0
+
+
+def wait_for_server(host, port, timeout=READINESS_TIMEOUT, interval=0.25, on_wait=None):
     """Poll the oTree server until it answers an HTTP request, or ``timeout``.
 
     Returns ``True`` as soon as a GET to ``/login`` (falling back to ``/``) gets
@@ -3529,6 +3642,11 @@ def wait_for_server(host, port, timeout=8.0, interval=0.25):
     server socket is up and handling requests, which is exactly the readiness we
     need before opening the dashboard. Returns ``False`` if the deadline passes
     with no response. Stdlib only; never raises.
+
+    ``on_wait`` (optional) is called with the whole seconds elapsed every few
+    seconds while still waiting, so a caller can STREAM "still waiting (12 s)"
+    lines to its activity log instead of the wait looking like a silent hang on a
+    slow lab PC (fable review #8). Any exception it raises is swallowed.
 
     This replaces the old blind ``time.sleep`` both launchers did before opening
     the dashboard: instead of waiting a fixed guess, we open the instant the
@@ -3538,8 +3656,10 @@ def wait_for_server(host, port, timeout=8.0, interval=0.25):
     import urllib.error
 
     base = "http://%s:%s" % (host, port)
-    deadline = time.time() + max(0.0, float(timeout))
+    start = time.time()
+    deadline = start + max(0.0, float(timeout))
     step = max(0.01, float(interval))
+    next_notice = 3.0   # first "still waiting" line after ~3s, then every ~3s
     while True:
         for path in (_LOGIN_PATH, "/"):
             try:
@@ -3551,16 +3671,24 @@ def wait_for_server(host, port, timeout=8.0, interval=0.25):
             except (urllib.error.URLError, OSError):
                 # Not listening yet (or a transient socket error): keep waiting.
                 pass
-        if time.time() >= deadline:
+        now = time.time()
+        if now >= deadline:
             return False
+        elapsed = now - start
+        if on_wait is not None and elapsed >= next_notice:
+            try:
+                on_wait(int(elapsed))
+            except Exception:
+                pass
+            next_notice += 3.0
         time.sleep(step)
 
 
 def open_dashboard_authenticated(host, port, room, username, password,
                                  auto_login=True, open_url=None,
                                  login=None, start_relay=None,
-                                 wait=None, ready_timeout=8.0,
-                                 block_relay=False):
+                                 wait=None, ready_timeout=READINESS_TIMEOUT,
+                                 block_relay=False, on_wait=None):
     """The single dashboard-open entry point both launchers call.
 
     Opens the admin room monitor for ``room`` in the SYSTEM DEFAULT BROWSER. When
@@ -3622,7 +3750,13 @@ def open_dashboard_authenticated(host, port, room, username, password,
     # server is a real launch.
     server_ready = False
     try:
-        server_ready = bool(wait(host, port, timeout=ready_timeout))
+        # Pass on_wait only when given, so an injected test ``wait`` double that
+        # does not accept it keeps working (real wait_for_server accepts it and
+        # streams "still waiting (N s)" lines to the caller's activity log).
+        if on_wait is not None:
+            server_ready = bool(wait(host, port, timeout=ready_timeout, on_wait=on_wait))
+        else:
+            server_ready = bool(wait(host, port, timeout=ready_timeout))
     except Exception:
         server_ready = False
 
@@ -3922,7 +4056,11 @@ def enumerate_project_rooms(project_path, timeout=8.0, python_exe=None):
     # A clean environment: strip the launcher's own seat variables so the
     # project is imported exactly as it would run OFF the lab.
     env = {k: v for k, v in os.environ.items() if k not in SEAT_ENV_KEYS}
-    python_exe = python_exe or sys.executable
+    # Prefer the interpreter the ``otree`` command runs under (its venv), so a
+    # settings.py that imports otree (or anything from the project's venv) is read
+    # with the right interpreter, not necessarily the launcher's own. Falls back
+    # to the launcher's interpreter when the oTree interpreter cannot be located.
+    python_exe = python_exe or otree_runtime_python() or sys.executable
 
     try:
         proc = subprocess.run(

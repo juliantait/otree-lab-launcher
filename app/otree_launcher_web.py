@@ -437,6 +437,10 @@ class Api(object):
         # another store-mutating method on the same thread does not deadlock.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = core.load_store(self.store_path)
+        # The presets.json mtime at load, so _mutate_store can tell when ANOTHER
+        # process (e.g. the headless one-click shortcut) wrote the store and merge
+        # its change in before re-applying ours (cross-process lost-update guard).
+        self._store_mtime = self._store_mtime_now()
         # Resolve WHICH database is the lab-shared default from the store's
         # default_database reference, so core.LAB_DB (what every DB_MODE_LAB launch
         # uses) points at the chosen database -- the setup-wizard DB by default, or
@@ -474,9 +478,41 @@ class Api(object):
         in-memory mutation has still been applied.
         """
         with self._store_lock:
+            # Cross-process lost-update guard: if another process wrote the store
+            # since our last save, merge its change in (identity-preserving) before
+            # applying ours, so a headless --run stamp is not clobbered here.
+            self._reconcile_store()
             result = mutate()
             core.save_store(self.presets, self.store_extra, self.store_path)
+            self._store_mtime = self._store_mtime_now()
             return result
+
+    def _store_mtime_now(self):
+        """The presets.json modification time, or None when it does not exist."""
+        try:
+            return os.path.getmtime(self.store_path)
+        except OSError:
+            return None
+
+    def _reconcile_store(self):
+        """Re-read the store and merge in another process's changes when the file
+        changed on disk since our last save (see core.merge_store_from_disk).
+        Called under the store lock at the top of every _mutate_store."""
+        current = self._store_mtime_now()
+        if current is None or current == self._store_mtime:
+            return
+        try:
+            disk_presets, disk_extra = core.load_store(self.store_path)
+        except Exception:
+            return
+        self.presets, self.store_extra = core.merge_store_from_disk(
+            self.presets, self.store_extra, disk_presets, disk_extra)
+        # Keep the app-owned built-in and the live LAB_DB consistent after
+        # adopting disk content (these are re-derived, never launched-from state).
+        core.apply_default_database(self.store_extra)
+        core.apply_lab_marker(
+            self.presets, lab_presets=core.lab_presets_from_store(self.store_extra))
+        core.clear_builtin_last_run(self.presets)
 
     def _find(self, name):
         for preset in self.presets:
@@ -811,26 +847,42 @@ class Api(object):
         except OSError:
             return core.lab_presets_from_store(self.store_extra)
 
-    def _lab_identity_response(self, lab):
+    def _lab_identity_response(self, lab, current_config_name="", dirty=False):
         """The shared payload for set_/change_lab_marker: refreshed config rows,
-        the selected config's fields, AND the refreshed lab-settings rows + the
-        per-config selector tiles (now collapsed to ``lab``) so the page can
-        repaint the main selector and the Shown column live (BUG A)."""
+        the refreshed lab-settings rows + the per-config selector tiles (now
+        collapsed to ``lab``) so the page repaints the main selector and the Shown
+        column live (BUG A).
+
+        Crucially it does NOT clobber the config open on screen: the page passes
+        its ``current_config_name`` and whether the form is ``dirty``. When the
+        form is clean the SAME config's fields are returned (so the page reselects
+        exactly what was open, not the built-in), and when it is dirty NO ``fields``
+        are returned at all, so the page keeps its unsaved on-screen edits (the old
+        code always returned self.presets[0], silently replacing them). Mirrors the
+        Tk _set_lab_identity, which only reselects when nothing is dirty.
+        """
         presets = self._apply_lab_identity(lab)
-        selected = self.presets[0] if self.presets else None
-        fields = self._config_fields(selected) if selected else dict(core.DEFAULT_CONFIG)
         preset = (core.find_lab_preset(lab, presets)
                   or core.find_lab_preset(lab, core.default_lab_presets()))
-        return {"ok": True, "lab_marker": lab,
+        target = self._find(current_config_name) if current_config_name else None
+        resp = {"ok": True, "lab_marker": lab,
                 "lab_name": preset.get("name") if preset else lab,
                 "configs": [preset_row(p) for p in self.presets],
-                "selected": selected.get("name") if selected else "",
-                "fields": fields,
-                "lab_presets": _lab_rows(presets),
-                "labs": _lab_tiles(presets, fields.get("lab"))}
+                "selected": (target.get("name") if target else (current_config_name or "")),
+                "lab_presets": _lab_rows(presets)}
+        config_lab = core.normalize_config(target).get("lab") if target is not None else None
+        if not dirty:
+            chosen = target or (self.presets[0] if self.presets else None)
+            if chosen is not None:
+                fields = self._config_fields(chosen)
+                resp["selected"] = chosen.get("name", "")
+                resp["fields"] = fields
+                config_lab = fields.get("lab")
+        resp["labs"] = _lab_tiles(presets, config_lab)
+        return resp
 
     @api_call
-    def set_lab_marker(self, lab):
+    def set_lab_marker(self, lab, current_config_name="", dirty=False):
         """First-launch operator choice of this machine's lab.
 
         Writes lab.local ONCE. Refuses if a valid marker already exists, so the
@@ -855,11 +907,12 @@ class Api(object):
             return {"ok": False, "already": True,
                     "message": "This machine's lab is already set in lab.local."}
         # Collapse the displayed labs to the chosen one + re-point the default,
-        # then hand the page refreshed rows/tiles to repaint (BUG A).
-        return self._lab_identity_response(lab)
+        # then hand the page refreshed rows/tiles to repaint (BUG A). The page's
+        # current config + dirty flag are passed so unsaved on-screen edits survive.
+        return self._lab_identity_response(lab, current_config_name, dirty)
 
     @api_call
-    def change_lab_marker(self, lab):
+    def change_lab_marker(self, lab, current_config_name="", dirty=False):
         """Lab Settings "which lab is this computer" CHANGE path (OVERWRITE).
 
         Unlike ``set_lab_marker`` (the first-run, refuse-if-exists chooser), this
@@ -880,8 +933,9 @@ class Api(object):
             return {"ok": False, "message": "Could not write lab.local: %s" % error}
         # OVERWRITE path: same as first-run once the marker is written -- collapse
         # the displayed labs to the chosen one, re-point the default, return the
-        # refreshed rows/tiles so the selector shifts live (BUG A).
-        return self._lab_identity_response(lab)
+        # refreshed rows/tiles so the selector shifts live (BUG A). The page's
+        # current config + dirty flag keep unsaved on-screen edits intact.
+        return self._lab_identity_response(lab, current_config_name, dirty)
 
     # -- room picker / create-database / lab-settings bridges --------------
     # Each maps straight onto an existing otree_core function; no launch logic
@@ -1835,7 +1889,9 @@ class Api(object):
                 result = core.open_dashboard_authenticated(
                     core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
                     cfg.get("admin_username", ""), cfg.get("admin_password", ""),
-                    auto_login=cfg.get("auto_login", True))
+                    auto_login=cfg.get("auto_login", True),
+                    on_wait=lambda s: self._log(
+                        "muted", "Still waiting for the server to respond (%d s)…" % s))
                 if result["method"] == "cookie":
                     self._log("ok", "Opened the oTree dashboard already logged in "
                                     "(auto-login: form-login + cookie relay).")
@@ -1848,13 +1904,20 @@ class Api(object):
                 # reporting success, so a crash is not mis-reported as "Launched".
                 self._log("muted", "Open in browser is off. Confirming the server is up …")
                 result["server_ready"] = core.wait_for_server(
-                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"))
+                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
+                    on_wait=lambda s: self._log(
+                        "muted", "Still waiting for the server to respond (%d s)…" % s))
 
             if not result.get("server_ready"):
                 # A startup crash / missing project / port race: prodserver did not
                 # answer. Do NOT stamp last_run or claim "Launched" -- the real
-                # traceback is in the server terminal window.
-                msg = self._startup_failure_message(server_proc)
+                # traceback is in the server terminal window. Only the
+                # linux-background child is our own pollable prodserver; on Windows
+                # (detached console) and macOS (osascript, which exits 0 the moment
+                # it has told Terminal to open) server_proc is NOT prodserver, so
+                # polling it would falsely annotate "already exited with code 0".
+                poll_proc = server_proc if launch.get("kind") == "linux-background" else None
+                msg = self._startup_failure_message(poll_proc)
                 self._status("err", msg)
                 self._log("err", msg)
                 # Fail-soft: a page may already be open (manual fallback), so keep
@@ -2051,20 +2114,29 @@ WEB_DIR = os.path.join(HERE, "web")
 BROWSER_MODE_MARKER = "<script>window.__LAUNCHER_BROWSER_MODE__=true;</script>"
 
 
-def _index_html_browser_mode():
+def _browser_mode_marker(token=""):
+    """The <head> script the --browser server injects: it flags the page as the
+    plain-browser launcher AND hands it the per-run CSRF-style token the page must
+    echo back on every POST /api (see the origin/token check in the handler)."""
+    return ("<script>window.__LAUNCHER_BROWSER_MODE__=true;"
+            "window.__LAUNCHER_TOKEN__=%s;</script>" % json.dumps(str(token or "")))
+
+
+def _index_html_browser_mode(token=""):
     """Read index.html and inject the browser-mode marker right after <head>.
 
     Placed immediately after the opening ``<head>`` tag, BEFORE the page's own
-    detection script, so ``window.__LAUNCHER_BROWSER_MODE__`` is set
-    synchronously before the detection script runs and before first paint (no
-    Browse-button flicker). Only the --browser server calls this.
+    detection script, so ``window.__LAUNCHER_BROWSER_MODE__`` (and the per-run
+    ``window.__LAUNCHER_TOKEN__``) are set synchronously before the detection
+    script runs and before first paint (no Browse-button flicker). Only the
+    --browser server calls this.
     """
     with open(INDEX_HTML, "r", encoding="utf-8") as fh:
         html = fh.read()
     idx = html.find("<head>")
     if idx != -1:
         insert_at = idx + len("<head>")
-        html = html[:insert_at] + "\n" + BROWSER_MODE_MARKER + html[insert_at:]
+        html = html[:insert_at] + "\n" + _browser_mode_marker(token) + html[insert_at:]
     return html
 
 
@@ -2082,17 +2154,59 @@ class BrowserBridge(object):
         self._queue_cls = queue.Queue
         self._subscribers = []
         self._lock = threading.Lock()
+        # Optional idle self-shutdown: when enabled (windowless pythonw run only),
+        # the server exits ``_idle_grace`` seconds after the LAST /events subscriber
+        # disconnects, so a browser-mode launcher started by the .vbs no longer
+        # leaves pythonw running forever after the tab is closed (item 13). A new
+        # subscriber within the grace cancels the pending shutdown.
+        self._idle_shutdown = None
+        self._idle_grace = 60.0
+        self._idle_timer = None
+
+    def enable_idle_shutdown(self, shutdown, grace=60.0):
+        """Arm the idle self-shutdown with ``shutdown`` (httpd.shutdown) and a
+        grace period. Only called for a windowless (pythonw) browser-mode run."""
+        self._idle_shutdown = shutdown
+        self._idle_grace = float(grace)
+
+    def _cancel_idle_timer(self):
+        if self._idle_timer is not None:
+            try:
+                self._idle_timer.cancel()
+            except Exception:
+                pass
+            self._idle_timer = None
 
     def subscribe(self):
         q = self._queue_cls()
         with self._lock:
             self._subscribers.append(q)
+            # A page (re)connected: cancel any pending idle shutdown.
+            self._cancel_idle_timer()
         return q
 
     def unsubscribe(self, q):
         with self._lock:
             if q in self._subscribers:
                 self._subscribers.remove(q)
+            # Last subscriber gone: after the grace period, shut the server down
+            # unless a new subscriber has connected in the meantime.
+            if not self._subscribers and self._idle_shutdown is not None:
+                self._cancel_idle_timer()
+                self._idle_timer = threading.Timer(
+                    self._idle_grace, self._maybe_idle_shutdown)
+                self._idle_timer.daemon = True
+                self._idle_timer.start()
+
+    def _maybe_idle_shutdown(self):
+        with self._lock:
+            still_idle = not self._subscribers and self._idle_shutdown is not None
+            shutdown = self._idle_shutdown
+            self._idle_timer = None
+        if still_idle and shutdown is not None:
+            LOG.info("browser mode: idle since the last tab closed; shutting down")
+            # shutdown() must not run on a serving thread; give it its own.
+            threading.Thread(target=shutdown, daemon=True).start()
 
     def evaluate_js(self, snippet):
         """Fan a JS snippet out to every connected page (worker threads only)."""
@@ -2109,9 +2223,20 @@ class BrowserBridge(object):
         self.evaluate_js("window.close && window.close()")
 
 
-def _make_browser_handler(api, bridge):
-    """Build the request handler class bound to this Api + bridge."""
+def _make_browser_handler(api, bridge, token="", allowed_origins=()):
+    """Build the request handler class bound to this Api + bridge.
+
+    ``token`` is the per-run secret the served page echoes back as the
+    ``X-Launcher-Token`` header on every POST /api; ``allowed_origins`` is the set
+    of ``Origin`` values a POST may carry (the server's own loopback origins).
+    Together they reject a cross-site request another page in the same browser
+    could otherwise fire at the local API (see do_POST); the genuine page always
+    passes because it is same-origin and carries the injected token.
+    """
     from http.server import BaseHTTPRequestHandler
+
+    # Kept as a live reference (not copied) so run_browser can add the server's
+    # real loopback origins to it AFTER the free port is known.
 
     class Handler(BaseHTTPRequestHandler):
         # Quiet the default one-line-per-request stderr spam; route to our log.
@@ -2152,7 +2277,7 @@ def _make_browser_handler(api, bridge):
             # deterministically knows it is the plain-browser launcher (Browse
             # hidden). Only this --browser server does this injection.
             try:
-                body = _index_html_browser_mode().encode("utf-8")
+                body = _index_html_browser_mode(token).encode("utf-8")
             except OSError:
                 self.send_error(404, "Not found")
                 return
@@ -2220,6 +2345,33 @@ def _make_browser_handler(api, bridge):
             if not path.startswith("/api/"):
                 self.send_error(404, "Not found")
                 return
+            # Reject a cross-site request another page in the same browser could
+            # fire at this local API (its side effect would run even though the
+            # response is unreadable). Three cheap, independent checks, ALL of which
+            # the genuine same-origin page passes:
+            #   * Content-Type application/json -- a simple cross-site POST can only
+            #     set text/plain, form or multipart without triggering a CORS
+            #     preflight this server never answers;
+            #   * Origin (when the browser sends one) must be one of our own
+            #     loopback origins -- a foreign page's Origin never matches;
+            #   * X-Launcher-Token must equal the per-run secret injected into the
+            #     served page -- a custom header also forces a preflight, so a
+            #     cross-origin caller cannot even send it.
+            # The pywebview js_api path is unaffected (it never reaches this server).
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                self._send_json({"ok": False, "error": True,
+                                 "message": "Bad content type."}, code=403)
+                return
+            origin = self.headers.get("Origin")
+            if origin is not None and origin not in allowed_origins:
+                self._send_json({"ok": False, "error": True,
+                                 "message": "Bad origin."}, code=403)
+                return
+            if (self.headers.get("X-Launcher-Token") or "") != token:
+                self._send_json({"ok": False, "error": True,
+                                 "message": "Bad or missing launcher token."}, code=403)
+                return
             method = path[len("/api/"):]
             # Only public, callable Api methods are reachable -- never a private
             # helper or a data attribute.
@@ -2259,17 +2411,31 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         sys.stderr.write("Cannot find the UI at %s\n" % INDEX_HTML)
         return 2
 
+    import secrets
+
     api = Api()
     bridge = BrowserBridge()
     api.window = bridge          # worker-thread pushes go through the SSE bridge
     api.browser_mode = True      # dialog methods fall back to paste-the-path
 
+    # A per-run secret the served page echoes back on every POST /api, plus the
+    # set of loopback origins a POST may carry -- filled in after the port is known.
+    token = secrets.token_urlsafe(32)
+    allowed_origins = set()
+
     class _Server(ThreadingHTTPServer):
         daemon_threads = True    # SSE threads never block shutdown
         allow_reuse_address = True
 
-    httpd = _Server((host, port), _make_browser_handler(api, bridge))
+    httpd = _Server((host, port), _make_browser_handler(api, bridge, token, allowed_origins))
     actual_port = httpd.server_address[1]
+    for origin_host in (host, "127.0.0.1", "localhost"):
+        allowed_origins.add("http://%s:%d" % (origin_host, actual_port))
+    # Under the windowless pythonw (the browser-mode .vbs shortcut) there is no
+    # console to close, so the server would otherwise run forever after the tab is
+    # closed. Arm an idle self-shutdown so it exits ~60s after the last tab closes.
+    if os.path.basename(sys.executable or "").lower().startswith("pythonw"):
+        bridge.enable_idle_shutdown(httpd.shutdown, grace=60.0)
     url = "http://%s:%d/" % (host, actual_port)
     LOG.info("browser mode serving at %s", url)
     sys.stderr.write("\noTree Lab Launcher (browser mode) is serving at:\n  %s\n" % url)

@@ -47,7 +47,7 @@ extra.
 | Browse (participant file) | `pick_participant_file` | native file dialog |
 | Save as new… | `save_config_as` | writes to `presets.json` |
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
-| Export .bat… | `export_bat` | native save dialog → standalone `.bat` |
+| Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `presets.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
 | Add block to settings.py | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
 
@@ -68,12 +68,13 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
 
 ## Notes / follow-ups
 
-- **Logic is currently duplicated:** `otree_core.py` is an extracted copy of the
-  logic that still also lives inline in `otree_lab_launcher.py`. Next cleanup:
-  have the old Tk launcher `from otree_core import *` so there is one source of
-  truth. Left duplicated for now so the working Tk launcher is untouched and can
-  be verified independently.
-- `window.prompt` (used by "Save as new…") is supported by Edge WebView2 and
-  WebKit; if a host build blocks it, swap in a small inline name field.
+- **Logic is largely shared now:** most of `otree_lab_launcher.py` delegates to
+  `otree_core.py` (the config model — `DEFAULT_CONFIG`/`FIELD_KEYS` are the SAME
+  object, not a copy — plus `build_env`, the seat/label helpers, the settings.py
+  block, presets storage, the lab-preset/database/preflight layer). What remains
+  duplicated is only the Tk GUI layer; the pure-logic tail can be aliased next.
+- "Save as new…" uses a small inline name field in the modal (not
+  `window.prompt`), so it works the same in the pywebview window and the
+  browser-mode server.
 - Design spec: the full design spec that bossman keeps outside this repo (ask
   bossman for the path).
