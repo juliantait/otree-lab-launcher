@@ -6,18 +6,23 @@
 <title>oTree Lab Launcher</title>
 <script>
 /* Decide browser-mode vs pywebview BEFORE the first paint, so the Browse
-   button is NEVER shown-then-hidden (no flicker). Browser mode is served over
-   http(s) by the local otree_launcher_web.py server; pywebview native loads
-   this file over file:// (and injects window.pywebview shortly after), and the
-   static preview is file:// too. So http(s) with no pywebview present === the
-   plain-browser launcher, where a native folder picker can NEVER hand the app a
-   real folder PATH. In that mode we mark the document so CSS below hides Browse
-   and reveals the paste-the-path hint before anything renders. The file:// /
-   pywebview path is left completely untouched (Browse renders as before). */
+   button is NEVER shown-then-hidden (no flicker). This relies on a DETERMINISTIC
+   marker, not a heuristic: the --browser HTTP server (otree_launcher_web.py)
+   injects a tiny script that sets window.__LAUNCHER_BROWSER_MODE__ = true as the
+   very first thing inside the head, right before this script, so it has already
+   run by the time we read it here. Only that server injects it -- the pywebview native
+   window (create_window(INDEX_HTML)) and a plain file:// open never do -- so
+   only the real plain-browser launcher marks the document browser-mode (Browse
+   hidden, paste-the-path hint shown). Everywhere else (native desktop app on
+   Mac/Windows, static file:// preview) Browse renders as before.
+
+   The old approach checked (protocol is http/https) AND (no window.pywebview.api)
+   and was WRONG on macOS: pywebview serves the page over its own internal http
+   server and injects window.pywebview.api only asynchronously (after first
+   paint), so it looked like browser mode and hid Browse in the native app. */
 (function(){
   try{
-    var p=location.protocol;
-    if((p==="http:"||p==="https:")&&!(window.pywebview&&window.pywebview.api)){
+    if(window.__LAUNCHER_BROWSER_MODE__===true){
       document.documentElement.setAttribute("data-webmode","browser");
     }
   }catch(e){}

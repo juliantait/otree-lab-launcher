@@ -1735,6 +1735,35 @@ class Api(object):
 
 WEB_DIR = os.path.join(HERE, "web")
 
+# The browser-mode marker: injected as the very first thing inside <head> of the
+# served index.html by the --browser HTTP server ONLY. It lets the page KNOW,
+# deterministically and synchronously (before first paint), that it is running as
+# the plain-browser launcher -- where there is no native folder picker -- so it
+# hides Browse and shows the paste-the-path field. The pywebview native path
+# (create_window(INDEX_HTML)) and a plain file:// open never inject it, so there
+# Browse stays visible. This replaces the old, fragile (http/https + no
+# window.pywebview.api) heuristic, which misfired on macOS pywebview (it serves
+# the page over its own internal http server and injects window.pywebview.api
+# only asynchronously, after first paint).
+BROWSER_MODE_MARKER = "<script>window.__LAUNCHER_BROWSER_MODE__=true;</script>"
+
+
+def _index_html_browser_mode():
+    """Read index.html and inject the browser-mode marker right after <head>.
+
+    Placed immediately after the opening ``<head>`` tag, BEFORE the page's own
+    detection script, so ``window.__LAUNCHER_BROWSER_MODE__`` is set
+    synchronously before the detection script runs and before first paint (no
+    Browse-button flicker). Only the --browser server calls this.
+    """
+    with open(INDEX_HTML, "r", encoding="utf-8") as fh:
+        html = fh.read()
+    idx = html.find("<head>")
+    if idx != -1:
+        insert_at = idx + len("<head>")
+        html = html[:insert_at] + "\n" + BROWSER_MODE_MARKER + html[insert_at:]
+    return html
+
 
 class BrowserBridge(object):
     """Stand-in for a pywebview ``window`` on the browser path.
@@ -1815,11 +1844,29 @@ def _make_browser_handler(api, bridge):
             except (BrokenPipeError, OSError):
                 pass
 
+        def _send_index(self):
+            # Serve index.html WITH the browser-mode marker injected, so the page
+            # deterministically knows it is the plain-browser launcher (Browse
+            # hidden). Only this --browser server does this injection.
+            try:
+                body = _index_html_browser_mode().encode("utf-8")
+            except OSError:
+                self.send_error(404, "Not found")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, OSError):
+                pass
+
         def _serve_static(self):
             # "/" -> index.html; otherwise a file under web/, path-traversal safe.
             rel = self.path.split("?", 1)[0].lstrip("/")
             if rel in ("", "index.html"):
-                self._send_file(INDEX_HTML)
+                self._send_index()
                 return
             target = os.path.normpath(os.path.join(WEB_DIR, rel))
             if not target.startswith(os.path.abspath(WEB_DIR) + os.sep):
