@@ -213,11 +213,13 @@ body{
 }
 .pathbox.empty{color:var(--faint);font-family:var(--sans);direction:ltr}
 .pathrow input.pathinput{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px}
-/* Browser mode (see the head <script>): no native folder picker exists, so the
-   Browse buttons are hidden before first paint and the paste-the-path hint is
-   shown. The paste field (#projPathInput) is always visible and editable. */
+/* Browser mode (see the head <script>): the PROJECT-FOLDER Browse button stays
+   visible -- in browser mode it asks the LOCAL server to pop a native folder
+   dialog on this machine (POST /api/browse_folder) and fills the field with the
+   chosen path. The paste-the-path field stays available too, so the hint is
+   shown. The participant-FILE Browse has no server-side equivalent yet, so it is
+   still hidden in browser mode (paste that path instead). */
 .pathhint{display:none;margin:8px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
-html[data-webmode="browser"] #browseProjBtn,
 html[data-webmode="browser"] #browseFileBtn{display:none!important}
 html[data-webmode="browser"] .pathhint{display:block}
 
@@ -793,15 +795,15 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
               placeholder="Click Browse to choose your oTree project folder">
             <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
           </div>
-          <p class="pathhint" id="projPathHint">Paste the full path to your oTree project folder, then press Enter. (The Browse button is not available in the browser &mdash; it needs the desktop app.)</p>
+          <p class="pathhint" id="projPathHint">Click Browse to pick your oTree project folder with a native dialog, or paste the full path here and press Enter.</p>
           <script>
-          /* In browser mode Browse is hidden (see head + CSS), so the paste
-             field is the only way to choose the folder: give it a matching
-             placeholder now, synchronously during parse, so it is right on the
-             first paint with no flicker. */
+          /* In browser mode Browse pops a native folder dialog on the local
+             server machine (POST /api/browse_folder); pasting a path also works.
+             Give the field a placeholder that mentions both, synchronously during
+             parse, so it is right on the first paint with no flicker. */
           if(document.documentElement.getAttribute("data-webmode")==="browser"){
             var _pin=document.getElementById("projPathInput");
-            if(_pin)_pin.placeholder="Paste the full path to your oTree project folder";
+            if(_pin)_pin.placeholder="Click Browse, or paste the full path to your oTree project folder";
           }
           </script>
 
@@ -1534,8 +1536,22 @@ function applySettings(s){
 /* ======================================================================
    BUTTON HANDLERS: project / file / path
    ====================================================================== */
+/* Browser mode: the LOCAL server pops a native folder dialog on this machine
+   (POST /api/browse_folder) and returns the chosen path, which we render through
+   the SAME handler as the native pywebview push (pywOnProjectPicked) -- so it
+   fills the field, validates the project and offers get-ready exactly like the
+   desktop dialog. Cancel/empty just leaves the paste-the-path field. Shared by
+   the main Browse button and the Before-you-launch [Choose folder…] fix. */
+function browserBrowseFolder(){
+  if(!API)return;
+  window.pywStatus("","Opening the folder picker on this machine… (look for the dialog window).");
+  API.browse_folder().then(function(r){
+    if(!r||!r.ok||!r.path){window.pywStatus("","No folder chosen. You can also paste the path in the box.");return;}
+    window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
+  });
+}
 function onBrowseProject(){
-  if(BROWSER){window.pywStatus("","Type or paste the project folder path in the box above (native folder pickers need the desktop app).");return;}
+  if(BROWSER){browserBrowseFolder();return;}
   if(NATIVE&&API)API.pick_project_folder();}
 function onBrowseFile(){
   if(BROWSER){window.pywStatus("","Type or paste the participant file path in the box (native file pickers need the desktop app).");return;}
@@ -2202,7 +2218,9 @@ function renderBlIssues(issues){
    the main Browse. The pick arrives via pywOnProjectPicked, which re-checks this
    screen when it is the one showing. */
 function blChooseFolder(){
-  if(BROWSER){window.pywStatus&&window.pywStatus("","Type or paste the project folder path in the Project box, then re-check.");return;}
+  /* Browser mode: same server-side native folder dialog as the main Browse. The
+     pick arrives via pywOnProjectPicked, which re-checks THIS screen in place. */
+  if(BROWSER){browserBrowseFolder();return;}
   if(!NATIVE||!API){window.pywStatus&&window.pywStatus("","Choose folder works in the app, not the static preview.");return;}
   API.pick_project_folder();
 }
@@ -2771,16 +2789,18 @@ function startEventStream(){
   }catch(e){}
 }
 function hideBrowseButtons(){
-  /* Browser mode has no native file dialog -> paste-the-path is the only way.
-     The head <script> already set data-webmode="browser" before first paint, so
-     CSS has hidden the Browse buttons and shown the paste hint with no flicker;
-     this is belt-and-suspenders (and re-asserts the mode if the early check was
-     ever skipped). The paste field stays visible and editable. */
+  /* Browser mode: the PROJECT-FOLDER Browse now WORKS (the local server pops a
+     native folder dialog via /api/browse_folder), so it stays visible. Only the
+     participant-FILE Browse has no server-side equivalent yet, so it is hidden
+     and that path is pasted instead. The head <script> already set
+     data-webmode="browser" before first paint (CSS hides just the file Browse
+     and shows the paste hint with no flicker); this re-asserts the mode and the
+     placeholder belt-and-suspenders. The paste field stays visible and editable. */
   document.documentElement.setAttribute("data-webmode","browser");
-  var b1=el("browseProjBtn");if(b1)b1.hidden=true;
+  var b1=el("browseProjBtn");if(b1)b1.hidden=false;   /* project Browse works in browser mode */
   var b2=el("browseFileBtn");if(b2)b2.hidden=true;
   var pin=el("projPathInput");
-  if(pin)pin.placeholder="Paste the full path to your oTree project folder";
+  if(pin)pin.placeholder="Click Browse, or paste the full path to your oTree project folder";
 }
 function bootBrowser(){
   if(booted)return;booted=true;NATIVE=true;BROWSER=true;

@@ -242,6 +242,110 @@ def preset_row(preset):
 
 
 # ---------------------------------------------------------------------------
+# Browser-mode native folder picker (opened ON THE SERVER MACHINE).
+#
+# A plain browser cannot hand a folder PATH back to the page -- that is a native
+# power a browser tab never has. BUT the browser-mode HTTP server runs LOCALLY on
+# the operator's own machine, so it can pop a native folder dialog here, on the
+# server side, and return the chosen path over POST /api/browse_folder. That
+# gives Windows users on Python 3.14 (no pywebview) a REAL Browse dialog instead
+# of only pasting a path.
+#
+# The dialog runs in a SHORT-LIVED SUBPROCESS: a tiny helper that uses ONLY the
+# standard library (tkinter.filedialog.askdirectory). It creates a hidden Tk
+# root, lifts it -topmost so the dialog comes to the front, runs askdirectory(),
+# prints the chosen path to stdout and exits. Running it OUT OF PROCESS sidesteps
+# every tkinter-in-a-thread hazard inside the long-lived threaded HTTP server
+# (Tk must own its own thread/mainloop), and the whole process is gone the moment
+# the user answers. The helper is launched with the WINDOWLESS interpreter
+# (pythonw.exe, derived from sys.executable) plus CREATE_NO_WINDOW so no extra
+# console flashes while the GUI dialog still shows. Cancel or any error yields an
+# empty path, so the UI just keeps the paste-the-path field.
+# ---------------------------------------------------------------------------
+
+# The helper program source, run as ``python -c``. stdlib ONLY (tkinter + sys):
+# it never imports otree_core or any third-party module, so it runs on the barest
+# Python. It withdraws the root, lifts it -topmost so the dialog is frontmost,
+# runs askdirectory(), then writes the chosen path (empty string on cancel) to
+# stdout as its sole output and exits.
+_FOLDER_DIALOG_HELPER = (
+    "import sys\n"
+    "import tkinter\n"
+    "from tkinter import filedialog\n"
+    "root = tkinter.Tk()\n"
+    "root.withdraw()\n"
+    "try:\n"
+    "    root.attributes('-topmost', True)\n"
+    "except Exception:\n"
+    "    pass\n"
+    "root.lift()\n"
+    "try:\n"
+    "    root.update()\n"
+    "except Exception:\n"
+    "    pass\n"
+    "path = filedialog.askdirectory(title='Choose your oTree project folder')\n"
+    "try:\n"
+    "    root.destroy()\n"
+    "except Exception:\n"
+    "    pass\n"
+    "sys.stdout.write(path or '')\n"
+    "sys.stdout.flush()\n"
+)
+
+
+def _pythonw_executable():
+    """The windowless interpreter to run the dialog helper with, so no console
+    flashes on Windows while the GUI dialog still shows.
+
+    Derives ``pythonw.exe`` from ``sys.executable`` (``python.exe`` ->
+    ``pythonw.exe``) when that file exists; otherwise returns ``sys.executable``
+    unchanged (non-Windows, a frozen build, or no pythonw sitting next to
+    python).
+    """
+    exe = sys.executable or ""
+    if exe and sys.platform.startswith("win"):
+        directory, name = os.path.split(exe)
+        if name.lower() == "python.exe":
+            candidate = os.path.join(directory, "pythonw.exe")
+            if os.path.isfile(candidate):
+                return candidate
+    return exe
+
+
+def _native_folder_dialog_subprocess(helper=None, executable=None, timeout=600):
+    """Open a native folder dialog in a short-lived subprocess and return the
+    chosen absolute path ("" on cancel, timeout or ANY error).
+
+    ``helper`` / ``executable`` are injectable for tests (a fake helper that
+    prints a known path -- or nothing, for cancel -- proves the plumbing without
+    a real dialog); production uses the stdlib-tkinter ``_FOLDER_DIALOG_HELPER``
+    on the windowless interpreter. ``core._no_window_flags`` adds CREATE_NO_WINDOW
+    on Windows (0 elsewhere) so the console stays hidden while the GUI dialog
+    still appears. Nothing here ever raises into the HTTP handler.
+    """
+    exe = executable or _pythonw_executable()
+    if not exe:
+        return ""
+    src = _FOLDER_DIALOG_HELPER if helper is None else helper
+    try:
+        proc = subprocess.run(
+            [exe, "-c", src],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout, creationflags=core._no_window_flags())
+    except Exception:
+        LOG.exception("folder-dialog subprocess failed")
+        return ""
+    try:
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+    except Exception:
+        return ""
+    # The helper writes only the path; take the last non-empty line so any stray
+    # tkinter/deprecation chatter that lands on stdout is ignored.
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+# ---------------------------------------------------------------------------
 # The JS API: every method here is callable from the page as
 # window.pywebview.api.<name>(...). Keep the returns JSON-serializable.
 # ---------------------------------------------------------------------------
@@ -499,6 +603,32 @@ class Api(object):
         self._callback("pywOnProjectPicked",
                        {"path": path, "project": project_status(path),
                         "settings": core.inspect_settings(path, self._lab_room_for())})
+
+    @api_call
+    def browse_folder(self):
+        """Browser-mode native folder picker, opened ON THE SERVER MACHINE.
+
+        A real browser cannot return a folder PATH, but the browser-mode server
+        runs LOCALLY on the operator's machine, so it pops a native folder dialog
+        here (a short-lived stdlib-tkinter subprocess, see
+        ``_native_folder_dialog_subprocess``) and hands the chosen absolute path
+        back SYNCHRONOUSLY. This is the browser-mode counterpart of the pywebview
+        ``pick_project_folder`` (which uses ``create_file_dialog``); the page's
+        Browse button posts here when it is in browser mode. Blocking is fine:
+        in browser mode every /api call runs on its own HTTP-server thread, not
+        the WebView message loop, so there is no re-entrancy deadlock.
+
+        Returns ``{"ok": True, "path": ...}`` -- ``path`` is "" on cancel/error
+        (the UI then just keeps the paste-the-path field). On a real pick it also
+        carries the project + settings summaries, so the page renders the folder
+        exactly as the native ``pywOnProjectPicked`` push does.
+        """
+        path = _native_folder_dialog_subprocess()
+        if not path or not os.path.isdir(path):
+            return {"ok": True, "path": ""}
+        return {"ok": True, "path": path,
+                "project": project_status(path),
+                "settings": core.inspect_settings(path, self._lab_room_for())}
 
     @api_call
     def pick_participant_file(self):
