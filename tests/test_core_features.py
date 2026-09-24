@@ -654,9 +654,18 @@ class TestPreflight(unittest.TestCase):
     # --- Check 2: launch port free ---
     def test_port_in_use_is_flagged(self):
         import socket
+        # Occupy the port EXACTLY the way preflight's probe binds it: the
+        # wildcard address ("", i.e. 0.0.0.0) and WITHOUT SO_REUSEADDR. Windows
+        # has two escape hatches (absent on Linux/macOS) that let a second bind
+        # succeed over a live socket and so read a busy port as free: (a)
+        # SO_REUSEADDR on the first socket, and (b) a wildcard/specific address
+        # mismatch (0.0.0.0 vs 127.0.0.1). The old listener tripped both, so the
+        # probe's wildcard bind succeeded on Windows and this assertion failed
+        # there while passing on POSIX. Two identical wildcard binds with no
+        # SO_REUSEADDR collide on every platform, so this now flags the port
+        # everywhere.
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("127.0.0.1", 0))
+        s.bind(("", 0))
         s.listen(1)
         port = s.getsockname()[1]
         try:
