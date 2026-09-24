@@ -68,11 +68,16 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
 
 ## Notes / follow-ups
 
-- **Logic is largely shared now:** most of `otree_lab_launcher.py` delegates to
-  `otree_core.py` (the config model — `DEFAULT_CONFIG`/`FIELD_KEYS` are the SAME
-  object, not a copy — plus `build_env`, the seat/label helpers, the settings.py
-  block, presets storage, the lab-preset/database/preflight layer). What remains
-  duplicated is only the Tk GUI layer; the pure-logic tail can be aliased next.
+- **Pure logic is fully shared now:** all of `otree_lab_launcher.py`'s pure logic
+  delegates to `otree_core.py` (the config model — `DEFAULT_CONFIG`/`FIELD_KEYS`
+  are the SAME object, not a copy — plus `build_env`, the seat/label helpers, the
+  settings.py block, presets storage, the lab-preset/database/preflight layer,
+  and, since 2026-09-24, the last pure-logic tail: `normalize_config`,
+  `configs_differ`, the DB-URL builders, `build_url`, `validate_project`, the
+  storage-path + `lab.local` helpers, `preset_from_fields`, `export_bat_text` and
+  the rest are all `name = core.name` aliases). What remains duplicated is only
+  the Tk GUI layer. `export_bat_text` (the standalone `.bat` export) is not wired
+  to any button in either face — only the tests call it.
 - "Save as new…" uses a small inline name field in the modal (not
   `window.prompt`), so it works the same in the pywebview window and the
   browser-mode server.

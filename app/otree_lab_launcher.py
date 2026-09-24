@@ -163,103 +163,17 @@ def default_author():
         return ""
 
 
-def normalize_config(cfg):
-    """Return the field values of `cfg` with defaults filled in.
-
-    Only the keys in FIELD_KEYS are returned; unknown keys stay where they are.
-    In lab-default database mode the database fields are forced to the known
-    lab default values so that a config can never claim to be the Lab default while
-    holding different credentials.
-    """
-    out = {}
-    for key, default in DEFAULT_CONFIG.items():
-        value = cfg.get(key, default)
-        if isinstance(default, bool):
-            value = bool(value)
-        elif isinstance(default, list):
-            value = [str(item) for item in value] if isinstance(value, (list, tuple)) else []
-        elif isinstance(default, int) and not isinstance(default, bool):
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                value = default
-        else:
-            value = "" if value is None else str(value)
-        out[key] = value
-
-    if out["db_mode"] not in (DB_MODE_LAB, DB_MODE_CUSTOM, DB_MODE_NONE):
-        out["db_mode"] = DEFAULT_CONFIG["db_mode"]
-    if out["db_mode"] == DB_MODE_LAB:
-        out.update(core.LAB_DB)
-    # `lab` is a lab-preset id (any of the labs defined in lab_info.json, or
-    # "custom"); only a blank value falls back to the default. An id that no
-    # longer resolves to a lab is handled at resolve time, not rewritten here.
-    if not str(out["lab"]).strip():
-        out["lab"] = DEFAULT_CONFIG["lab"]
-    if out["auth_level"] not in AUTH_LEVELS:
-        out["auth_level"] = "none"
-    if out["wait_seconds"] < 0:
-        out["wait_seconds"] = 0
-    if out["seat_mode"] not in (SEAT_DEFAULT, SEAT_EDIT, SEAT_FILE, SEAT_NONE):
-        out["seat_mode"] = DEFAULT_CONFIG["seat_mode"]
-    out["seat_excluded"] = sorted(set(out["seat_excluded"]))
-    if not out["room_name"].strip():
-        out["room_name"] = DEFAULT_ROOM_NAME
-    return out
+# De-duplicated (item #10): these were byte-for-byte copies of core's. The Tk
+# module names now point at the single implementation so the two faces can never
+# drift on the config model; the parity suite guards the rest of the tail.
+normalize_config = core.normalize_config
+configs_differ = core.configs_differ
 
 
-def configs_differ(a, b, ignore=()):
-    """True when the editable fields of two configs are not the same.
-
-    ``ignore`` names fields to exclude; the built-in default uses
-    ``ignore=("project_path",)`` so browsing to a project folder (an input to a
-    run, not an edit of the config) does not mark it modified. Kept in sync with
-    otree_core.configs_differ.
-    """
-    na = normalize_config(a)
-    nb = normalize_config(b)
-    for key in ignore:
-        na.pop(key, None)
-        nb.pop(key, None)
-    return na != nb
-
-
-def build_database_url(cfg):
-    """The DATABASE_URL for this config, or None when no database is set.
-
-    The user name and password are percent-encoded (kept byte-identical to
-    otree_core.build_database_url), so a password with a URL-special character
-    (which the new Create-a-new-database button now allows) cannot break the URL
-    or be misparsed by oTree. A password with no such character is unchanged.
-    """
-    c = normalize_config(cfg)
-    if c["db_mode"] == DB_MODE_NONE:
-        return None
-    from urllib.parse import quote
-    return "postgres://{user}:{password}@{host}:{port}/{name}".format(
-        user=quote(str(c["db_user"]), safe=""),
-        password=quote(str(c["db_password"]), safe=""),
-        host=c["db_host"],
-        port=c["db_port"],
-        name=c["db_name"],
-    )
-
-
-_URL_PASSWORD_RE = re.compile(r"^(?P<head>[a-zA-Z][a-zA-Z0-9+.-]*://[^:/@]*:)(?P<pw>[^@]*)(?P<tail>@.*)$")
-
-
-def mask_database_url(url):
-    """Replace the password in a database URL with a fixed run of dots.
-
-    The number of dots is fixed so the length of the real password does not
-    leak into the preview or the log.
-    """
-    if not url:
-        return ""
-    match = _URL_PASSWORD_RE.match(url)
-    if not match:
-        return url
-    return match.group("head") + MASKED_PASSWORD + match.group("tail")
+# De-duplicated (item #10): the DATABASE_URL builder, the log-masking of a URL
+# password and the auto-open URL builder were byte-for-byte copies of core's.
+build_database_url = core.build_database_url
+mask_database_url = core.mask_database_url
 
 
 def resolve_host(cfg):
@@ -267,29 +181,7 @@ def resolve_host(cfg):
     return core.resolve_host(cfg)
 
 
-def build_url(cfg):
-    """The page the launcher auto-opens after the server has started.
-
-    Kept in sync with ``otree_core.build_url``: a config still carrying the
-    default page opens the CHOSEN room's monitor (arrival board) rather than the
-    plain /rooms list; an explicit custom page is respected. Delegates the room
-    -> monitor-path decision to core so the empirically-verified path lives in
-    one place.
-    """
-    c = normalize_config(cfg)
-    host = resolve_host(c)
-    port = c["port"].strip()
-    page = c["page"].strip()
-    if not host:
-        host = "<host>"
-    base = "http://" + host
-    if port:
-        base += ":" + port
-    if core._is_default_open_page(page):
-        page = core.room_monitor_path(c["room_name"])
-    if page and not page.startswith("/"):
-        page = "/" + page
-    return base + page
+build_url = core.build_url
 
 
 def build_env(cfg, base_env=None, label_file=None):
@@ -312,13 +204,8 @@ def launcher_env_keys(cfg, label_file=None):
     return core.launcher_env_keys(cfg, label_file)
 
 
-def describe_env_value(key, value):
-    """A log-safe rendering of one environment variable."""
-    if key == "DATABASE_URL":
-        return mask_database_url(value)
-    if key in SECRET_ENV_KEYS:
-        return MASKED_PASSWORD
-    return value
+# De-duplicated (item #10): identical to core's log-safe env renderer.
+describe_env_value = core.describe_env_value
 
 
 # ---------------------------------------------------------------------------
@@ -336,20 +223,12 @@ def lab_default_seats(cfg):
     return core.lab_default_seats(cfg)
 
 
-def resolve_seats(cfg):
-    """The seat labels this config will hand to oTree, in order.
-
-    Empty for None mode, and for file mode, where the user's own file is used
-    as it stands and never re-written.
-    """
-    c = normalize_config(cfg)
-    if c["seat_mode"] in (SEAT_NONE, SEAT_FILE):
-        return []
-    seats = lab_default_seats(c)
-    if c["seat_mode"] == SEAT_EDIT:
-        excluded = set(c["seat_excluded"])
-        return [seat for seat in seats if seat not in excluded]
-    return seats
+# De-duplicated (item #10): core's seat helpers carry an extra optional
+# ``lab_presets`` argument (defaulting to None) that the Tk copies lacked, so a
+# bare alias keeps every existing Tk caller working while sharing one
+# implementation. The ``LauncherApp`` wrappers that DO know the lab presets pass
+# them positionally, which the aliased signatures accept unchanged.
+resolve_seats = core.resolve_seats
 
 
 def effective_seat_mode(cfg):
@@ -364,107 +243,18 @@ def effective_seat_mode(cfg):
     return core.effective_seat_mode(cfg)
 
 
-def invalid_seats(labels):
-    """Labels oTree would reject (otree/common.py: validate_alphanumeric)."""
-    return [label for label in labels if not SEAT_LABEL_RE.match(label)]
-
-
-def seat_file_text(labels):
-    """One label per line, with a trailing newline."""
-    return "\n".join(labels) + "\n"
-
-
-def seats_dir():
-    return os.path.join(config_dir(), "seats")
-
-
-def seat_file_path(config_name, room_name):
-    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", "%s_%s" % (room_name, config_name)).strip("_")
-    return os.path.join(seats_dir(), (stem or "seats") + ".txt")
-
-
-def write_seat_file(labels, path):
-    """Write the seat list atomically, so a crash cannot leave half a list."""
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=folder, prefix=".seats-", suffix=".tmp", delete=False,
-        newline="\n")
-    tmp_name = handle.name
-    try:
-        handle.write(seat_file_text(labels))
-        handle.flush()
-        os.fsync(handle.fileno())
-        handle.close()
-        os.replace(tmp_name, path)
-    except Exception:
-        handle.close()
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-    return path
-
-
-def read_seat_file(path):
-    """The labels in a seat file, parsed the way oTree parses it (str.split)."""
-    with open(path, "r", encoding="utf-8") as handle:
-        return handle.read().split()
-
-
-def seat_summary(cfg, resolved=None):
-    """A short line describing the seat list, for the GUI and the log."""
-    c = normalize_config(cfg)
-    if c["seat_mode"] == SEAT_NONE:
-        return "No seat list. The room stays open and shows no per-seat board."
-    if c["seat_mode"] == SEAT_FILE:
-        path = c["seat_file"].strip()
-        if not path:
-            return "No file chosen yet."
-        if not os.path.isfile(path):
-            return "File not found: %s" % path
-        try:
-            labels = read_seat_file(path)
-        except OSError as error:
-            return "Could not read %s: %s" % (path, error)
-        return "%d seats from %s" % (len(labels), os.path.basename(path))
-    labels = resolve_seats(c) if resolved is None else resolved
-    if not labels:
-        # No seats is not an error: it simply becomes the open (none) room.
-        return "No seats: the room opens with no seat board (none)."
-    return "%d seats" % len(labels)
-
-
-def prepare_label_file(cfg, config_name="session"):
-    """Settle the participant label file for one run.
-
-    Returns (path or None, explanation). A list the launcher owns is written to
-    its own config directory; a file the user picked in their project is used
-    exactly as it stands and is never copied or rewritten.
-    """
-    c = normalize_config(cfg)
-    # Resolve empties (no file, unreadable/empty file, no default seats) to the
-    # open (none) room rather than erroring: seats are never a hard block.
-    mode = effective_seat_mode(c)
-    if mode == SEAT_NONE:
-        return None, "No participant list, so OTREE_LAB_LABEL_FILE is not set."
-    if mode == SEAT_FILE:
-        path = os.path.abspath(c["seat_file"].strip())
-        return path, "Using the project's own seat file, unchanged: %s" % path
-    labels = resolve_seats(c)
-    path = seat_file_path(config_name, c["room_name"])
-    write_seat_file(labels, path)
-    return path, "Wrote %d seats to %s" % (len(labels), path)
-
-
-def seat_preview(labels, limit=10):
-    if not labels:
-        return ""
-    head = ", ".join(labels[:limit])
-    if len(labels) > limit:
-        head += ", ... , " + labels[-1]
-    return head
+# De-duplicated (item #10): the remaining seat helpers were byte-for-byte copies
+# of core's (seat_summary/prepare_label_file gain the same optional lab_presets
+# tail as resolve_seats; a bare alias keeps existing Tk callers working).
+invalid_seats = core.invalid_seats
+seat_file_text = core.seat_file_text
+seats_dir = core.seats_dir
+seat_file_path = core.seat_file_path
+write_seat_file = core.write_seat_file
+read_seat_file = core.read_seat_file
+seat_summary = core.seat_summary
+prepare_label_file = core.prepare_label_file
+seat_preview = core.seat_preview
 
 
 # ---------------------------------------------------------------------------
@@ -525,36 +315,9 @@ def refresh_block(project_path):
 # ---------------------------------------------------------------------------
 
 
-def validate_project(path):
-    """Check that a folder looks like an oTree project.
-
-    Returns (level, message) where level is "ok", "warn" or "error".
-    A missing folder is an error and blocks launching; anything else only warns.
-    """
-    path = (path or "").strip()
-    if not path:
-        return "warn", "No project folder chosen yet. Click Browse to pick one."
-    if not os.path.isdir(path):
-        return "error", "Folder not found: " + path
-    if not os.path.isfile(os.path.join(path, "settings.py")):
-        return (
-            "warn",
-            "No settings.py in this folder, so it may not be an oTree project. "
-            "You can still launch.",
-        )
-    apps = find_app_packages(path)
-    if not apps:
-        return (
-            "warn",
-            "settings.py found, but no app package (a folder with __init__.py) "
-            "next to it. You can still launch.",
-        )
-    listed = ", ".join(apps[:4]) + ("..." if len(apps) > 4 else "")
-    return "ok", "Looks like an oTree project: settings.py and %d app package%s (%s)." % (
-        len(apps),
-        "" if len(apps) == 1 else "s",
-        listed,
-    )
+# De-duplicated (item #10): identical to core's project-folder validation.
+validate_project = core.validate_project
+find_app_packages = core.find_app_packages
 
 
 def titlecase_app(name):
@@ -562,56 +325,19 @@ def titlecase_app(name):
     return re.sub(r"[_-]+", " ", name).strip().title()
 
 
-def find_app_packages(path):
-    apps = []
-    try:
-        entries = sorted(os.listdir(path))
-    except OSError:
-        return apps
-    for name in entries:
-        if name.startswith(".") or name in ("__pycache__", "_static", "_templates"):
-            continue
-        folder = os.path.join(path, name)
-        if os.path.isdir(folder) and os.path.isfile(os.path.join(folder, "__init__.py")):
-            apps.append(name)
-    return apps
-
-
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
 
 
-def repo_root():
-    """The repo root: the parent of app/ (where data/ lives). data/ is anchored
-    here, NOT next to __file__. (Mirror of otree_core.)"""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def app_dir():
-    """The folder holding the app code files (app/). (Mirror of otree_core.)"""
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-def data_dir():
-    """The single folder holding everything the launcher reads and writes:
-    lab.local, lab_info.json, presets.json and seats/. It sits at the repo root
-    (parent of app/) so updating is "copy the new version over the top, keep your
-    data/ folder". (Mirror of otree_core.)"""
-    return os.path.join(repo_root(), "data")
-
-
-def config_dir():
-    """The directory where presets.json and seats/ live: the app's data/ folder.
-    (Mirror of otree_core.)"""
-    return data_dir()
-
-
-def presets_path():
-    override = os.environ.get("OTREE_LAB_LAUNCHER_PRESETS")
-    if override:
-        return override
-    return os.path.join(config_dir(), PRESETS_FILENAME)
+# De-duplicated (item #10): the storage-path helpers were mirrors of core's and
+# resolve to the SAME data/ folder at the repo root (core's __file__ lives in the
+# same app/ directory), so a bare alias keeps every path identical.
+repo_root = core.repo_root
+app_dir = core.app_dir
+data_dir = core.data_dir
+config_dir = core.config_dir
+presets_path = core.presets_path
 
 
 # --- Per-machine lab identity (lab.local) ----------------------------------
@@ -623,99 +349,19 @@ def presets_path():
 # set_lab_marker is the change-it-later overwrite. (Mirror of otree_core.)
 
 
-def lab_marker_path():
-    """Where lab.local lives. OTREE_LAB_MARKER overrides it (used by tests)."""
-    override = os.environ.get("OTREE_LAB_MARKER")
-    if override:
-        return override
-    return os.path.join(data_dir(), LAB_MARKER_FILENAME)
+# De-duplicated (item #10): the per-machine lab.local marker I/O and the
+# apply-to-presets helper were mirrors of core's. Bare aliases share the one
+# implementation; apply_lab_marker's marker sentinel now lives in core, and every
+# Tk caller passes the marker positionally or by keyword, never the sentinel.
+lab_marker_path = core.lab_marker_path
+read_lab_marker = core.read_lab_marker
+set_lab_marker = core.set_lab_marker
+write_lab_marker = core.write_lab_marker
+apply_lab_marker = core.apply_lab_marker
 
 
-def read_lab_marker(path=None):
-    """This machine's lab id, or None when unset.
-
-    Historically one word (`large`/`small`); it now holds ANY lab preset id (a
-    lowercase slug), so a machine can be identified as a lab the operator added.
-    The stored word is returned as-is (stripped, lower-cased), so large/small
-    still resolve to the two built-in labs. Empty/missing means "unset" (first
-    launch). (Mirror of otree_core.)
-    """
-    path = path or lab_marker_path()
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            word = handle.read().strip().lower()
-    except OSError:
-        return None
-    return word or None
-
-
-def set_lab_marker(lab_id, path=None):
-    """Record this machine's lab id, OVERWRITING any existing marker.
-
-    The UI-settable path (first-run chooser + the Lab Settings "which lab is this
-    computer" control), so nobody has to hand-edit lab.local. Accepts any
-    non-empty id; returns the id written. (Mirror of otree_core.)
-    """
-    lab_id = str(lab_id or "").strip().lower()
-    if not lab_id:
-        raise ValueError("lab_id must be a non-empty lab id")
-    path = path or lab_marker_path()
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(lab_id + "\n")
-    return lab_id
-
-
-def write_lab_marker(lab, path=None):
-    """First-run write: record the lab id only if no valid marker exists yet.
-
-    Returns True if written, False if refused (a marker already exists), so a
-    first-run choice can never silently revert an identified machine. Accepts any
-    non-empty id; set_lab_marker is the overwrite path. (Mirror of otree_core.)
-    """
-    lab = str(lab or "").strip().lower()
-    if not lab:
-        raise ValueError("lab must be a non-empty lab id")
-    path = path or lab_marker_path()
-    if read_lab_marker(path) is not None:
-        return False
-    set_lab_marker(lab, path)
-    return True
-
-
-_MARKER_UNSET = object()
-
-
-def apply_lab_marker(presets, marker=_MARKER_UNSET, lab_presets=None):
-    """Point the built-in Lab default's lab at this machine's lab, in place.
-
-    The built-in default is app-owned, so its lab tracks lab.local. User configs
-    are never touched. A no-op when the marker is unset (first launch). Any
-    non-empty lab id is honoured. When ``lab_presets`` is given the built-in
-    default's ``room_name`` also follows that lab's default_room (live, so a room
-    edited in Lab Settings updates the Lab default at once). (Mirror of
-    otree_core.)
-    """
-    if marker is _MARKER_UNSET:
-        marker = read_lab_marker()
-    if not marker:
-        return presets
-    room = core.lab_default_room(lab_presets, marker) if lab_presets is not None else None
-    for preset in presets:
-        if is_builtin(preset):
-            preset["lab"] = marker
-            if room:
-                preset["room_name"] = room
-    return presets
-
-
-def is_builtin(item):
-    """True for the app-owned Lab default (builtin flag, or author == "builtin").
-
-    These configs are pinned to the top and cannot be deleted.
-    """
-    return bool(item.get("builtin")) or str(item.get("author", "")).strip().casefold() == "builtin"
+# De-duplicated (item #10): identical to core's built-in test.
+is_builtin = core.is_builtin
 
 
 def lab_suffix(lab):
@@ -724,39 +370,11 @@ def lab_suffix(lab):
     return core.lab_suffix(lab)
 
 
-def display_name(preset):
-    """The config name as shown to the user.
-
-    The derived lab suffix is appended ONLY to the built-in Lab default;
-    researcher-saved configs still store their own lab but show no suffix.
-    """
-    name = str(preset.get("name", ""))
-    if is_builtin(preset):
-        return name + lab_suffix(normalize_config(preset)["lab"])
-    return name
-
-
-def default_preset():
-    preset = dict(DEFAULT_CONFIG)
-    preset["name"] = "Lab default"
-    preset["created"] = now_iso()
-    preset["last_run"] = None
-    # author/builtin are metadata (like name/created/last_run), NOT config fields
-    # in FIELD_KEYS, so they never enter the config-equality comparison that
-    # guards immutability. The shipped default is app-owned and built in.
-    preset["author"] = "builtin"
-    preset["builtin"] = True
-    # This machine's lab identity (from lab.local) configures the built-in
-    # default's lab. Any non-empty id is honoured; unset (first launch) leaves
-    # the code default untouched.
-    marker = read_lab_marker()
-    if marker:
-        preset["lab"] = marker
-        # The default config's room follows the machine lab's default_room (falls
-        # back to "study"). Base is lab_info.json; a room edited later in Lab
-        # Settings is re-applied live via apply_lab_marker(..., lab_presets=...).
-        preset["room_name"] = core.lab_default_room(core.default_lab_presets(), marker)
-    return preset
+# De-duplicated (item #10): the display-name rule and the built-in default
+# factory were byte-for-byte copies of core's (both now source their defaults
+# from the shared DEFAULT_CONFIG and the same lab.local marker).
+display_name = core.display_name
+default_preset = core.default_preset
 
 
 def clear_builtin_last_run(presets):
@@ -802,39 +420,13 @@ def sort_presets(presets):
     return core.order_presets_for_display(presets)
 
 
-def unique_name(name, presets):
-    """True when `name` is not already taken (comparison ignores case)."""
-    taken = {str(p.get("name", "")).strip().casefold() for p in presets}
-    return name.strip().casefold() not in taken
-
-
-def preset_from_fields(name, fields, created=None, author=None):
-    preset = normalize_config(fields)
-    preset["name"] = name.strip()
-    preset["created"] = created or now_iso()
-    preset["last_run"] = None
-    # `author`/`builtin` are metadata like name/created/last_run, never compared
-    # by normalize_config/configs_differ, so they do not count as config changes.
-    preset["author"] = (author if author is not None else default_author()).strip()
-    # A user-made config is NEVER built in: only default_preset() sets that, so
-    # Save As can never mint an undeletable, top-pinned config.
-    preset["builtin"] = False
-    return preset
-
-
-def format_last_run(stamp):
-    if not stamp:
-        return "Never run"
-    try:
-        when = _dt.datetime.fromisoformat(stamp)
-    except (TypeError, ValueError):
-        return str(stamp)
-    today = _dt.date.today()
-    if when.date() == today:
-        return "Last run today at " + when.strftime("%H:%M")
-    if (today - when.date()).days == 1:
-        return "Last run yesterday at " + when.strftime("%H:%M")
-    return "Last run " + when.strftime("%d %b %Y at %H:%M")
+# De-duplicated (item #10): identical to core's name-uniqueness test, the
+# fields->preset factory and the "last run ..." formatter. (core's
+# preset_from_fields fills a blank author from getpass.getuser() the same way the
+# Tk default_author() did; every Tk caller passes an explicit author or None.)
+unique_name = core.unique_name
+preset_from_fields = core.preset_from_fields
+format_last_run = core.format_last_run
 
 
 # ---------------------------------------------------------------------------
@@ -884,89 +476,10 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
 # ---------------------------------------------------------------------------
 
 
-def export_bat_text(cfg, name="config"):
-    """A standalone .bat with the same effect as launching from the app.
-
-    This is a convenience for people who still want a batch file.  The app
-    itself never writes or reads one in order to launch.
-    """
-    c = normalize_config(cfg)
-    url = build_url(c)
-    lines = [
-        "@echo off",
-        "REM Generated by %s on %s" % (APP_NAME, _dt.datetime.now().strftime("%Y-%m-%d %H:%M")),
-        'REM Config: "%s"' % name,
-        "REM Editing this file does not change the saved config in the app.",
-        "",
-    ]
-
-    if c["db_mode"] == DB_MODE_NONE:
-        lines += [
-            "REM === Database ===",
-            "REM This config sets no database, so oTree falls back to its own default.",
-            "set DATABASE_URL=",
-            "",
-        ]
-    else:
-        lines += [
-            "REM === Database ===",
-            "set DB_NAME=%s" % c["db_name"],
-            "set DB_USER=%s" % c["db_user"],
-            "set DB_PASSWORD=%s" % c["db_password"],
-            "set DB_HOST=%s" % c["db_host"],
-            "set DB_PORT=%s" % c["db_port"],
-            "set DATABASE_URL=postgres://%DB_USER%:%DB_PASSWORD%@%DB_HOST%:%DB_PORT%/%DB_NAME%",
-            "",
-        ]
-
-    lines += [
-        "REM === oTree variables ===",
-        "set OTREE_ADMIN_USERNAME=%s" % c["admin_username"],
-        "set OTREE_ADMIN_PASSWORD=%s" % c["admin_password"],
-    ]
-    if c["production"]:
-        lines.append("set OTREE_PRODUCTION=1")
-    else:
-        lines.append("set OTREE_PRODUCTION=")
-    if c["auth_level"] in ("STUDY", "DEMO"):
-        lines.append("set OTREE_AUTH_LEVEL=%s" % c["auth_level"])
-    else:
-        lines.append("set OTREE_AUTH_LEVEL=")
-    lines.append("")
-
-    lines += [
-        "REM === oTree project folder ===",
-        'cd /d "%s"' % c["project_path"],
-        "",
-    ]
-
-    if c["resetdb"]:
-        lines += [
-            "REM === Reset the database (the y is answered for you) ===",
-            "(echo y) | otree resetdb",
-            "",
-        ]
-
-    lines += [
-        "REM === Start the server in a new terminal ===",
-        'start "oTree Server" cmd /k %s' % " ".join(_prodserver_argv(c)),
-        "",
-    ]
-
-    if c["open_browser"]:
-        lines += [
-            "REM === Wait for prodserver to boot up, then open the page ===",
-            "timeout /t %d >nul" % c["wait_seconds"],
-            "start %s" % url,
-            "",
-        ]
-
-    lines += [
-        "echo Server starting. This window will close now.",
-        "timeout /t 10 >nul",
-        "",
-    ]
-    return "\r\n".join(lines)
+# De-duplicated (item #10, last): the .bat export was a byte-for-byte copy of
+# core's and is unreachable from either UI (no button calls it; only the tests
+# do), so sharing it is pure tidiness. Kept under this name for those tests.
+export_bat_text = core.export_bat_text
 
 
 # ---------------------------------------------------------------------------
