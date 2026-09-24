@@ -30,24 +30,8 @@ data/*.log
 # the launch history log and the once-a-day update-check cache (runtime state)
 data/sessions.jsonl
 data/update_check.json
-# per-settings.py append locks the launcher keeps in its OWN data folder (so no
-# stray .lock is written into a researcher's project — see core._settings_lock_path)
+# per-settings.py append locks the launcher keeps in its OWN data folder
 data/locks/
 
 # settings.py backups the launcher writes (those land in the user's own project)
 *.bak
-
-# Throwaway render scaffolding
-_ai/render_work/
-
-# Mockup intermediate HTML (generator renders these to PNG)
-_ai/mockups/*.html
-
-# AI scaffolding (mockups, renders, notes, tests) - not deliverables
-_ai/
-
-# Internal dev/ops docs - never ship to the public repo
-IDEAS.md
-CLAUDE.md
-PRINCIPLES.md
-TODO.md
