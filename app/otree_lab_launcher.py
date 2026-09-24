@@ -6955,12 +6955,45 @@ class RoomPickerDialog(object):
         _modal_close(self.top)
 
 
+def export_participant_shortcuts_dialog(parent, fonts, lab_name, host, seats,
+                                        room=None, shortcut_label=""):
+    """Ask for a destination folder and write the per-seat kiosk .lnk bundle.
+
+    Shared by the Add/Edit-lab tick box and the Lab Settings "Export PC
+    shortcuts" button, so both go through the same folder picker + core writer
+    (core.export_participant_shortcuts). Always produces Windows .lnk files (the
+    participant PCs are Windows) even when this launcher runs on a Mac. Returns
+    the core result dict, or None when the user cancelled the folder picker.
+    """
+    labels = core.parse_seat_list(seats)
+    if not labels:
+        messagebox.showwarning(
+            "No seats", "This lab has no seats, so there is nothing to make "
+            "shortcuts for.", parent=parent)
+        return None
+    dest = filedialog.askdirectory(
+        parent=parent, title="Choose where to save the participant-PC shortcuts",
+        initialdir=os.path.expanduser("~"))
+    if not dest:
+        return None
+    result = core.export_participant_shortcuts(
+        dest, lab_name, host, labels, room=room, shortcut_label=shortcut_label)
+    if result.get("ok"):
+        messagebox.showinfo("Shortcuts created", result["message"], parent=parent)
+    else:
+        messagebox.showerror("Could not create shortcuts",
+                             result.get("message", "Unknown error."), parent=parent)
+    return result
+
+
 class LabPresetEditDialog(object):
     """Add or edit one lab preset (name, IP, seat list). Validation and the
     write both go through core; the caller passes on_save(name, ip, seats)."""
 
     def __init__(self, parent, fonts, title, preset, on_save):
         self.on_save = on_save
+        self.parent = parent
+        self.fonts = fonts
         top = self.top = tk.Toplevel(parent)
         top.title(title)
         top.configure(bg=COLORS["card"])
@@ -7012,6 +7045,15 @@ class LabPresetEditDialog(object):
         self.shortcut = tk.StringVar(top, value=(preset or {}).get("shortcut_label", ""))
         ttk.Entry(roomrow, textvariable=self.shortcut, width=22).pack(anchor="w", pady=(2, 0))
 
+        # Optional: on Save, also write a folder of per-seat Windows kiosk .lnk
+        # shortcuts (one per participant PC). Ticking it prompts for a destination
+        # folder after the lab is saved. The Edit view also has an on-demand
+        # "Export PC shortcuts" button, so this is just the create-time shortcut.
+        self.make_shortcuts = tk.BooleanVar(top, value=False)
+        ttk.Checkbutton(roomrow, text="Create participant-PC shortcuts (a folder of "
+                        "per-seat kiosk .lnk files)",
+                        variable=self.make_shortcuts).pack(anchor="w", pady=(10, 0))
+
         # Optional column count so the plain-grid seat map matches the room shape.
         colrow = tk.Frame(body, bg=COLORS["card"])
         colrow.grid(row=7, column=0, sticky="w", pady=(8, 0))
@@ -7050,10 +7092,17 @@ class LabPresetEditDialog(object):
         ok, message = self.on_save(self.name.get(), self.ip.get(),
                                    self.seats.get("1.0", "end"), cols,
                                    self.room.get(), self.shortcut.get())
-        if ok:
-            self._close()
-        else:
+        if not ok:
             self.status.configure(text=message)
+            return
+        # The lab saved. If asked, also write the per-seat kiosk .lnk bundle,
+        # while the dialog is still up so the folder picker stacks above it.
+        if self.make_shortcuts.get():
+            export_participant_shortcuts_dialog(
+                self.top, self.fonts, self.name.get(), self.ip.get(),
+                core.parse_seat_list(self.seats.get("1.0", "end")),
+                room=self.room.get(), shortcut_label=self.shortcut.get())
+        self._close()
 
     def _close(self):
         _modal_close(self.top)
@@ -7270,6 +7319,8 @@ class LabSettingsDialog(object):
         ttk.Button(btns, text="Add lab", command=self._add).pack(side="left")
         ttk.Button(btns, text="Edit", command=self._edit).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Delete", command=self._delete).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Export PC shortcuts",
+                   command=self._export_shortcuts).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Close", command=self._close).pack(side="right")
         self.preset_status = tk.Label(presets_card, text="", bg=COLORS["card"],
                                       fg=COLORS["muted"], font=fonts.small, anchor="w",
@@ -7615,6 +7666,26 @@ class LabSettingsDialog(object):
                 self.preset_status.configure(text=message, fg=COLORS["ok"])
             return ok, message
         LabPresetEditDialog(self.top, self.fonts, "Edit lab", preset, on_save)
+
+    def _export_shortcuts(self):
+        """Regenerate the per-seat kiosk .lnk bundle for the selected lab."""
+        lab_id = self._selected_id()
+        if not lab_id:
+            self.preset_status.configure(
+                text="Select a lab to export shortcuts for.", fg=COLORS["warn"])
+            return
+        preset = core.find_lab_preset(lab_id, self._lab_presets())
+        if preset is None:
+            self.preset_status.configure(text="No lab with that id.", fg=COLORS["warn"])
+            return
+        result = export_participant_shortcuts_dialog(
+            self.top, self.fonts, preset["name"], preset["ip"], preset["seats"],
+            room=preset.get("default_room"), shortcut_label=preset.get("shortcut_label", ""))
+        if result and result.get("ok"):
+            self.preset_status.configure(text=result["message"], fg=COLORS["ok"])
+        elif result:
+            self.preset_status.configure(
+                text=result.get("message", "Could not create shortcuts."), fg=COLORS["warn"])
 
     def _on_tree_click(self, event):
         """Toggle a lab's visibility when its Shown cell (✓ / –) is clicked."""

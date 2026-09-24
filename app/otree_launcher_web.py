@@ -293,6 +293,37 @@ _FOLDER_DIALOG_HELPER = (
 )
 
 
+def _build_folder_dialog_helper(title):
+    """A stdlib-tkinter folder-picker helper source with a custom window title
+    (JSON-encoded so any quote/backslash is safe). Mirrors
+    :data:`_FOLDER_DIALOG_HELPER` but lets the caller name what folder to choose
+    (e.g. where to save the participant-PC shortcuts)."""
+    title_lit = json.dumps(str(title or "Choose a folder"))
+    return (
+        "import sys\n"
+        "import tkinter\n"
+        "from tkinter import filedialog\n"
+        "root = tkinter.Tk()\n"
+        "root.withdraw()\n"
+        "try:\n"
+        "    root.attributes('-topmost', True)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "root.lift()\n"
+        "try:\n"
+        "    root.update()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "path = filedialog.askdirectory(title=%s)\n" % title_lit +
+        "try:\n"
+        "    root.destroy()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "sys.stdout.write(path or '')\n"
+        "sys.stdout.flush()\n"
+    )
+
+
 def _pythonw_executable():
     """The windowless interpreter to run the dialog helper with, so no console
     flashes on Windows while the GUI dialog still shows.
@@ -1378,6 +1409,64 @@ class Api(object):
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "message": message, "presets": _lab_rows(presets),
                 "labs": _lab_tiles(presets, config_lab), "next_selected": next_selected}
+
+    @api_call
+    def export_pc_shortcuts(self, lab_id):
+        """Write a folder of per-seat Windows kiosk .lnk shortcuts for a lab.
+
+        Web/Tk parity for review feature D. Reuses the lab's own host, room, seat
+        list and shortcut label (core.export_participant_shortcuts) and always
+        produces Windows .lnk files, whatever OS the launcher runs on. The
+        destination folder is chosen with the SAME native folder-dialog machinery
+        the project picker uses: ``create_file_dialog`` under pywebview (async,
+        via ``pywOnShortcutsResult``), the server-side folder subprocess in
+        browser mode (returned synchronously). Two entry points call this: the
+        Add/Edit-lab tick box and the Lab Settings "Export PC shortcuts" button.
+        """
+        presets = core.lab_presets_from_store(self.store_extra)
+        preset = core.find_lab_preset(lab_id, presets)
+        if preset is None:
+            return {"ok": False, "message": "No lab with that id."}
+        if not preset.get("seats"):
+            return {"ok": False,
+                    "message": "This lab has no seats, so there is nothing to make shortcuts for."}
+        port = core.DEFAULT_CONFIG["port"]
+        # Browser mode: pop a native folder dialog on the server machine and write
+        # the bundle synchronously (every /api call runs on its own HTTP thread).
+        if getattr(self, "browser_mode", False):
+            dest = _native_folder_dialog_subprocess(
+                helper=_build_folder_dialog_helper(
+                    "Choose where to save the participant-PC shortcuts"))
+            if not dest or not os.path.isdir(dest):
+                return {"ok": True, "path": ""}      # cancelled
+            return core.export_participant_shortcuts(
+                dest, preset["name"], preset["ip"], preset["seats"],
+                room=preset.get("default_room"), port=port,
+                shortcut_label=preset.get("shortcut_label", ""))
+        # Desktop (pywebview): pick the folder off the WebView thread, then push
+        # the result back to the page.
+        self._spawn(lambda: self._dialog_export_shortcuts(preset, port),
+                    "dlg-pcshortcuts")
+        return {"ok": True, "pending": True}
+
+    def _dialog_export_shortcuts(self, preset, port):
+        import webview
+        try:
+            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception:
+            LOG.exception("shortcut folder dialog failed")
+            self._callback("pywOnShortcutsResult",
+                           {"ok": False, "message": "Folder dialog failed. See the log."})
+            return
+        dest = self._dialog_path(result)
+        if not dest:
+            LOG.info("shortcut folder dialog cancelled")
+            return
+        res = core.export_participant_shortcuts(
+            dest, preset["name"], preset["ip"], preset["seats"],
+            room=preset.get("default_room"), port=port,
+            shortcut_label=preset.get("shortcut_label", ""))
+        self._callback("pywOnShortcutsResult", res)
 
     # -- settings.py block -------------------------------------------------
 

@@ -25,6 +25,7 @@ import re
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -4275,6 +4276,255 @@ def launch_briefing(cfg, lab_presets=None):
         # Guidance for staff about the per-seat link: it already includes
         # welcome_page_ok=1, and this is the link to document / put on the PCs.
         "welcome_note": WELCOME_NOTE,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Participant-PC kiosk shortcuts (Windows .lnk bundle)
+#
+# A folder of one Windows .lnk per seat, each opening THAT seat's welcome-page
+# link in a full-screen kiosk browser on the participant PC. The .lnk bytes are
+# written DIRECTLY here from the [MS-SHLLINK] Shell Link binary format, using only
+# the standard library (struct), so a lab manager on ANY OS (Mac / Linux /
+# Windows) produces a real Windows shortcut -- all participant PCs are Windows.
+# We deliberately do NOT use WScript.Shell / pywin32 (Windows-only, and absent on
+# the lab manager's Mac). Windows resolves the stored target path at CLICK time on
+# the participant PC, so the browser exe need not exist on the generating machine.
+#
+# The exe path and the kiosk flags are easy-to-change module constants: Julian
+# confirms the exact link/exe on a real lab PC later; the mechanism is what
+# matters now. Default is Edge in kiosk full-screen; Chrome would be
+# ``chrome.exe --kiosk "<url>"`` (no --edge-kiosk-type flag).
+# ---------------------------------------------------------------------------
+
+# The fixed Windows path to the browser the participant-PC shortcuts launch. The
+# .lnk stores this verbatim; the participant PC resolves it at click time.
+PARTICIPANT_BROWSER_EXE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
+# The kiosk flags, split around the seat URL so the whole command line reads
+# exactly like the one Julian sets by hand in the shortcut's Properties -> Target:
+#   ...\msedge.exe --kiosk "http://HOST:PORT/room/ROOM?participant_label=SEAT&welcome_page_ok=1" --edge-kiosk-type=fullscreen
+PARTICIPANT_KIOSK_FLAG = "--kiosk"            # goes BEFORE the URL
+PARTICIPANT_KIOSK_EXTRA_FLAGS = "--edge-kiosk-type=fullscreen"   # goes AFTER the URL
+
+# The 16-byte Shell Link CLSID {00021401-0000-0000-C000-000000000046}, in the
+# little-endian-mixed on-disk layout [MS-SHLLINK] 2.1 requires. This plus the
+# 0x0000004C HeaderSize is the "magic header" every valid .lnk begins with.
+SHELL_LINK_CLSID = (b"\x01\x14\x02\x00\x00\x00\x00\x00"
+                    b"\xc0\x00\x00\x00\x00\x00\x00\x46")
+
+# Shell Link header LinkFlags bits ([MS-SHLLINK] 2.1.1) we use.
+_LNK_HAS_LINK_INFO = 0x00000002
+_LNK_HAS_NAME = 0x00000004
+_LNK_HAS_WORKING_DIR = 0x00000010
+_LNK_HAS_ARGUMENTS = 0x00000020
+_LNK_HAS_ICON_LOCATION = 0x00000040
+_LNK_IS_UNICODE = 0x00000080
+_LNK_FILE_ATTRIBUTE_ARCHIVE = 0x00000020
+_LNK_SW_SHOWNORMAL = 1
+_LNK_DRIVE_FIXED = 3
+
+
+def _lnk_string_data(text):
+    """One Unicode StringData block ([MS-SHLLINK] 2.4): a 2-byte character count
+    (UTF-16 code units, no terminator) followed by the UTF-16LE bytes. Used with
+    the IsUnicode header flag set."""
+    data = str(text).encode("utf-16-le")
+    return struct.pack("<H", len(data) // 2) + data
+
+
+def _lnk_link_info(local_base_path):
+    """A LinkInfo structure ([MS-SHLLINK] 2.3) carrying the target's LocalBasePath.
+
+    Windows uses this ANSI path to find the target when there is no
+    LinkTargetIDList (which we omit -- an IDList would encode the generating
+    machine's own shell namespace, wrong for a shortcut resolved on a different
+    Windows PC). A minimal fixed-drive VolumeID accompanies the path, as the
+    format requires.
+    """
+    # ANSI (non-Unicode) path. The default Edge path is ASCII; latin-1 keeps any
+    # byte 1:1 rather than raising, and the participant PC reads it back as its
+    # own ANSI code page.
+    base = local_base_path.encode("latin-1", "replace") + b"\x00"
+    header_size = 0x1C                      # 7 x uint32, no Unicode-offset fields
+    volume_label = b"\x00"                  # empty volume label, null-terminated
+    volume_label_offset = 0x10
+    volume_id_size = 4 + 4 + 4 + 4 + len(volume_label)
+    volume_id = struct.pack("<IIII", volume_id_size, _LNK_DRIVE_FIXED, 0,
+                            volume_label_offset) + volume_label
+    volume_id_offset = header_size
+    local_base_path_offset = volume_id_offset + len(volume_id)
+    common_path_suffix = b"\x00"            # empty suffix, null-terminated
+    common_path_suffix_offset = local_base_path_offset + len(base)
+    link_info_size = common_path_suffix_offset + len(common_path_suffix)
+    header = struct.pack(
+        "<IIIIIII",
+        link_info_size, header_size,
+        0x00000001,                         # VolumeIDAndLocalBasePath
+        volume_id_offset, local_base_path_offset,
+        0,                                  # CommonNetworkRelativeLinkOffset (none)
+        common_path_suffix_offset)
+    return header + volume_id + base + common_path_suffix
+
+
+def build_windows_lnk(target_path, arguments="", working_dir="",
+                      description="", icon_path=None):
+    """The raw bytes of a Windows ``.lnk`` (a [MS-SHLLINK] Shell Link).
+
+    ``target_path`` is the TargetPath the shortcut launches (here a browser exe),
+    ``arguments`` its command line. Pure stdlib (struct only), so it produces the
+    same valid Windows shortcut bytes on Mac, Linux and Windows alike. The bytes
+    are: the 76-byte ShellLinkHeader, a LinkInfo carrying the target path, then
+    the Unicode StringData blocks (name, working dir, arguments, icon) and a
+    4-byte terminal block.
+    """
+    flags = _LNK_HAS_LINK_INFO | _LNK_IS_UNICODE
+    if description:
+        flags |= _LNK_HAS_NAME
+    if working_dir:
+        flags |= _LNK_HAS_WORKING_DIR
+    if arguments:
+        flags |= _LNK_HAS_ARGUMENTS
+    if icon_path:
+        flags |= _LNK_HAS_ICON_LOCATION
+    header = struct.pack(
+        "<I16sIIQQQIIIHHII",
+        0x0000004C,                 # HeaderSize (always 76)
+        SHELL_LINK_CLSID,           # LinkCLSID
+        flags,                      # LinkFlags
+        _LNK_FILE_ATTRIBUTE_ARCHIVE,  # FileAttributes
+        0, 0, 0,                    # Creation / Access / Write FILETIMEs (unset)
+        0,                          # FileSize (unknown / resolved at click time)
+        0,                          # IconIndex
+        _LNK_SW_SHOWNORMAL,         # ShowCommand
+        0,                          # HotKey
+        0,                          # Reserved1
+        0,                          # Reserved2
+        0)                          # Reserved3
+    out = header + _lnk_link_info(target_path)
+    # StringData order is fixed by the spec (2.4): NAME, RELATIVE_PATH,
+    # WORKING_DIR, COMMAND_LINE_ARGUMENTS, ICON_LOCATION. We omit RELATIVE_PATH.
+    if description:
+        out += _lnk_string_data(description)
+    if working_dir:
+        out += _lnk_string_data(working_dir)
+    if arguments:
+        out += _lnk_string_data(arguments)
+    if icon_path:
+        out += _lnk_string_data(icon_path)
+    out += struct.pack("<I", 0)     # ExtraData TerminalBlock (< 0x00000004)
+    return out
+
+
+def participant_kiosk_arguments(url, kiosk_flag=None, extra_flags=None):
+    """The .lnk Arguments string for a kiosk shortcut to ``url``.
+
+    Produces ``--kiosk "<url>" --edge-kiosk-type=fullscreen`` by default (the flags
+    are module constants). The URL is quoted, exactly as in a hand-set shortcut.
+    """
+    flag = PARTICIPANT_KIOSK_FLAG if kiosk_flag is None else kiosk_flag
+    extra = PARTICIPANT_KIOSK_EXTRA_FLAGS if extra_flags is None else extra_flags
+    parts = ['%s "%s"' % (flag, url)] if flag else ['"%s"' % url]
+    if extra:
+        parts.append(extra)
+    return " ".join(parts)
+
+
+def participant_seat_url(host, port, room, seat):
+    """The exact per-seat link a lab PC opens: the welcome_page_ok=1 room link.
+
+    Seat labels are already validated to [A-Za-z0-9_] (and host/room are simple
+    tokens), so no percent-encoding is needed; the link matches the one the launch
+    briefing documents byte-for-byte.
+    """
+    base = "http://%s:%s/room/%s" % (str(host).strip(), str(port).strip(),
+                                     sanitize_room_name(room))
+    return base + "?participant_label=%s&%s" % (str(seat).strip(), WELCOME_FLAG)
+
+
+def build_participant_seat_lnk(host, port, room, seat, browser_exe=None,
+                               description=""):
+    """The .lnk bytes for ONE seat: the kiosk browser opening that seat's link."""
+    exe = browser_exe or PARTICIPANT_BROWSER_EXE
+    url = participant_seat_url(host, port, room, seat)
+    args = participant_kiosk_arguments(url)
+    # The exe's own folder as working dir, and the exe as the icon source, so the
+    # shortcut shows the browser icon on the participant PC.
+    working_dir = exe.rsplit("\\", 1)[0] if "\\" in exe else ""
+    return build_windows_lnk(exe, arguments=args, working_dir=working_dir,
+                             description=description or ("Seat %s" % seat),
+                             icon_path=exe)
+
+
+_FILENAME_BAD_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_filename(name, fallback):
+    """A Windows-safe file/folder name: illegal characters -> '_', trimmed of
+    trailing dots/spaces (which Windows forbids), with a fallback when empty."""
+    cleaned = _FILENAME_BAD_RE.sub("_", str(name or "")).strip().rstrip(". ")
+    return cleaned or fallback
+
+
+def participant_shortcut_folder_name(lab_name):
+    """The subfolder the bundle writes into: '<lab name> participant PC shortcuts'."""
+    return "%s participant PC shortcuts" % _sanitize_filename(lab_name, "Lab")
+
+
+def export_participant_shortcuts(dest_dir, lab_name, host, seats, room=None,
+                                 port=None, shortcut_label="", browser_exe=None):
+    """Write a bundle of per-seat Windows kiosk .lnk shortcuts under ``dest_dir``.
+
+    Creates ``<dest_dir>/<lab name> participant PC shortcuts/`` and writes one
+    ``<shortcut label> - <seat>.lnk`` per seat, each opening that seat's
+    welcome_page_ok=1 link in the kiosk browser. Always produces Windows .lnk
+    files regardless of the OS this runs on. Returns a small result dict
+    (``ok``/``message``, and on success ``folder``/``count``/``files``); never
+    raises for the ordinary cancel/validation/IO cases.
+
+    ``shortcut_label`` names the files (falls back to the lab name when blank).
+    ``port`` defaults to the launcher's default (8000).
+    """
+    port = str(port or DEFAULT_CONFIG["port"]).strip() or "8000"
+    labels = [str(s).strip() for s in (seats or []) if str(s).strip()]
+    if not str(host or "").strip():
+        return {"ok": False, "message": "This lab has no host/IP set, so no links can be made."}
+    if not labels:
+        return {"ok": False, "message": "This lab has no seats, so there is nothing to make shortcuts for."}
+    if not dest_dir or not os.path.isdir(dest_dir):
+        return {"ok": False, "message": "Choose a destination folder first."}
+    room = sanitize_room_name(room)
+    label = str(shortcut_label or "").strip() or str(lab_name or "").strip() or "Study room"
+    out_dir = os.path.join(dest_dir, participant_shortcut_folder_name(lab_name))
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as error:
+        return {"ok": False, "message": "Could not create the folder: %s" % error}
+    written = []
+    for seat in labels:
+        data = build_participant_seat_lnk(
+            host.strip(), port, room, seat, browser_exe=browser_exe,
+            description="%s - %s" % (label, seat))
+        filename = "%s - %s.lnk" % (_sanitize_filename(label, "Study room"),
+                                    _sanitize_filename(seat, "seat"))
+        path = os.path.join(out_dir, filename)
+        try:
+            with open(path, "wb") as handle:
+                handle.write(data)
+        except OSError as error:
+            return {"ok": False,
+                    "message": "Could not write %s: %s" % (filename, error),
+                    "folder": out_dir, "count": len(written), "files": written}
+        written.append(path)
+    plural = "" if len(written) == 1 else "s"
+    return {
+        "ok": True,
+        "folder": out_dir,
+        "count": len(written),
+        "files": written,
+        "message": ("Wrote %d participant-PC shortcut%s to \"%s\". Copy the folder "
+                    "to the lab, drop one .lnk on each participant PC, and rename "
+                    "it per machine if you like." % (len(written), plural, out_dir)),
     }
 
 

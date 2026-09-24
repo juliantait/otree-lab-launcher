@@ -1363,6 +1363,7 @@ window.pywOnFilePicked=function(p){if(!p||!p.path)return;currentSeatFile=p.path;
 window.pywOnBatResult=function(r){if(!r)return;
   if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file.");
   else if(r.message)window.pywStatus("err",r.message);};
+window.pywOnShortcutsResult=function(r){pcShortcutsResult(r);};
 
 /* ======================================================================
    SIDEBAR: saved configs
@@ -2237,6 +2238,7 @@ function openLabSettings(){
     return '<tr><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.ip||p.host||"")+'</td><td class="c">'+(p.seats?p.seats.length:0)+
       '</td><td class="c"><span class="shown-toggle'+(p.display===false?" off":"")+'" onclick="toggleLabShown(\''+pid+'\')">'+(p.display===false?"–":"✓")+'</span></td>'+
       '<td class="c"><button class="btn tiny" onclick="labPresetEdit(\''+pid+'\')">Edit</button> '+
+      '<button class="btn tiny" onclick="exportPcShortcuts(\''+pid+'\')">Export PC shortcuts</button> '+
       '<button class="btn tiny" onclick="deleteLabPreset(\''+pid+'\')">Delete</button></td></tr>';
   }).join("");
   openModal("Lab settings",
@@ -2351,12 +2353,14 @@ function labPresetEdit(id){
     '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label><input id="lpRoom" type="text" placeholder="study" value="'+escapeHtml(room)+'"></div>'+
     '<div class="mfield"><label>Shortcut label</label><input id="lpShortcut" type="text" placeholder="(optional) name of the participant-PC desktop shortcuts" value="'+escapeHtml(shortcut)+'"></div>'+
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
+    '<label class="chk" style="margin:6px 0 2px"><input type="checkbox" id="lpMakeShortcuts"> Create participant-PC shortcuts (a folder of per-seat kiosk .lnk files)</label>'+
     '<div class="ls-status" id="lpStatus"></div>'+
     '<div class="cta"><button class="btn" onclick="cancelLabPreset()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
 }
 function saveLabPreset(id){
   var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
   var room=(val("lpRoom")||"").trim()||"study",shortcut=(val("lpShortcut")||"").trim();
+  var makeShortcuts=!!(el("lpMakeShortcuts")&&el("lpMakeShortcuts").checked);
   function fail(m){var s=el("lpStatus");if(s){s.className="ls-status warn";s.textContent=m;}}
   if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
   var colsNum=cols?(parseInt(cols,10)||0):0;
@@ -2388,10 +2392,27 @@ function saveLabPreset(id){
         var sel=r.configs.filter(function(c){return c.name===currentConfigName;})[0];
         if(sel&&sel.builtin){setRoom(labRoom());markFormClean();}}
       openLabSettings();
-      var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}}
+      var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}
+      /* If asked, also write the per-seat kiosk .lnk bundle for the just-saved
+         lab (the Edit view's "Export PC shortcuts" button does the same later). */
+      if(makeShortcuts){var savedId=id||r.new_id;if(savedId)exportPcShortcuts(savedId);}}
     else fail((r&&r.message)||"Could not save the lab.");};
   if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
   else API.add_lab(name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
+}
+function pcShortcutsResult(r){
+  if(!r)return;
+  if(r.ok&&r.count){window.pywStatus("ok",r.message||("Wrote "+r.count+" shortcuts."));
+    var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"";}return;}
+  if(r.ok){/* cancelled folder picker (path=="") -> stay quiet */return;}
+  window.pywStatus("err",r.message||"Could not create shortcuts.");
+  var s2=el("lsLabStatus");if(s2){s2.className="ls-status warn";s2.textContent=r.message||"Could not create shortcuts.";}
+}
+function exportPcShortcuts(id){
+  if(!NATIVE||!API){window.pywStatus("warn","Exporting shortcuts works in the app, not the static preview.");return;}
+  /* Browser mode returns the result synchronously; pywebview returns
+     {pending:true} and pushes the result through window.pywOnShortcutsResult. */
+  API.export_pc_shortcuts(id).then(function(r){if(r&&r.pending)return;pcShortcutsResult(r);});
 }
 function deleteLabPreset(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;
