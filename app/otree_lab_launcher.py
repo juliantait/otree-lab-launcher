@@ -386,6 +386,13 @@ def clear_builtin_last_run(presets):
     return core.clear_builtin_last_run(presets)
 
 
+def clear_builtin_project_path(presets):
+    """Force the built-in Lab default's ``project_path`` to "" on load, so it
+    always opens Browse-first with no folder set (Job 2). Mirror of
+    otree_core.clear_builtin_project_path."""
+    return core.clear_builtin_project_path(presets)
+
+
 def load_store(path=None):
     """Read the presets file.
 
@@ -1519,6 +1526,9 @@ class LauncherApp(object):
         # The built-in Lab default is a launch TEMPLATE: force its last_run to
         # None on load so a stamp a previous version wrote is cleared (Job 2).
         clear_builtin_last_run(self.presets)
+        # ...and force its project folder blank so it always opens Browse-first
+        # (the launcher opens selected on the built-in every start, Job 2).
+        clear_builtin_project_path(self.presets)
         if not os.path.exists(self.store_path):
             try:
                 save_store(self.presets, self.store_extra, self.store_path)
@@ -1545,16 +1555,15 @@ class LauncherApp(object):
         self._wire_traces()
 
         self.refresh_sidebar()
-        # Open SELECTED on the most-recently-launched config (falling back to the
-        # pinned built-in default when nothing has been launched). Shared with the
-        # web face through core.select_on_open, so both open on the same config.
+        # Always open SELECTED on the built-in Lab default -- a fresh,
+        # Browse-first template every start (Job 2). Shared with the web face
+        # through core.select_on_open, so both open on the same config.
         if self.presets:
             open_on = core.select_on_open(self.presets)
             open_index = self._index_of(open_on) if open_on is not None else 0
             self.select_preset(open_index if open_index is not None else 0, log_it=False)
         else:
             self.load_fields(DEFAULT_CONFIG, None)
-        self._prefill_last_project()
 
         self.log("%s ready. Pick a config on the left, then click Launch." % APP_NAME, "muted")
         root.bind("<Control-Return>", lambda _e: self.launch())
@@ -3363,7 +3372,6 @@ class LauncherApp(object):
             return ""
         path = os.path.normpath(chosen)
         self.var["project_path"].set(path)
-        self._remember_project(path)
         level, message = validate_project(chosen)
         self.log("Project folder: %s" % chosen, "info")
         self.log(message, {"ok": "ok", "warn": "warn", "error": "err"}[level])
@@ -3372,28 +3380,6 @@ class LauncherApp(object):
         if offer_get_ready:
             self._maybe_offer_get_ready(path)
         return path
-
-    def _prefill_last_project(self):
-        """Prefill the last project folder used on this machine into the built-in
-        default, so the common default run opens with a project already set."""
-        if self.selected_index is None:
-            return
-        preset = self.presets[self.selected_index]
-        if not is_builtin(preset) or self.var["project_path"].get().strip():
-            return
-        last = str(self.store_extra.get("last_project", "")).strip()
-        if last and os.path.isdir(last):
-            self.var["project_path"].set(os.path.normpath(last))
-
-    def _remember_project(self, path):
-        """Remember the last project folder per machine (in store_extra)."""
-        path = os.path.normpath(path)
-        if self.store_extra.get("last_project") != path:
-            try:
-                self._mutate_store(
-                    lambda: self.store_extra.__setitem__("last_project", path))
-            except OSError:
-                pass
 
     def save_as_new(self, on_success=None):
         """Save the on-screen settings as a new config. ``on_success`` (used by
@@ -3682,6 +3668,7 @@ class LauncherApp(object):
         self.lab_presets = core.lab_presets_from_store(self.store_extra)
         apply_lab_marker(self.presets, lab_presets=self.lab_presets)
         clear_builtin_last_run(self.presets)
+        clear_builtin_project_path(self.presets)
 
     def _persist(self):
         # Lock-guarded so a background worker's stamp-and-save cannot serialise

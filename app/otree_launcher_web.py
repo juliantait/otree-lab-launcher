@@ -486,6 +486,9 @@ class Api(object):
         # The built-in Lab default is a launch TEMPLATE: force its last_run to
         # None on load so a stamp a previous version wrote is cleared (Job 2).
         core.clear_builtin_last_run(self.presets)
+        # ...and force its project folder blank so it always opens Browse-first
+        # (the launcher opens selected on the built-in every start, Job 2).
+        core.clear_builtin_project_path(self.presets)
         self.presets = core.order_presets_for_display(self.presets)
         if not os.path.exists(self.store_path):
             try:
@@ -544,6 +547,7 @@ class Api(object):
         core.apply_lab_marker(
             self.presets, lab_presets=core.lab_presets_from_store(self.store_extra))
         core.clear_builtin_last_run(self.presets)
+        core.clear_builtin_project_path(self.presets)
 
     def _find(self, name):
         for preset in self.presets:

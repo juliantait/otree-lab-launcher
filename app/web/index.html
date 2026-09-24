@@ -302,12 +302,13 @@ body{
 .main-head h1{margin:0;font-size:20px;font-weight:650;color:var(--text-strong);letter-spacing:-.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
-/* header appearance toggle: one icon button that flips dark<->light. It shows a
+/* appearance toggle: one icon button that flips dark<->light. It shows a
    SUN while dark (click -> light) and a MOON while light (click -> dark); the CSS
    below swaps which glyph is visible from the <html> data-theme attribute, so no
-   JS has to touch the icon. Styled to sit quietly beside "Save as new config…". */
+   JS has to touch the icon. Lives in the sidebar header, immediately left of the
+   gear; sized (30px) to line up with it. */
 .theme-toggle{
-  flex:none;width:34px;height:34px;border-radius:var(--r-sm);border:1px solid var(--line);
+  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid var(--line);
   background:var(--panel-2);color:var(--muted);cursor:pointer;
   display:inline-flex;align-items:center;justify-content:center;
   transition:background .14s,border-color .14s,color .14s;
@@ -457,10 +458,14 @@ input::placeholder{color:var(--faint)}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
 .link:hover{color:var(--accent)}
-/* "Save as new config" grows + turns amber when the form has unsaved changes,
-   so it reads as "you have changes to save" rather than a passive reminder. */
+/* "Save as new config" turns amber (and a touch bolder) when the form has
+   unsaved changes, so it reads as "you have changes to save" rather than a
+   passive reminder. Emphasis is COLOUR + WEIGHT only: the font-size and padding
+   stay at the base .btn values so the button never resizes or reflows its
+   neighbours in the header row (fixed 2026-09-24 -- it used to grow taller and
+   wider on dirty, which shifted the layout). */
 #saveAsBtn.dirty{
-  font-size:13.5px;font-weight:650;color:var(--on-bright);padding:9px 18px;
+  font-weight:650;color:var(--on-bright);
   background:linear-gradient(180deg,#f0d284,var(--warn));border-color:var(--warn-line);
   box-shadow:0 2px 12px rgba(230,192,105,.30);
 }
@@ -936,6 +941,14 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
   <aside class="sidebar">
     <div class="side-brand">
       <span class="mark">oTree Lab Launcher</span>
+      <!-- Appearance toggle: lives in the sidebar header, immediately LEFT of the
+           gear (moved here 2026-09-24 from the main header). Same behaviour: one
+           icon button that flips dark<->light, sun while dark / moon while light. -->
+      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()"
+        title="Switch light / dark theme" aria-label="Switch light or dark theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M2.5 12h2.6M18.9 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.2 8.2 0 1 1 9.7 3.5a6.4 6.4 0 0 0 10.8 10.8Z"/></svg>
+      </button>
       <button class="gear" id="gearBtn" title="Lab settings" onclick="openLabSettings()">&#9881;</button>
     </div>
     <div class="side-head">
@@ -962,11 +975,6 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
         <h1 id="cfgTitle">Config: Dictator study</h1>
         <p class="sub">Save this setup as a named config so you can reuse it.</p>
       </div>
-      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()"
-        title="Switch light / dark theme" aria-label="Switch light or dark theme">
-        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M2.5 12h2.6M18.9 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
-        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.2 8.2 0 1 1 9.7 3.5a6.4 6.4 0 0 0 10.8 10.8Z"/></svg>
-      </button>
       <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save as new config...</button>
     </div>
 
@@ -3270,13 +3278,16 @@ function bootPreview(){
   DATABASES=PREVIEW_DATABASES.slice();RESEARCHERS=PREVIEW_RESEARCHERS.slice();defaultDatabase=DB_LAB_ID;
   DEFAULT_DB_OPTIONS=[{id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:"",builtin:true,db_mode:"lab"}].concat(PREVIEW_DATABASES);
   labMarker="large";
-  renderConfigList(PREVIEW_CONFIGS,"Dictator study");
-  currentConfigName="Dictator study";
+  /* Open SELECTED on the built-in Lab default -- a fresh, Browse-first template
+     every start (Job 2), matching core.select_on_open. No project folder is set,
+     so the project section shows the Browse-first prompt. */
+  renderConfigList(PREVIEW_CONFIGS,"Lab default");
+  currentConfigName="Lab default";
   var lab=(function(){try{var v=localStorage.getItem("otreeLab");if(v&&LAB_BY_ID[v])return v;}catch(e){}return "large";})();
   applyFields({lab:lab,db_mode:"lab",admin_username:"admin",production:true,auth_level:"STUDY",
     resetdb:true,seat_mode:"lab_default",room_name:"study"});
-  applyProject(PREVIEW_PROJECT);setPath(PREVIEW_PATH);
-  applySettings({readable:true,has_block:true,uses_lab_room:true});
+  applyProject({});setPath("");
+  applySettings(null);
   loadFooterVersion();
 }
 /* ======================================================================

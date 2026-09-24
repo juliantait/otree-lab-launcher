@@ -1766,6 +1766,23 @@ def clear_builtin_last_run(presets):
     return presets
 
 
+def clear_builtin_project_path(presets):
+    """Force the built-in Lab default's ``project_path`` to "" , in place.
+
+    The built-in "Lab default" is a launch TEMPLATE, not a saved study, so it
+    must ALWAYS open Browse-first with no project folder set: the launcher opens
+    selected on it every start (see :func:`select_on_open`) and lab staff Browse
+    to the study of the day from there. This wipes any project folder a previous
+    version (or a stray edit) may have stamped onto the built-in so a stored path
+    can never survive across a restart. Idempotent; user configs are untouched.
+    Returns ``presets`` for chaining.
+    """
+    for preset in presets:
+        if is_builtin(preset):
+            preset["project_path"] = ""
+    return presets
+
+
 def load_store(path=None, default_factory=None):
     """Read the presets file.
 
@@ -1987,18 +2004,16 @@ sort_presets = order_presets_for_display
 def select_on_open(presets):
     """The config the app should open SELECTED (Job 2).
 
-    The most-recently-launched NON-built-in config, so reopening the launcher
-    lands on whatever you last ran rather than the pinned default. When no user
-    config has ever been launched it falls back to the built-in Lab default (the
-    first built-in), then to the first config, and to None only for an empty
-    list. Shares the ``last_run`` signal with :func:`order_presets_for_display`
-    so the selection is always a row the ordering also puts near the top.
+    ALWAYS the built-in "Lab default" (the first built-in). The launcher opens
+    on the pinned default template every time it starts -- a fresh, Browse-first
+    state -- rather than restoring whatever config was last launched. This is a
+    deliberate change (2026-09-24): the built-in is a launch TEMPLATE, and lab
+    staff should always begin from it and Browse to the study of the day. Falls
+    back to the first config when there is no built-in, and to None only for an
+    empty list. Shared by both faces so they open identically.
     """
     if not presets:
         return None
-    launched = [p for p in presets if not is_builtin(p) and _stamp_of(p)]
-    if launched:
-        return max(launched, key=_stamp_of)
     for p in presets:
         if is_builtin(p):
             return p
