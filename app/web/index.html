@@ -375,6 +375,35 @@ html[data-webmode="browser"] .pathhint{display:block}
 .bullets{margin:8px 0 0;padding-left:22px}
 .bullets li{font-size:12.5px;color:var(--text);margin:2px 0}
 
+/* oTree-project detection: a SMALL, quiet CONFIRMATORY glance — someone eyeballs
+   it to check the right project loaded. It is a compact, low-key grey mini-well,
+   deliberately NOT a prominent card, so it never dominates the oTree-project
+   section. The confirmation line is small calm grey text with NO leading dot
+   (the parenthetical "(intro, game…)" was dropped from the line — the app names
+   appear only as the bullets). The app names below are small GREEN bullets,
+   slightly inset and packed tight together. */
+.study-card{
+  margin-top:4px;background:var(--bg-deep);border:1px solid var(--line-soft);
+  border-radius:var(--r-sm);padding:7px 10px;
+}
+.study-card .statusline{margin-top:0;font-size:11.5px;color:var(--muted);line-height:1.4}
+.study-card .statusline.ok{color:var(--ok)}   /* green confirmation, matching the app-name bullets below */
+.study-card .statusline .dot{display:none}
+.study-card .bullets{margin:4px 0 0;padding-left:10px;list-style:none}
+.study-card .bullets li{position:relative;padding-left:14px;font-size:11.5px;color:var(--ok);margin:0;line-height:1.55}
+.study-card .bullets li::before{content:"";position:absolute;left:2px;top:7px;
+  width:4px;height:4px;border-radius:50%;background:var(--ok)}
+
+/* Production-mode toggle: a bold title with a lighter-grey description flowing
+   INLINE right after it on the same line (pm-text is a flex item, so its two
+   inline spans flow as text and only wrap the description onto a second line if
+   it does not fit). The checkbox sits at the start, aligned to the first line. */
+.prodmode{align-items:flex-start;gap:8px}
+.prodmode input[type=checkbox]{margin-top:3px}
+.prodmode .pm-text{line-height:1.5}
+.prodmode .pm-title{font-size:13px;font-weight:600;color:var(--text-strong)}
+.prodmode .pm-desc{font-size:11.5px;color:var(--muted);margin-left:8px}
+
 .divider{height:1px;background:var(--line-soft);margin:14px 0}
 
 /* generic label + control rows */
@@ -458,18 +487,19 @@ input::placeholder{color:var(--faint)}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
 .link:hover{color:var(--accent)}
-/* "Save as new config" turns amber (and a touch bolder) when the form has
-   unsaved changes, so it reads as "you have changes to save" rather than a
-   passive reminder. Emphasis is COLOUR + WEIGHT only: the font-size and padding
-   stay at the base .btn values so the button never resizes or reflows its
-   neighbours in the header row (fixed 2026-09-24 -- it used to grow taller and
-   wider on dirty, which shifted the layout). */
+/* "Save as new config" takes the app's PINK ACCENT (and a touch bolder) when the
+   form has unsaved changes, so it reads as "you have changes to save" rather than
+   a passive reminder AND re-skins with the theme via the accent token. Emphasis
+   is COLOUR + WEIGHT only: the font-size and padding stay at the base .btn values
+   so the button never resizes or reflows its neighbours in the header row (fixed
+   2026-09-24 -- it used to grow taller and wider on dirty, which shifted the
+   layout). This mirrors the .btn.accent fill exactly. */
 #saveAsBtn.dirty{
-  font-weight:650;color:var(--on-bright);
-  background:linear-gradient(180deg,#f0d284,var(--warn));border-color:var(--warn-line);
-  box-shadow:0 2px 12px rgba(230,192,105,.30);
+  font-weight:650;color:var(--accent-on);
+  background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-color:var(--accent-dim);
+  box-shadow:0 2px 12px rgba(var(--accent-rgb),.30);
 }
-#saveAsBtn.dirty:hover{background:linear-gradient(180deg,#f4d992,#ecc978);border-color:#7a672f}
+#saveAsBtn.dirty:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi));border-color:var(--accent-dim)}
 
 /* database summary + change section */
 /* ONE row: [database name + pen] on the left, "Reset before start" on the
@@ -688,6 +718,35 @@ input::placeholder{color:var(--faint)}
 .cta{margin-top:16px;display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap}
 .cta.spread{justify-content:space-between}
 .modal-err{display:none;margin-top:8px;font-size:12px;color:var(--err)}
+/* "get ready for the lab" popup: a larger, more substantial modal. A clean,
+   readable lead line ("One click gives you:") introduces a short bulleted list
+   of what getting the project lab-ready sets up. "What this changes" is a bordered
+   PILL button that sits IN the action row (left of Not now / Get ready) and, when
+   pressed, reveals its explanation below the row (see .modal-card.modal-ready). */
+.ready-lead{margin:0 0 11px;font-size:14px;font-weight:600;color:var(--text-strong)}
+.ready-bullets{margin:0 0 4px;padding-left:22px}
+.ready-bullets li{font-size:13.5px;color:var(--text-strong);margin:6px 0;line-height:1.45}
+.pill-toggle{
+  display:inline-flex;align-items:center;gap:7px;margin:0;
+  font-family:inherit;font-size:12px;font-weight:600;color:var(--muted);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+  padding:8px 16px;cursor:pointer;
+  transition:background .12s,border-color .12s,color .12s;
+}
+.pill-toggle:hover{background:var(--panel-3);border-color:var(--line-strong);color:var(--text)}
+
+/* The get-ready modal is a bit larger and more substantial than a plain dialog:
+   roomier padding, a larger title, bigger action buttons. Its action row holds
+   THREE controls in one line — "What this changes" pinned left, "Not now" and
+   the accent action grouped right — and the "What this changes" panel expands
+   BELOW that row (its downward growth + fit-on-screen is handled in JS by
+   pinning the card's top; see setGetReadyInfo). */
+.modal-card.modal-ready{max-width:600px;padding:30px 34px}
+.modal-card.modal-ready .modal-title{font-size:20px;margin-bottom:10px}
+.modal-ready .cta.ready-cta{margin-top:22px;justify-content:space-between;align-items:center;flex-wrap:nowrap}
+.modal-ready .cta.ready-cta .cta-actions{display:flex;gap:10px}
+.modal-ready .cta.ready-cta .btn{padding:11px 22px;font-size:13.5px;border-radius:var(--r-md)}
+.modal-ready #getReadyInfo{margin:14px 0 0}
 .mfield{display:grid;grid-template-columns:150px 1fr;align-items:center;gap:10px 12px;margin:11px 0}
 .mfield > label{font-size:12.5px;color:var(--muted)}
 
@@ -1004,8 +1063,10 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           }
           </script>
 
-          <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
-          <ul class="bullets" id="appBullets" hidden></ul>
+          <div class="study-card" id="projDetect">
+            <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
+            <ul class="bullets" id="appBullets" hidden></ul>
+          </div>
 
           <div class="divider"></div>
 
@@ -1044,7 +1105,12 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <div class="divider"></div>
 
           <h3 class="subhead">Study settings:</h3>
-          <label class="chk study"><input type="checkbox" id="production" checked> Production mode (serve as a real study, no debug pages)</label>
+          <label class="chk study prodmode"><input type="checkbox" id="production" checked>
+            <span class="pm-text">
+              <span class="pm-title">Production mode</span>
+              <span class="pm-desc">Serve as a real study, no debug pages</span>
+            </span>
+          </label>
         </section>
 
         <!-- 2. Database -->
@@ -1317,7 +1383,7 @@ var PREVIEW_DATABASES=[
 ];
 var PREVIEW_RESEARCHERS=["A. Kowalski","J. Tait","L. Rossi","M. Researcher","P. Andersson","S. Vermeer"];
 var PREVIEW_PROJECT={name:"dictator_game",level:"ok",
-  message:"Looks like an oTree project: settings.py and 1 app package",apps:["dictator"]};
+  message:"Looks like an oTree project with settings.py and 1 app package:",apps:["dictator"]};
 var PREVIEW_PATH="C:\\experiments\\dictator_game";
 
 /* ---------------------------- helpers ---------------------------- */
@@ -1867,6 +1933,7 @@ document.addEventListener("DOMContentLoaded",function(){
    ====================================================================== */
 function openModal(title,html,wide){
   el("infoCard").className="modal-card"+(wide?" wide":"");
+  el("infoCard").style.transform="";   /* clear any get-ready expand offset from a prior open */
   el("modalTitle").textContent=title;el("modalBody").innerHTML=html;el("infoModal").hidden=false;
 }
 function closeModal(){el("infoModal").hidden=true;}
@@ -1996,23 +2063,32 @@ function showGetReadyModal(s){
     'byte-for-byte unchanged. <code>SECRET_KEY</code> and unrelated settings are left alone. It is fully '+
     'revertible: delete from the banner line to the end of settings.py.';
   var title=refresh?"This project's lab support block is out of date."
-                   :"This project is not set up for this lab yet.";
+                   :"This project is not lab-ready yet.";
   var desc=refresh
     ?'<p class="modal-desc">It has an older lab-support block. Refreshing replaces it in place with the current block (which fixes the lab room, including with no seats). One click updates it.</p>'
-    :'<p class="modal-desc">It needs the lab-support block to run in this lab: the lab room and per-seat seat board, the database, the admin login, and production mode. One click gets it ready.</p>';
+    :'<p class="ready-lead">One click gives you:</p>'+
+     '<ul class="ready-bullets">'+
+       '<li>Participant PC links</li>'+
+       '<li>Seat labels</li>'+
+       '<li>Lab database</li>'+
+     '</ul>';
   var action=refresh
     ?'<button class="btn accent" onclick="onRefreshBlock()">Refresh lab block</button>'
     :'<button class="btn accent" onclick="onAppendBlock()">Get ready for the lab</button>';
   openModal(title,
     desc+
     warnHtml+
-    '<button type="button" id="getReadyMore" onclick="toggleGetReadyInfo()" '+
-      'style="background:none;border:0;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0;margin:2px 0 0">'+
-      'What this changes&nbsp;&nbsp;&#9662;</button>'+
-    '<div class="info-panel" id="getReadyInfo" hidden style="margin:10px 0 0">'+info+'</div>'+
     '<div class="modal-err" id="getReadyMsg"></div>'+
-    '<div class="cta"><button class="btn ghost" onclick="closeModal()">Not now</button>'+
-    action+'</div>');
+    '<div class="cta ready-cta">'+
+      '<button type="button" class="pill-toggle" id="getReadyMore" onclick="toggleGetReadyInfo()">'+
+        'What this changes&nbsp;&#9662;</button>'+
+      '<span class="cta-actions">'+
+        '<button class="btn ghost" onclick="closeModal()">Not now</button>'+
+        action+
+      '</span>'+
+    '</div>'+
+    '<div class="info-panel" id="getReadyInfo" hidden>'+info+'</div>');
+  el("infoCard").classList.add("modal-ready");
 }
 function onRefreshBlock(){
   if(!NATIVE||!API){window.pywStatus("","Refresh works in the app, not the static preview.");return;}
@@ -2028,8 +2104,36 @@ function onRefreshBlock(){
   });
 }
 function toggleGetReadyInfo(){
-  var p=el("getReadyInfo");if(!p)return;p.hidden=!p.hidden;
-  var b=el("getReadyMore");if(b)b.innerHTML=p.hidden?"What this changes&nbsp;&nbsp;&#9662;":"What this changes&nbsp;&nbsp;&#9652;";
+  var p=el("getReadyInfo");if(!p)return;
+  setGetReadyInfo(p.hidden);   /* hidden now -> expand; visible now -> collapse */
+}
+/* The get-ready modal is flex-centred while collapsed. Expanding "What this
+   changes" must grow the modal DOWNWARD without shifting the button row above
+   it: we pin the card's top back to where the row sat, so the extra content
+   pushes only the bottom edge down. If that would run past the bottom of the
+   screen the card is nudged back up just enough to fit (but never higher than
+   its centred position). Collapsing clears the pin and re-centres. */
+function setGetReadyInfo(expand){
+  var p=el("getReadyInfo"),card=el("infoCard"),b=el("getReadyMore");
+  if(!p)return;
+  if(!expand){
+    p.hidden=true;
+    if(card)card.style.transform="";
+    if(b)b.innerHTML="What this changes&nbsp;&#9662;";
+    return;
+  }
+  if(card)card.style.transform="";                    /* measure from the centred baseline */
+  var topBefore=card?card.getBoundingClientRect().top:0;
+  p.hidden=false;
+  if(b)b.innerHTML="What this changes&nbsp;&#9652;";
+  if(!card)return;
+  var topAfter=card.getBoundingClientRect().top;       /* flex just re-centred it upward */
+  var shift=topBefore-topAfter;                        /* push back down to the original top */
+  var rect=card.getBoundingClientRect();
+  var overflow=(rect.bottom+shift)-(window.innerHeight-24);   /* 24 = .modal padding gutter */
+  if(overflow>0)shift-=overflow;                       /* nudge up just enough to fit on screen */
+  if(shift<0)shift=0;                                  /* but never above the centred position */
+  card.style.transform="translateY("+shift+"px)";
 }
 
 /* ======================================================================

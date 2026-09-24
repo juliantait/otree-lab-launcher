@@ -197,6 +197,14 @@ def project_status(path):
     level, message = core.validate_project(path)
     name = os.path.basename(os.path.normpath(path)) if path else ""
     apps = core.find_app_packages(path) if path and os.path.isdir(path) else []
+    # The confirmation line names only the COUNT ("... and N app packages:"); it
+    # ends with a colon that introduces the app-name bullet list rendered under
+    # it (the UI renders `apps` there). This mirrors the Tk launcher, which also
+    # builds a bracket-free line and lists the apps separately. core.validate_project
+    # keeps the parenthetical for other callers/tests, so we rebuild the line here.
+    if level == "ok" and apps:
+        message = "Looks like an oTree project with settings.py and %d app package%s:" % (
+            len(apps), "" if len(apps) == 1 else "s")
     return {"level": level, "message": message, "name": name, "apps": apps}
 
 

@@ -2093,11 +2093,16 @@ class LauncherApp(object):
             row=8, column=0, columnspan=2, sticky="w", pady=(0, 4))
         study = tk.Frame(body, bg=COLORS["card"])
         study.grid(row=9, column=0, columnspan=2, sticky="ew")
-        tk.Checkbutton(study, text="Production mode (serve as a real study, no debug pages)",
+        # A clean bold title with the lighter-grey description flowing INLINE
+        # right after it on the same line (not on a second line beneath it).
+        tk.Checkbutton(study, text="Production mode",
                        variable=self.var["production"], bg=COLORS["card"], fg=COLORS["text"],
                        activebackground=COLORS["card"], activeforeground=COLORS["text"],
-                       selectcolor=COLORS["accent"], font=self.fonts.body, anchor="w",
-                       bd=0, highlightthickness=0, padx=0, cursor="hand2").pack(anchor="w")
+                       selectcolor=COLORS["accent"], font=self.fonts.small_bold, anchor="w",
+                       bd=0, highlightthickness=0, padx=0, cursor="hand2").pack(side="left")
+        tk.Label(study, text="Serve as a real study, no debug pages",
+                 bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small,
+                 anchor="w", justify="left").pack(side="left", padx=(8, 0))
 
         # (The "Reset the database before starting" checkbox now lives in the
         # Database card, next to the database it resets.)
@@ -3232,7 +3237,7 @@ class LauncherApp(object):
         if level == "ok":
             apps = find_app_packages(cfg["project_path"])
             self.project_status.set("ok",
-                "Looks like an oTree project: settings.py and %d app package%s"
+                "Looks like an oTree project with settings.py and %d app package%s:"
                 % (len(apps), "" if len(apps) == 1 else "s"))
             self._set_app_bullets(apps)
         else:
@@ -4790,14 +4795,17 @@ class GetReadyDialog(object):
 
         self.headline = tk.Label(
             body,
-            text=headline or "This project is not set up for the lab yet.",
+            text=headline or "This project is not lab-ready yet.",
             bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold,
             anchor="w", justify="left", wraplength=self.WRAP)
         self.headline.grid(row=0, column=0, sticky="ew")
 
         self.subline = tk.Label(
             body,
-            text=subline or "One click gets it ready.",
+            text=subline or ("One click gives you:\n"
+                             "  •  Participant PC links\n"
+                             "  •  Seat labels\n"
+                             "  •  Lab database"),
             bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
             anchor="w", justify="left", wraplength=self.WRAP)
         self.subline.grid(row=1, column=0, sticky="ew", pady=(7, 0))
