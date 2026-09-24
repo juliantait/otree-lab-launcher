@@ -11,6 +11,7 @@ Run:  python3 _ai/test_core_features.py
 (psycopg2 is optional; the one test that needs a live connection attempt is
 skipped when it is not installed.)
 """
+import json
 import os
 import sys
 import tempfile
@@ -35,18 +36,82 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Self-contained lab fixture.
+#
+# The lab helpers (default_lab_presets, resolve_host, ...) read their data from
+# whatever lab_info.json the core module loaded at import time. On a developer
+# machine data/lab_info.json exists, so these tests used to pass by accident
+# against the REAL CREED labs and their real host IPs; on a fresh CI checkout
+# that file is absent (it is gitignored), so the labs came back empty and every
+# lab assertion failed. To be independent of the machine, the lab-dependent
+# classes below install their OWN throwaway lab_info.json (via the OTREE_LAB_INFO
+# override that reload_lab_info honours) and assert against these fixture values.
+# The hosts are RFC 5737 (TEST-NET-3) documentation addresses, deliberately not
+# any real lab host; the seat lists mirror the shipped example so the seat-shape
+# assertions stay meaningful.
+# ---------------------------------------------------------------------------
+FIXTURE_SMALL_HOST = "203.0.113.11"
+FIXTURE_LARGE_HOST = "203.0.113.22"
+FIXTURE_SMALL_SEATS = [str(_i) for _i in range(1, 23)]
+FIXTURE_LARGE_SEATS = ["A1", "A2", "A3", "A5", "A6", "A7", "A8",
+                       "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8",
+                       "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8",
+                       "D1", "D2", "D3", "D4", "E1", "E2", "E3", "E4"]
+FIXTURE_LAB_INFO = {
+    "default_lab": "large",
+    "labs": {
+        "small": {"name": "Small lab", "host": FIXTURE_SMALL_HOST,
+                  "seats": FIXTURE_SMALL_SEATS, "map": "example_small"},
+        "large": {"name": "Large lab", "host": FIXTURE_LARGE_HOST,
+                  "seats": FIXTURE_LARGE_SEATS, "map": "example_large"},
+    },
+    "database": {"db_name": "otree", "db_user": "otree", "db_password": "",
+                 "db_host": "localhost", "db_port": "5432"},
+    "admin": {"username": "admin", "password": ""},
+}
+
+
+class _LabInfoFixture(unittest.TestCase):
+    """Install a known two-lab (small + large) lab_info.json into the core
+    module for the duration of each test, so lab assertions never depend on the
+    machine's real data/lab_info.json (absent on a clean CI checkout)."""
+
+    LAB_INFO = FIXTURE_LAB_INFO
+
+    def setUp(self):
+        super().setUp()
+        self._lab_dir = tempfile.mkdtemp(prefix="labinfo-test-")
+        self._lab_path = os.path.join(self._lab_dir, "lab_info.json")
+        with open(self._lab_path, "w", encoding="utf-8") as handle:
+            json.dump(self.LAB_INFO, handle)
+        self._lab_old_env = os.environ.get("OTREE_LAB_INFO")
+        os.environ["OTREE_LAB_INFO"] = self._lab_path
+        core.reload_lab_info()
+
+    def tearDown(self):
+        if self._lab_old_env is None:
+            os.environ.pop("OTREE_LAB_INFO", None)
+        else:
+            os.environ["OTREE_LAB_INFO"] = self._lab_old_env
+        core.reload_lab_info()
+        import shutil
+        shutil.rmtree(self._lab_dir, ignore_errors=True)
+        super().tearDown()
+
+
+# ---------------------------------------------------------------------------
 # Feature 4: lab presets
 # ---------------------------------------------------------------------------
-class TestLabPresets(unittest.TestCase):
+class TestLabPresets(_LabInfoFixture):
     def test_seed_recreates_the_two_labs_exactly(self):
         presets = core.default_lab_presets()
         by_id = {p["id"]: p for p in presets}
-        self.assertEqual(by_id["small"]["ip"], "145.18.178.133")
-        self.assertEqual(by_id["large"]["ip"], "145.18.178.130")
+        self.assertEqual(by_id["small"]["ip"], FIXTURE_SMALL_HOST)
+        self.assertEqual(by_id["large"]["ip"], FIXTURE_LARGE_HOST)
         self.assertEqual(len(by_id["small"]["seats"]), 22)
         self.assertEqual(len(by_id["large"]["seats"]), 31)
-        self.assertEqual(by_id["small"]["seats"], [str(_i) for _i in range(1, 23)])
-        self.assertEqual(by_id["large"]["seats"], ["A1", "A2", "A3", "A5", "A6", "A7", "A8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "D1", "D2", "D3", "D4", "E1", "E2", "E3", "E4"])
+        self.assertEqual(by_id["small"]["seats"], FIXTURE_SMALL_SEATS)
+        self.assertEqual(by_id["large"]["seats"], FIXTURE_LARGE_SEATS)
         self.assertTrue(all(p["display"] for p in presets))
         self.assertTrue(all(p["builtin"] for p in presets))
 
@@ -59,15 +124,15 @@ class TestLabPresets(unittest.TestCase):
     def test_backward_compat_old_ids_resolve(self):
         presets = core.lab_presets_from_store({})
         # A config saved with lab="small"/"large" still resolves to host+seats.
-        self.assertEqual(core.resolve_host({"lab": "small"}, presets), "145.18.178.133")
-        self.assertEqual(core.resolve_host({"lab": "large"}, presets), "145.18.178.130")
+        self.assertEqual(core.resolve_host({"lab": "small"}, presets), FIXTURE_SMALL_HOST)
+        self.assertEqual(core.resolve_host({"lab": "large"}, presets), FIXTURE_LARGE_HOST)
         self.assertEqual(len(core.lab_default_seats({"lab": "small"}, presets)), 22)
         self.assertEqual(len(core.lab_default_seats({"lab": "large"}, presets)), 31)
 
     def test_old_ids_resolve_even_with_no_presets_passed(self):
         # The host/seat helpers keep their old hardcoded fallback when no preset
         # list is threaded in, so every legacy caller is unaffected.
-        self.assertEqual(core.resolve_host({"lab": "small"}), "145.18.178.133")
+        self.assertEqual(core.resolve_host({"lab": "small"}), FIXTURE_SMALL_HOST)
         self.assertEqual(len(core.lab_default_seats({"lab": "large"})), 31)
 
     def test_normalize_no_longer_clobbers_a_preset_id(self):
@@ -200,7 +265,7 @@ class TestLabPresets(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Feature 1: the caution flag
 # ---------------------------------------------------------------------------
-class TestCautionFlag(unittest.TestCase):
+class TestCautionFlag(_LabInfoFixture):
     def test_creed_default_raises_caution(self):
         b = core.launch_briefing({"db_mode": core.DB_MODE_LAB, "lab": "small",
                                   "seat_mode": core.SEAT_DEFAULT})
@@ -259,7 +324,7 @@ class TestCautionFlag(unittest.TestCase):
                                   "room_name": "otherroom", "seat_mode": core.SEAT_DEFAULT})
         self.assertFalse(b["is_study"])
         self.assertIn("/room/otherroom", b["link_template"])
-        self.assertEqual(b["host"], "145.18.178.133")
+        self.assertEqual(b["host"], FIXTURE_SMALL_HOST)
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +569,7 @@ class TestLabIdentityMarker(unittest.TestCase):
         self.assertEqual(presets[0]["lab"], before)
 
 
-class TestApplyLabIdentity(unittest.TestCase):
+class TestApplyLabIdentity(_LabInfoFixture):
     def test_shows_only_the_chosen_lab(self):
         labs = core.default_lab_presets()
         ok, _msg, new_list = core.apply_lab_identity(labs, "small")
