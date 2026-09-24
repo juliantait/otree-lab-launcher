@@ -71,6 +71,7 @@ import webbrowser
 # ---------------------------------------------------------------------------
 
 APP_NAME = "oTree Lab Launcher"
+APP_AUTHOR = "Julian Tait"
 # A semver version string (MAJOR.MINOR.PATCH). The app footer always shows it, and
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
@@ -2349,6 +2350,17 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
             "repo_url": REPO_URL,
             "label": UPDATE_LABEL if update_available else "",
             "tooltip": UPDATE_TOOLTIP}
+
+
+def version_footer_lines():
+    """The three identity lines for the WHOLE-APP footer (pinned at the bottom of
+    the left config sidebar, centred). Identity ONLY -- no update tag; the update
+    nudge lives on the Lab Settings page. Shared by both faces so they read
+    identically:
+
+        ["oTree Lab Launcher", "version 1.0.0", "by Julian Tait"]
+    """
+    return [APP_NAME, "version %s" % APP_VERSION, "by %s" % APP_AUTHOR]
 
 
 # ---------------------------------------------------------------------------

@@ -1048,10 +1048,21 @@ class Api(object):
         return {"ok": True, "entries": core.read_sessions(limit=limit)}
 
     @api_call
+    def app_version(self):
+        """Just the build version, NO network. Feeds the whole-app sidebar footer
+        (identity only). The update CHECK is deliberately NOT here -- it runs only
+        when Lab Settings is opened (version_info), so the footer never triggers a
+        network call on app launch (review I, Julian's final design)."""
+        return {"ok": True, "version": core.APP_VERSION}
+
+    @api_call
     def version_info(self):
         """The build version + a quiet, fail-soft once-a-day update check (fable
-        review I). The JS only renders what this returns; the network decision and
-        the newer-than comparison stay here in Python (re-skin rule)."""
+        review I). Called when Lab Settings is OPENED (not on app launch). The JS
+        only renders what this returns; the network decision and the newer-than
+        comparison stay here in Python (re-skin rule). The result is persisted in
+        data/ by core so the flag reads the stored value and stays visible even
+        offline."""
         try:
             update = core.check_for_update()
         except Exception:

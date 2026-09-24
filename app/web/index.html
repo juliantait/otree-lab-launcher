@@ -733,19 +733,33 @@ input::placeholder{color:var(--faint)}
 .shown-toggle{cursor:pointer;color:var(--ok);font-weight:700;display:inline-block;box-sizing:border-box;min-width:52px;padding:8px 14px;margin:-8px 0;border-radius:4px;text-align:center;line-height:1}
 .shown-toggle.off{color:var(--faint)}
 .ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
+/* Lab Settings page footer: version + (persisted) update nudge with a blue link. */
+.ls-foot{margin:18px 2px 2px;padding-top:14px;border-top:1px solid var(--line-soft);
+  font-size:12px;color:var(--faint);line-height:1.55}
+.ls-foot-ver{color:var(--muted)}
+.ls-foot-upd{margin-top:6px}
+.ls-foot-badge{color:var(--accent);font-weight:600}
+.ls-foot-txt{color:var(--muted)}
+.ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
+.ls-foot-link:hover{filter:brightness(1.12)}
 .ls-link{display:inline-block;font-size:12px;color:var(--accent);cursor:pointer;text-decoration:none;font-weight:600}
 .ls-link:hover{text-decoration:underline}
-/* App footer: version + fail-soft update nudge with a hover tooltip. */
-.app-footer{margin-top:auto;padding:9px 14px;border-top:1px solid var(--line-soft);
-  display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--faint)}
-.af-update{position:relative;display:inline-flex;align-items:center}
-.af-badge{color:var(--accent);font-weight:600;cursor:default}
-.af-tip{position:absolute;bottom:calc(100% + 6px);left:0;width:238px;
-  background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);
-  padding:9px 11px;font-size:11.5px;color:var(--text);line-height:1.5;
-  box-shadow:0 6px 22px rgba(0,0,0,.28);display:none;z-index:60}
-.af-update:hover .af-tip,.af-tip:hover{display:block}
-.af-tip a{color:#3b82f6;text-decoration:underline;display:inline-block;margin-top:6px}
+/* WHOLE-APP footer (Julian's final design): pinned at the BOTTOM of the left
+   config sidebar, HORIZONTALLY CENTRED, always visible. IDENTITY ONLY (no update
+   tag -- that lives on the Lab Settings page). THREE lines, muted/grey, with
+   tight/compressed line spacing (especially close between line 1 and line 2).
+   When the config list overflows it fades into this footer (the ::before
+   gradient in the sidebar background colour just above it); a short list reaches
+   nowhere near it, so there is nothing to fade. */
+.app-footer{position:relative;margin-top:auto;flex:none;padding:12px 14px 14px;
+  text-align:center;color:var(--faint);font-size:11px;line-height:1.15;
+  -webkit-user-select:none;user-select:none}
+.app-footer::before{content:"";position:absolute;left:0;right:0;bottom:100%;
+  height:26px;pointer-events:none;
+  background:linear-gradient(to top,var(--bg-deep),rgba(0,0,0,0))}
+.app-footer .af-name{font-size:11.5px}
+.app-footer .af-ver{margin-top:0}      /* flush under the name: tight line 1->2 */
+.app-footer .af-by{margin-top:3px}
 
 /* ---- first-run setup wizard ---- */
 .wiz-head{margin:0 0 14px}
@@ -930,18 +944,14 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
       <button class="add" title="New / blank config" onclick="onSaveAs()">+</button>
     </div>
     <div class="cfg-list" id="cfgList"></div>
-    <!-- App footer (fable review I): ALWAYS shows the version; when a newer
-         GitHub release exists it also shows "new version available", and on hover
-         a tooltip explains the upgrade with a blue clickable repo link. The
-         version + newer-than decision come from Python (version_info); this only
-         renders them. -->
+    <!-- WHOLE-APP footer (Julian's final design): pinned at the bottom of the
+         sidebar, centred, three tight lines, IDENTITY ONLY (no update tag). The
+         version number comes from Python (app_version); the other two lines are
+         fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
-      <span class="af-ver" id="footVersion">oTree Lab Launcher</span>
-      <span class="af-update" id="footUpdate" hidden>
-        <span class="af-badge">new version available</span>
-        <span class="af-tip" id="footTip">Download the app folder from GitHub and replace the app folder — keep your data
-          <a id="footLink" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">Open GitHub &rarr;</a></span>
-      </span>
+      <div class="af-name">oTree Lab Launcher</div>
+      <div class="af-ver" id="footVersion">version 1.0.0</div>
+      <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
 
@@ -2280,12 +2290,45 @@ function openLabSettings(){
       '<p class="ls-tip">Tip: click a lab’s ✓ / – in the Shown column to show or hide it.</p>'+
       '<div class="ls-status" id="lsLabStatus"></div></div>'+
     /* The read-only Launch history link stays at the bottom of Lab Settings
-       (fable review F). The version + update nudge live in the app FOOTER now. */
+       (fable review F). */
     '<div class="ls-card"><a class="ls-link" onclick="openLaunchHistory();return false;">Launch history &rarr;</a></div>'+
     '<div class="cta spread"><div><button class="btn" onclick="labPresetEdit(null)">Add lab</button></div>'+
-      '<button class="btn" onclick="closeModal()">Close</button></div>',true);
+      '<button class="btn" onclick="closeModal()">Close</button></div>'+
+    /* SETTINGS-PAGE footer (Julian's final design), at the very bottom: always
+       the version; when a newer release is RECORDED (persisted; visible even
+       offline) a small "new version available" note plus the upgrade text with
+       the word GitHub as a BLUE clickable link. The check runs on Settings OPEN,
+       at most once a day (version_info -> core.check_for_update). */
+    '<div class="ls-foot" id="lsFoot">'+
+      '<div class="ls-foot-ver" id="lsFootVer">oTree Lab Launcher version 1.0.0</div>'+
+      '<div class="ls-foot-upd" id="lsFootUpd" hidden>'+
+        '<span class="ls-foot-badge" id="lsFootBadge">new version available</span> '+
+        '<span class="ls-foot-txt">Download the app folder from '+
+          '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub</a>'+
+          ' and replace the app folder — keep your data.</span>'+
+      '</div>'+
+    '</div>',true);
   ["pgUser","pgPw","pgHost","pgPort"].forEach(function(id){var e=el(id);if(e)e.addEventListener("change",savePgAdmin);});
   syncThemeControls();
+  loadSettingsVersion();
+}
+/* Fill the Lab Settings footer: the version always; the "new version available"
+   note + GitHub link only when the (persisted, once-a-day) update check has
+   recorded a newer release. Runs on Settings OPEN. version_info decides in
+   Python (core.check_for_update); this only renders. Fail-soft. */
+function loadSettingsVersion(){
+  var ver=el("lsFootVer");
+  if(!NATIVE||!API||!API.version_info)return;   /* static preview keeps the default */
+  API.version_info().then(function(r){
+    if(!r||!r.ok)return;
+    if(ver)ver.textContent="oTree Lab Launcher version "+(r.version||"");
+    var up=r.update||{},box=el("lsFootUpd");
+    if(box&&up.update_available){
+      var badge=el("lsFootBadge");
+      if(badge){var extra=up.remote_version?(" ("+up.remote_version+")"):"";badge.textContent=(up.label||"new version available")+extra;}
+      box.hidden=false;
+    }
+  });
 }
 /* The read-only launch history viewer (fable review F): recent launches, newest
    first. It is a passive VIEWER; it never manages or re-runs anything. */
@@ -3201,25 +3244,15 @@ function initNative(state){
   if(haveLab)maybeChooseLab(state.lab_marker);
   loadFooterVersion();
 }
-/* Fill the app footer: ALWAYS the version; if a newer GitHub release exists also
-   the "new version available" badge + hover tooltip with the blue repo link. The
-   version + newer-than decision are Python's (version_info); this only renders.
-   Fail-soft: any error leaves the plain version string with no nudge. */
+/* Fill the sidebar footer's version line. IDENTITY ONLY -- no update check here
+   (the update check runs only when Lab Settings is opened). The version number
+   comes from Python (app_version); this only renders it. Fail-soft: any error
+   leaves the default "version 1.0.0" text untouched. */
 function loadFooterVersion(){
-  var v=el("footVersion");
-  if(!NATIVE||!API||!API.version_info){if(v)v.textContent="oTree Lab Launcher (dev preview)";return;}
-  API.version_info().then(function(r){
-    if(!r||!r.ok)return;
-    if(v)v.textContent="oTree Lab Launcher v"+(r.version||"");
-    var up=r.update||{};
-    var box=el("footUpdate");
-    if(box&&up.update_available){
-      var tip=el("footTip"),link=el("footLink"),badge=box.querySelector(".af-badge");
-      if(badge&&up.label)badge.textContent=up.label;
-      if(link&&up.repo_url)link.href=up.repo_url;
-      if(tip&&up.tooltip){tip.firstChild.nodeValue=up.tooltip+" ";}
-      box.hidden=false;
-    }
+  var v=el("footVersion");if(!v)return;
+  if(!NATIVE||!API||!API.app_version)return;   /* keep the static default text */
+  API.app_version().then(function(r){
+    if(r&&r.ok&&r.version)v.textContent="version "+r.version;
   });
 }
 function clearPreviewContent(){

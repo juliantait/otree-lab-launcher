@@ -1542,7 +1542,6 @@ class LauncherApp(object):
         self._make_variables()
         self._build_sidebar()
         self._build_main()
-        self._build_status_footer()
         self._wire_traces()
 
         self.refresh_sidebar()
@@ -1599,68 +1598,6 @@ class LauncherApp(object):
         self.seat_mode_label.trace_add("write", self._on_seat_mode_change)
         self.var["lab"].trace_add("write", self._on_lab_change)
 
-    # -- bottom-of-window version footer (review I) ------------------------
-
-    def _build_status_footer(self):
-        """A thin footer pinned to the very bottom of the main window that ALWAYS
-        shows the version; when a newer GitHub release exists it also shows a
-        clickable "new version available" that opens the repo (with the same
-        explanatory text on hover). The version + newer-than decision come from
-        core; the network check runs in a daemon thread so it never blocks."""
-        bar = tk.Frame(self.root, bg=COLORS["sidebar"],
-                       highlightbackground=COLORS["sidebar_line"], highlightthickness=1)
-        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
-        tk.Label(bar, text="%s v%s" % (APP_NAME, core.APP_VERSION),
-                 bg=COLORS["sidebar"], fg=COLORS["faint"], font=self.fonts.small,
-                 anchor="w").pack(side="left", padx=12, pady=4)
-        # Hidden until the fail-soft check finds a strictly newer release.
-        self.update_link = tk.Label(bar, text="", bg=COLORS["sidebar"],
-                                    fg=COLORS["accent"], font=self.fonts.small_bold,
-                                    cursor="hand2", anchor="w")
-        self.update_link.pack(side="left", padx=(0, 12), pady=4)
-        # The network check runs on a daemon thread and drops its result here; the
-        # GUI thread POLLS for it. (Marshalling with root.after() FROM the worker
-        # thread is not reliable across Tcl builds, so the main thread owns every
-        # after() call and just reads a plain attribute the worker set.)
-        self._update_result = None
-        self._update_polls = 0
-        threading.Thread(target=self._fetch_update, daemon=True).start()
-        self.root.after(600, self._poll_update)
-
-    def _fetch_update(self):
-        try:
-            self._update_result = core.check_for_update()
-        except Exception:
-            self._update_result = {"update_available": False}
-
-    def _poll_update(self):
-        result = self._update_result
-        if result is None:
-            # Not back yet; poll again for a bounded while (~12 s) then give up.
-            self._update_polls += 1
-            if self._update_polls < 20:
-                try:
-                    self.root.after(600, self._poll_update)
-                except tk.TclError:
-                    pass
-            return
-        if not result.get("update_available"):
-            return
-        label = result.get("label") or core.UPDATE_LABEL
-        tip = result.get("tooltip") or core.UPDATE_TOOLTIP
-        repo = result.get("repo_url") or core.REPO_URL
-        try:
-            if not self.update_link.winfo_exists():
-                return
-            self.update_link.configure(text=label)
-            self.update_link.bind("<Button-1>", lambda _e: webbrowser.open(repo))
-            # Nice-to-have hover text explaining the upgrade (the clickable label
-            # is the must); the tooltip names the repo it opens.
-            Tooltip(self.update_link,
-                    lambda: "%s\nClick to open %s" % (tip, repo)).attach(self.update_link)
-        except tk.TclError:
-            pass
-
     # -- sidebar -----------------------------------------------------------
 
     def _build_sidebar(self):
@@ -1709,7 +1646,32 @@ class LauncherApp(object):
         self.count_label.pack(side="right")
 
         self.list_area = ScrollFrame(bar, COLORS["sidebar"])
-        self.list_area.grid(row=2, column=0, sticky="nsew", padx=(PAD, 4), pady=(0, PAD))
+        self.list_area.grid(row=2, column=0, sticky="nsew", padx=(PAD, 4), pady=(0, 2))
+
+        self._build_sidebar_footer(bar)
+
+    def _build_sidebar_footer(self, bar):
+        """The WHOLE-APP footer (review I, Julian's final design): pinned at the
+        BOTTOM of the left config sidebar, HORIZONTALLY CENTRED, always visible.
+        IDENTITY ONLY -- no update tag (the update nudge lives on the Lab Settings
+        page). THREE lines with tight/compressed spacing (especially close between
+        line 1 and line 2). The lines come from core.version_footer_lines() so the
+        two faces read identically. Muted/grey.
+
+        (A soft fade of the overflowing config list into this footer is a web
+        nice-to-have; here the must is the pinned, centred, three-line footer.)"""
+        line1, line2, line3 = core.version_footer_lines()
+        foot = tk.Frame(bar, bg=COLORS["sidebar"])
+        foot.grid(row=3, column=0, sticky="ew", pady=(6, PAD))
+        foot.columnconfigure(0, weight=1)
+        # anchor="center" + a stretched column keeps the block centred; the two
+        # top lines are packed flush (pady 0) so line 1 and line 2 sit tight.
+        tk.Label(foot, text=line1, bg=COLORS["sidebar"], fg=COLORS["faint"],
+                 font=self.fonts.small).grid(row=0, column=0, pady=(0, 0))
+        tk.Label(foot, text=line2, bg=COLORS["sidebar"], fg=COLORS["faint"],
+                 font=self.fonts.small).grid(row=1, column=0, pady=(0, 0))
+        tk.Label(foot, text=line3, bg=COLORS["sidebar"], fg=COLORS["faint"],
+                 font=self.fonts.small).grid(row=2, column=0, pady=(1, 0))
 
     def _index_of(self, preset):
         for index, item in enumerate(self.presets):
@@ -7337,19 +7299,92 @@ class LabSettingsDialog(object):
         except tk.TclError:
             pass
 
-    # -- footer: the Launch history link (review F) --------------------------
+    # -- footer: Launch history link + version / update nudge (reviews F + I) --
 
     def _build_footer(self, outer, row):
-        # The version + update nudge live in the MAIN window footer now (review I);
-        # Lab Settings keeps only the read-only Launch history link (review F).
+        # Lab Settings keeps the read-only Launch history link (review F) and, at
+        # the very bottom, the version + a once-a-day update nudge (review I). The
+        # update check runs HERE, on Settings OPEN (not app launch), at most once a
+        # day, and is persisted in data/ by core so the "new version available"
+        # flag reads the stored value and stays visible OFFLINE.
         card = tk.Frame(outer, bg=COLORS["window"])
-        card.grid(row=row, column=0, sticky="ew", pady=(14, 4))
+        card.grid(row=row, column=0, sticky="ew", pady=(14, 8))
         card.columnconfigure(0, weight=1)
         history = tk.Label(card, text="Launch history", bg=COLORS["window"],
                            fg=COLORS["accent"], font=self.fonts.small, cursor="hand2",
                            anchor="w")
         history.grid(row=0, column=0, sticky="w")
         history.bind("<Button-1>", lambda _e: LaunchHistoryDialog(self.top, self.fonts))
+
+        # The version always shows.
+        tk.Label(card, text="%s version %s" % (APP_NAME, core.APP_VERSION),
+                 bg=COLORS["window"], fg=COLORS["faint"], font=self.fonts.small,
+                 anchor="w").grid(row=1, column=0, sticky="w", pady=(12, 0))
+
+        # The "new version available" note + upgrade text appear only when a newer
+        # release has been recorded. Hidden until the (persisted) check says so.
+        self._update_box = tk.Frame(card, bg=COLORS["window"])
+        self._update_box.grid(row=2, column=0, sticky="ew")
+        self._update_box.grid_remove()
+        self._update_box.columnconfigure(0, weight=1)
+        self._update_note = tk.Label(self._update_box, text=core.UPDATE_LABEL,
+                                     bg=COLORS["window"], fg=COLORS["accent"],
+                                     font=self.fonts.small_bold, anchor="w")
+        self._update_note.grid(row=0, column=0, sticky="w", pady=(6, 2))
+        # The upgrade sentence with the word "GitHub" as a BLUE CLICKABLE link. A
+        # read-only Text lets the link sit inline mid-sentence and wrap cleanly.
+        text = self._update_text = tk.Text(
+            self._update_box, height=2, wrap="word", bd=0, highlightthickness=0,
+            bg=COLORS["window"], fg=COLORS["muted"], font=self.fonts.small,
+            cursor="arrow", padx=0, pady=0)
+        text.grid(row=1, column=0, sticky="ew")
+        text.tag_configure("link", foreground="#2f6fed", underline=True)
+        text.tag_bind("link", "<Enter>", lambda _e: text.configure(cursor="hand2"))
+        text.tag_bind("link", "<Leave>", lambda _e: text.configure(cursor="arrow"))
+        text.tag_bind("link", "<Button-1>",
+                      lambda _e: webbrowser.open(core.REPO_URL))
+        text.insert("end", "Download the app folder from ")
+        text.insert("end", "GitHub", ("link",))
+        text.insert("end", " and replace the app folder — keep your data.")
+        text.configure(state="disabled")
+
+        # Run the once-a-day, fail-soft check on a daemon thread; the GUI thread
+        # polls for its result (root.after from a worker thread is not reliable
+        # across Tcl builds, so the main thread owns every after() call).
+        self._update_result = None
+        self._update_polls = 0
+        threading.Thread(target=self._fetch_update, daemon=True).start()
+        self.top.after(400, self._poll_update)
+
+    def _fetch_update(self):
+        try:
+            self._update_result = core.check_for_update()
+        except Exception:
+            self._update_result = {"update_available": False}
+
+    def _poll_update(self):
+        result = self._update_result
+        if result is None:
+            self._update_polls += 1
+            if self._update_polls < 20:   # ~8 s ceiling, then give up quietly
+                try:
+                    self.top.after(400, self._poll_update)
+                except tk.TclError:
+                    pass
+            return
+        if not result.get("update_available"):
+            return
+        try:
+            if not self._update_box.winfo_exists():
+                return
+            note = result.get("label") or core.UPDATE_LABEL
+            remote = result.get("remote_version") or ""
+            if remote:
+                note = "%s (%s)" % (note, remote)
+            self._update_note.configure(text=note)
+            self._update_box.grid()
+        except tk.TclError:
+            pass
 
     # -- which lab is this computer (item 8) --------------------------------
 
