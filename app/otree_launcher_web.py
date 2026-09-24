@@ -1434,7 +1434,7 @@ class Api(object):
                 "labs": _lab_tiles(presets, config_lab), "next_selected": next_selected}
 
     @api_call
-    def export_pc_shortcuts(self, lab_id):
+    def export_pc_shortcuts(self, lab_id, hotkey_key=None):
         """Write a folder of per-seat Windows kiosk .lnk shortcuts for a lab.
 
         Web/Tk parity for review feature D. Reuses the lab's own host, room, seat
@@ -1445,6 +1445,10 @@ class Api(object):
         via ``pywOnShortcutsResult``), the server-side folder subprocess in
         browser mode (returned synchronously). Two entry points call this: the
         Add/Edit-lab tick box and the Lab Settings "Export PC shortcuts" button.
+
+        ``hotkey_key`` is the optional single key from the "Global shortcut key"
+        field; blank/None means no hotkey (the default). The SAME Ctrl+Alt+<key>
+        hotkey is written to every seat .lnk when it is set.
         """
         presets = core.lab_presets_from_store(self.store_extra)
         preset = core.find_lab_preset(lab_id, presets)
@@ -1465,14 +1469,15 @@ class Api(object):
             return core.export_participant_shortcuts(
                 dest, preset["name"], preset["ip"], preset["seats"],
                 room=preset.get("default_room"), port=port,
-                shortcut_label=preset.get("shortcut_label", ""))
+                shortcut_label=preset.get("shortcut_label", ""),
+                hotkey_key=hotkey_key)
         # Desktop (pywebview): pick the folder off the WebView thread, then push
         # the result back to the page.
-        self._spawn(lambda: self._dialog_export_shortcuts(preset, port),
+        self._spawn(lambda: self._dialog_export_shortcuts(preset, port, hotkey_key),
                     "dlg-pcshortcuts")
         return {"ok": True, "pending": True}
 
-    def _dialog_export_shortcuts(self, preset, port):
+    def _dialog_export_shortcuts(self, preset, port, hotkey_key=None):
         import webview
         try:
             result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
@@ -1488,7 +1493,8 @@ class Api(object):
         res = core.export_participant_shortcuts(
             dest, preset["name"], preset["ip"], preset["seats"],
             room=preset.get("default_room"), port=port,
-            shortcut_label=preset.get("shortcut_label", ""))
+            shortcut_label=preset.get("shortcut_label", ""),
+            hotkey_key=hotkey_key)
         self._callback("pywOnShortcutsResult", res)
 
     # -- settings.py block -------------------------------------------------

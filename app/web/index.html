@@ -2360,7 +2360,7 @@ function openLabSettings(){
     return '<tr><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.ip||p.host||"")+'</td><td class="c">'+(p.seats?p.seats.length:0)+
       '</td><td class="c"><span class="shown-toggle'+(p.display===false?" off":"")+'" onclick="toggleLabShown(\''+pid+'\')">'+(p.display===false?"–":"✓")+'</span></td>'+
       '<td class="c"><button class="btn tiny" onclick="labPresetEdit(\''+pid+'\')">Edit</button> '+
-      '<button class="btn tiny" onclick="exportPcShortcuts(\''+pid+'\')">Export PC shortcuts</button> '+
+      '<button class="btn tiny" onclick="askHotkeyThenExport(\''+pid+'\')">Export PC shortcuts</button> '+
       '<button class="btn tiny" onclick="deleteLabPreset(\''+pid+'\')">Delete</button></td></tr>';
   }).join("");
   openModal("Lab settings",
@@ -2550,7 +2550,7 @@ function saveLabPreset(id){
       var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Saved.";}
       /* If asked, also write the per-seat kiosk .lnk bundle for the just-saved
          lab (the Edit view's "Export PC shortcuts" button does the same later). */
-      if(makeShortcuts){var savedId=id||r.new_id;if(savedId)exportPcShortcuts(savedId);}}
+      if(makeShortcuts){var savedId=id||r.new_id;if(savedId)askHotkeyThenExport(savedId);}}
     else fail((r&&r.message)||"Could not save the lab.");};
   if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
   else API.add_lab(name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
@@ -2563,11 +2563,29 @@ function pcShortcutsResult(r){
   window.pywStatus("err",r.message||"Could not create shortcuts.");
   var s2=el("lsLabStatus");if(s2){s2.className="ls-status warn";s2.textContent=r.message||"Could not create shortcuts.";}
 }
-function exportPcShortcuts(id){
+/* The OPTIONAL global-hotkey prompt shared by BOTH export entry points (the
+   Add/Edit-lab tick box and the "Export PC shortcuts" button), mirroring the Tk
+   app's small hotkey dialog. ONE field: leave it blank for no hotkey (the
+   current behaviour); type a single key to give every exported shortcut
+   Ctrl+Alt+<key>. Confirming opens the native folder picker via
+   exportPcShortcuts. */
+function askHotkeyThenExport(id){
+  if(!NATIVE||!API){window.pywStatus("warn","Exporting shortcuts works in the app, not the static preview.");return;}
+  openModal("Export participant-PC shortcuts",
+    '<div class="mfield"><label>Global shortcut key</label><input id="expHotkey" type="text" maxlength="1" style="max-width:90px" placeholder="(optional)"></div>'+
+    '<p class="modal-desc">Leave blank for no hotkey (the current behaviour). Type a single letter or digit, e.g. S, to give every exported shortcut Ctrl+Alt+S. The hotkey only works once the .lnk is on the Desktop or Start Menu, and then it launches the kiosk system-wide from any app.</p>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn accent" onclick="confirmExportHotkey('+"'"+escapeHtml(id)+"'"+')">Choose folder…</button></div>',false);
+}
+function confirmExportHotkey(id){
+  var key=(val("expHotkey")||"").trim();
+  closeModal();
+  exportPcShortcuts(id,key);
+}
+function exportPcShortcuts(id,hotkeyKey){
   if(!NATIVE||!API){window.pywStatus("warn","Exporting shortcuts works in the app, not the static preview.");return;}
   /* Browser mode returns the result synchronously; pywebview returns
      {pending:true} and pushes the result through window.pywOnShortcutsResult. */
-  API.export_pc_shortcuts(id).then(function(r){if(r&&r.pending)return;pcShortcutsResult(r);});
+  API.export_pc_shortcuts(id,hotkeyKey||"").then(function(r){if(r&&r.pending)return;pcShortcutsResult(r);});
 }
 function deleteLabPreset(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;

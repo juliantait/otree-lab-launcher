@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -4394,8 +4394,43 @@ def _lnk_link_info(local_base_path):
     return header + volume_id + base + common_path_suffix
 
 
+# Windows .lnk HotKey modifier flags ([MS-SHLLINK] 2.1.3.1). The full 16-bit
+# HotKey field packs the virtual-key code in its LOW byte and these modifier
+# flags in its HIGH byte.
+_HOTKEYF_SHIFT = 0x01
+_HOTKEYF_CONTROL = 0x02
+_HOTKEYF_ALT = 0x04
+
+
+def hotkey_word(key, ctrl=True, alt=True, shift=False):
+    """The 16-bit Windows .lnk HotKey value for a single ``key`` character.
+
+    ``key`` is a single letter A-Z (case-insensitive) or digit 0-9; for those the
+    virtual-key code is just the uppercase ASCII code (e.g. S -> 0x53, 0 -> 0x30).
+    The modifier flags go in the high byte (default Ctrl+Alt, the Windows norm for
+    a .lnk letter hotkey). Forgiving by design: blank, None or any unsupported
+    input returns 0, which means "no hotkey".
+    """
+    text = str(key or "").strip()
+    if len(text) != 1:
+        return 0
+    ch = text.upper()
+    if "A" <= ch <= "Z" or "0" <= ch <= "9":
+        vk = ord(ch)
+    else:
+        return 0
+    modifiers = 0
+    if ctrl:
+        modifiers |= _HOTKEYF_CONTROL
+    if alt:
+        modifiers |= _HOTKEYF_ALT
+    if shift:
+        modifiers |= _HOTKEYF_SHIFT
+    return vk | (modifiers << 8)
+
+
 def build_windows_lnk(target_path, arguments="", working_dir="",
-                      description="", icon_path=None):
+                      description="", icon_path=None, hotkey=0):
     """The raw bytes of a Windows ``.lnk`` (a [MS-SHLLINK] Shell Link).
 
     ``target_path`` is the TargetPath the shortcut launches (here a browser exe),
@@ -4424,7 +4459,7 @@ def build_windows_lnk(target_path, arguments="", working_dir="",
         0,                          # FileSize (unknown / resolved at click time)
         0,                          # IconIndex
         _LNK_SW_SHOWNORMAL,         # ShowCommand
-        0,                          # HotKey
+        int(hotkey) & 0xFFFF,       # HotKey
         0,                          # Reserved1
         0,                          # Reserved2
         0)                          # Reserved3
@@ -4470,8 +4505,11 @@ def participant_seat_url(host, port, room, seat):
 
 
 def build_participant_seat_lnk(host, port, room, seat, browser_exe=None,
-                               description=""):
-    """The .lnk bytes for ONE seat: the kiosk browser opening that seat's link."""
+                               description="", hotkey=0):
+    """The .lnk bytes for ONE seat: the kiosk browser opening that seat's link.
+
+    ``hotkey`` is an optional 16-bit Windows HotKey value (0 = no hotkey).
+    """
     exe = browser_exe or PARTICIPANT_BROWSER_EXE
     url = participant_seat_url(host, port, room, seat)
     args = participant_kiosk_arguments(url)
@@ -4480,7 +4518,7 @@ def build_participant_seat_lnk(host, port, room, seat, browser_exe=None,
     working_dir = exe.rsplit("\\", 1)[0] if "\\" in exe else ""
     return build_windows_lnk(exe, arguments=args, working_dir=working_dir,
                              description=description or ("Seat %s" % seat),
-                             icon_path=exe)
+                             icon_path=exe, hotkey=hotkey)
 
 
 _FILENAME_BAD_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -4499,7 +4537,8 @@ def participant_shortcut_folder_name(lab_name):
 
 
 def export_participant_shortcuts(dest_dir, lab_name, host, seats, room=None,
-                                 port=None, shortcut_label="", browser_exe=None):
+                                 port=None, shortcut_label="", browser_exe=None,
+                                 hotkey_key=None):
     """Write a bundle of per-seat Windows kiosk .lnk shortcuts under ``dest_dir``.
 
     Creates ``<dest_dir>/<lab name> participant PC shortcuts/`` and writes one
@@ -4511,8 +4550,13 @@ def export_participant_shortcuts(dest_dir, lab_name, host, seats, room=None,
 
     ``shortcut_label`` names the files (falls back to the lab name when blank).
     ``port`` defaults to the launcher's default (8000).
+
+    ``hotkey_key`` is an optional single key character (a letter or digit). When
+    set, the SAME Ctrl+Alt+<key> global hotkey is written to every seat .lnk in
+    the bundle; blank/None means no hotkey (the default behaviour).
     """
     port = str(port or DEFAULT_CONFIG["port"]).strip() or "8000"
+    hotkey = hotkey_word(hotkey_key)
     labels = [str(s).strip() for s in (seats or []) if str(s).strip()]
     if not str(host or "").strip():
         return {"ok": False, "message": "This lab has no host/IP set, so no links can be made."}
@@ -4531,7 +4575,7 @@ def export_participant_shortcuts(dest_dir, lab_name, host, seats, room=None,
     for seat in labels:
         data = build_participant_seat_lnk(
             host.strip(), port, room, seat, browser_exe=browser_exe,
-            description="%s - %s" % (label, seat))
+            description="%s - %s" % (label, seat), hotkey=hotkey)
         filename = "%s - %s.lnk" % (_sanitize_filename(label, "Study room"),
                                     _sanitize_filename(seat, "seat"))
         path = os.path.join(out_dir, filename)

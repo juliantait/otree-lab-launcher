@@ -1,0 +1,19 @@
+#!/bin/bash
+# Launcher stub for the "Start oTree Lab Launcher.app" bundle.
+#
+# This .app is meant to sit in the oTree Lab Launcher folder, right next to
+# "Mac_Start oTree Lab Launcher (web).command". It self-locates: the repo root
+# is three levels up from this script (…/Start oTree Lab Launcher.app/Contents/
+# MacOS/start), then it hands off to the windowless web launcher there.
+#
+# (The Desktop copy made by "Create desktop shortcut.command" instead bakes in
+# an absolute path, because a Desktop copy is no longer next to the folder.)
+set -e
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SELF_DIR/../../.." && pwd)"
+CMD="$REPO_DIR/Mac_Start oTree Lab Launcher (web).command"
+if [ ! -x "$CMD" ] && [ ! -f "$CMD" ]; then
+  osascript -e 'display alert "oTree Lab Launcher" message "Could not find the web launcher next to this app. Keep this app inside the oTree Lab Launcher folder, or use \"Create desktop shortcut.command\" to place a correctly-targeted copy on your Desktop."' >/dev/null 2>&1 || true
+  exit 1
+fi
+exec "$CMD"

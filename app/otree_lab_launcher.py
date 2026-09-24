@@ -6912,15 +6912,65 @@ class RoomPickerDialog(object):
         _modal_close(self.top)
 
 
+def _ask_shortcut_hotkey(parent, fonts):
+    """A small modal asking for the OPTIONAL global shortcut key.
+
+    Returns (proceed, key): proceed is False when the user cancelled, and key is
+    the single character typed (blank = no hotkey, the default). One field only,
+    with a helper line explaining what the hotkey does.
+    """
+    result = {"proceed": False, "key": ""}
+    top = tk.Toplevel(parent)
+    top.title("Export participant-PC shortcuts")
+    top.configure(bg=COLORS["card"])
+    _attach_shade(parent, top)
+    top.transient(parent)
+    top.resizable(False, False)
+    body = tk.Frame(top, bg=COLORS["card"])
+    body.pack(fill="both", expand=True, padx=20, pady=18)
+    tk.Label(body, text="Global shortcut key (optional)", bg=COLORS["card"],
+             fg=COLORS["muted"], font=fonts.body, anchor="w").pack(anchor="w")
+    key = tk.StringVar(top, value="")
+    ttk.Entry(body, textvariable=key, width=6).pack(anchor="w", pady=(2, 0))
+    tk.Label(body, text="Leave blank for no hotkey (the current behaviour). Type a "
+             "single letter or digit, e.g. S, to give every exported shortcut "
+             "Ctrl+Alt+S. The hotkey only works once the .lnk is on the Desktop or "
+             "Start Menu, and then it launches the kiosk system-wide from any app.",
+             bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small, anchor="w",
+             justify="left", wraplength=380).pack(anchor="w", pady=(6, 0))
+    buttons = tk.Frame(body, bg=COLORS["card"])
+    buttons.pack(fill="x", pady=(14, 0))
+    buttons.columnconfigure(0, weight=1)
+
+    def go():
+        result["proceed"] = True
+        result["key"] = key.get().strip()
+        _modal_close(top)
+
+    ttk.Button(buttons, text="Cancel", command=lambda: _modal_close(top)).grid(
+        row=0, column=0, sticky="w")
+    tk.Button(buttons, text="Choose folder…", command=go, font=fonts.bold,
+              bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
+              activeforeground="#ffffff", relief="flat", padx=14, pady=5,
+              cursor="hand2").grid(row=0, column=1, sticky="e")
+    _center_on(parent, top)
+    try:
+        _grab_modal(top)
+    except tk.TclError:
+        pass
+    top.wait_window()
+    return result["proceed"], result["key"]
+
+
 def export_participant_shortcuts_dialog(parent, fonts, lab_name, host, seats,
                                         room=None, shortcut_label=""):
-    """Ask for a destination folder and write the per-seat kiosk .lnk bundle.
+    """Ask for an optional hotkey + a destination folder and write the .lnk bundle.
 
     Shared by the Add/Edit-lab tick box and the Lab Settings "Export PC
-    shortcuts" button, so both go through the same folder picker + core writer
-    (core.export_participant_shortcuts). Always produces Windows .lnk files (the
-    participant PCs are Windows) even when this launcher runs on a Mac. Returns
-    the core result dict, or None when the user cancelled the folder picker.
+    shortcuts" button, so both go through the same hotkey prompt + folder picker
+    + core writer (core.export_participant_shortcuts). Always produces Windows
+    .lnk files (the participant PCs are Windows) even when this launcher runs on
+    a Mac. Returns the core result dict, or None when the user cancelled.
     """
     labels = core.parse_seat_list(seats)
     if not labels:
@@ -6928,13 +6978,17 @@ def export_participant_shortcuts_dialog(parent, fonts, lab_name, host, seats,
             "No seats", "This lab has no seats, so there is nothing to make "
             "shortcuts for.", parent=parent)
         return None
+    proceed, hotkey_key = _ask_shortcut_hotkey(parent, fonts)
+    if not proceed:
+        return None
     dest = filedialog.askdirectory(
         parent=parent, title="Choose where to save the participant-PC shortcuts",
         initialdir=os.path.expanduser("~"))
     if not dest:
         return None
     result = core.export_participant_shortcuts(
-        dest, lab_name, host, labels, room=room, shortcut_label=shortcut_label)
+        dest, lab_name, host, labels, room=room, shortcut_label=shortcut_label,
+        hotkey_key=hotkey_key)
     if result.get("ok"):
         messagebox.showinfo("Shortcuts created", result["message"], parent=parent)
     else:
