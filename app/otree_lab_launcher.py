@@ -732,8 +732,11 @@ def headless_run(config_name, store_path=None):
         _hlog("Reset database is off, so otree resetdb was skipped.")
 
     # 4. Start the server in its own terminal window (the wanted Launch terminal).
+    server_start = time.monotonic()
     ok, server_proc = _headless_start_server(cfg, path, env)
     if not ok:
+        core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                            outcome="fail", lab_presets=lab_presets)
         return 6
 
     # 5. Open the admin dashboard already authenticated (auto-login on by default,
@@ -774,6 +777,8 @@ def headless_run(config_name, store_path=None):
         # exit so a broken one-click shortcut is obvious. Fail-soft: a page may
         # already be open (manual fallback), so the operator can still retry.
         _hlog(_headless_startup_failure_message(server_proc))
+        core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                            outcome="fail", lab_presets=lab_presets)
         return 7
 
     # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
@@ -785,6 +790,12 @@ def headless_run(config_name, store_path=None):
             save_store(presets, store_extra, store_path)
         except OSError:
             pass
+
+    # A launch happened (server confirmed ready): append one session-log line
+    # (fail-soft) alongside the last_run stamp, exactly like the GUI (review F).
+    core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                        outcome="ok", server_ready_seconds=time.monotonic() - server_start,
+                        lab_presets=lab_presets)
 
     _hlog("Done. The server keeps running in its own window.")
     return 0
@@ -1531,6 +1542,7 @@ class LauncherApp(object):
         self._make_variables()
         self._build_sidebar()
         self._build_main()
+        self._build_status_footer()
         self._wire_traces()
 
         self.refresh_sidebar()
@@ -1586,6 +1598,68 @@ class LauncherApp(object):
         # trace: it stays as a plain mirror of the current mode for display.
         self.seat_mode_label.trace_add("write", self._on_seat_mode_change)
         self.var["lab"].trace_add("write", self._on_lab_change)
+
+    # -- bottom-of-window version footer (review I) ------------------------
+
+    def _build_status_footer(self):
+        """A thin footer pinned to the very bottom of the main window that ALWAYS
+        shows the version; when a newer GitHub release exists it also shows a
+        clickable "new version available" that opens the repo (with the same
+        explanatory text on hover). The version + newer-than decision come from
+        core; the network check runs in a daemon thread so it never blocks."""
+        bar = tk.Frame(self.root, bg=COLORS["sidebar"],
+                       highlightbackground=COLORS["sidebar_line"], highlightthickness=1)
+        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        tk.Label(bar, text="%s v%s" % (APP_NAME, core.APP_VERSION),
+                 bg=COLORS["sidebar"], fg=COLORS["faint"], font=self.fonts.small,
+                 anchor="w").pack(side="left", padx=12, pady=4)
+        # Hidden until the fail-soft check finds a strictly newer release.
+        self.update_link = tk.Label(bar, text="", bg=COLORS["sidebar"],
+                                    fg=COLORS["accent"], font=self.fonts.small_bold,
+                                    cursor="hand2", anchor="w")
+        self.update_link.pack(side="left", padx=(0, 12), pady=4)
+        # The network check runs on a daemon thread and drops its result here; the
+        # GUI thread POLLS for it. (Marshalling with root.after() FROM the worker
+        # thread is not reliable across Tcl builds, so the main thread owns every
+        # after() call and just reads a plain attribute the worker set.)
+        self._update_result = None
+        self._update_polls = 0
+        threading.Thread(target=self._fetch_update, daemon=True).start()
+        self.root.after(600, self._poll_update)
+
+    def _fetch_update(self):
+        try:
+            self._update_result = core.check_for_update()
+        except Exception:
+            self._update_result = {"update_available": False}
+
+    def _poll_update(self):
+        result = self._update_result
+        if result is None:
+            # Not back yet; poll again for a bounded while (~12 s) then give up.
+            self._update_polls += 1
+            if self._update_polls < 20:
+                try:
+                    self.root.after(600, self._poll_update)
+                except tk.TclError:
+                    pass
+            return
+        if not result.get("update_available"):
+            return
+        label = result.get("label") or core.UPDATE_LABEL
+        tip = result.get("tooltip") or core.UPDATE_TOOLTIP
+        repo = result.get("repo_url") or core.REPO_URL
+        try:
+            if not self.update_link.winfo_exists():
+                return
+            self.update_link.configure(text=label)
+            self.update_link.bind("<Button-1>", lambda _e: webbrowser.open(repo))
+            # Nice-to-have hover text explaining the upgrade (the clickable label
+            # is the must); the tooltip names the repo it opens.
+            Tooltip(self.update_link,
+                    lambda: "%s\nClick to open %s" % (tip, repo)).attach(self.update_link)
+        except tk.TclError:
+            pass
 
     # -- sidebar -----------------------------------------------------------
 
@@ -4461,7 +4535,9 @@ class LauncherApp(object):
         else:
             self.log("Reset database is off, so otree resetdb was skipped.", "muted")
 
+        server_start = time.monotonic()
         if not self._start_server(cfg, path, env):
+            self._record_session(cfg, config_name, "fail", None)
             return False, "The oTree server could not be started. See the activity log above."
 
         # Auto login (default ON, the "Auto login" tick on the oTree admin row):
@@ -4511,10 +4587,13 @@ class LauncherApp(object):
             msg = self._startup_failure_message()
             self.log(msg, "err")
             self._on_main(lambda: self.inline_status.set("error", msg))
+            self._record_session(cfg, config_name, "fail", None)
             return False, msg
 
         # Only a real, server-ready success stamps the run and claims "Launched".
+        ready_seconds = time.monotonic() - server_start
         self._stamp_last_run(cfg)
+        self._record_session(cfg, config_name, "ok", ready_seconds)
         self._on_main(lambda: self.inline_status.set(
             "ok", "Server started. Its window stays open; press Ctrl-C there to stop it."))
         self.log("Done. The server keeps running in its own window.", "ok")
@@ -4606,6 +4685,20 @@ class LauncherApp(object):
             line = line.rstrip()
             if line:
                 self.log(line, "out", prefix=False)
+
+    def _record_session(self, cfg, config_name, outcome, ready_seconds):
+        """Append ONE launch line to data/sessions.jsonl (fable review F).
+
+        Fail-soft in core, so it can never break a launch; logged alongside the
+        last_run stamp so every launch (success or a ready-failure) is recorded.
+        The author is the selected config's saved author when there is one.
+        """
+        author = ""
+        if self.selected_index is not None:
+            author = self.presets[self.selected_index].get("author", "")
+        core.record_session(
+            cfg, config_name=config_name, author=author, outcome=outcome,
+            server_ready_seconds=ready_seconds, lab_presets=self.lab_presets)
 
     def _stamp_last_run(self, cfg):
         # Stamp the SELECTED config by identity (its index), even if its room (or
@@ -6966,6 +7059,97 @@ class LabPresetEditDialog(object):
         _modal_close(self.top)
 
 
+class LaunchHistoryDialog(object):
+    """A read-only viewer for the launch history log (fable review F).
+
+    Lists the most recent launches (newest first) from data/sessions.jsonl:
+    time, config, lab/room, database, seats and outcome. It is a passive VIEWER
+    -- it never manages or re-runs anything (mission: a launcher, not a data
+    platform); the log is written fail-soft by core.record_session on each launch.
+    """
+
+    def __init__(self, parent, fonts):
+        self.fonts = fonts
+        top = self.top = tk.Toplevel(parent)
+        top.title("Launch history")
+        top.configure(bg=COLORS["window"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.geometry("620x560")
+        top.minsize(520, 420)
+
+        header = tk.Frame(top, bg=COLORS["window"])
+        header.pack(fill="x", padx=16, pady=(14, 4))
+        tk.Label(header, text="Recent launches", bg=COLORS["window"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").pack(side="left")
+        tk.Label(header, text="Newest first · read-only", bg=COLORS["window"],
+                 fg=COLORS["faint"], font=fonts.small, anchor="e").pack(side="right")
+
+        try:
+            ttk.Style(top).configure(
+                "History.Treeview",
+                rowheight=int(fonts.body.metrics("linespace")) + 8)
+        except tk.TclError:
+            pass
+        cols = ("time", "config", "labroom", "database", "seats", "outcome")
+        tree = self.tree = ttk.Treeview(top, columns=cols, show="headings",
+                                        style="History.Treeview")
+        for key, label, width, anchor in (
+                ("time", "When", 130, "w"),
+                ("config", "Config", 120, "w"),
+                ("labroom", "Lab / room", 130, "w"),
+                ("database", "Database", 150, "w"),
+                ("seats", "Seats", 50, "center"),
+                ("outcome", "Outcome", 70, "center")):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, anchor=anchor)
+        scroll = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True, padx=(16, 0), pady=(4, 12))
+        scroll.pack(side="left", fill="y", padx=(0, 8), pady=(4, 12))
+
+        self.empty = tk.Label(top, text="", bg=COLORS["window"], fg=COLORS["muted"],
+                              font=fonts.small)
+
+        footer = tk.Frame(top, bg=COLORS["window"])
+        footer.pack(fill="x", padx=16, pady=(0, 12))
+        ttk.Button(footer, text="Close", command=top.destroy).pack(side="right")
+
+        self._load()
+        _center_on(parent, top, divisor=6)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+
+    def _load(self):
+        entries = core.read_sessions(limit=200)
+        if not entries:
+            self.tree.pack_forget()
+            self.empty.configure(
+                text="No launches have been logged yet. Each launch adds a line here.")
+            self.empty.pack(fill="both", expand=True, padx=16, pady=24)
+            return
+        for entry in entries:
+            lab_room = "%s / %s" % (entry.get("lab", ""), entry.get("room", ""))
+            outcome = "OK" if entry.get("outcome") == "ok" else "Failed"
+            self.tree.insert("", "end", values=(
+                self._fmt_time(entry.get("timestamp", "")),
+                entry.get("config", "") or "(unsaved)",
+                lab_room,
+                entry.get("database", ""),
+                entry.get("seats", ""),
+                outcome))
+
+    @staticmethod
+    def _fmt_time(stamp):
+        try:
+            when = _dt.datetime.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            return str(stamp)
+        return when.strftime("%d %b %H:%M")
+
+
 class LabSettingsDialog(object):
     """The Lab Settings page: the Postgres admin config (used only to create
     databases) and the lab presets that drive the main lab selector. Every
@@ -7092,12 +7276,29 @@ class LabSettingsDialog(object):
                                       justify="left", wraplength=560)
         self.preset_status.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 10))
 
+        # -- Footer: version, update notice, and the Launch history link ------
+        self._build_footer(outer, row=5)
+
         self._reload_tree()
         _center_on(parent, top, divisor=6)
         try:
             _grab_modal(top)
         except tk.TclError:
             pass
+
+    # -- footer: the Launch history link (review F) --------------------------
+
+    def _build_footer(self, outer, row):
+        # The version + update nudge live in the MAIN window footer now (review I);
+        # Lab Settings keeps only the read-only Launch history link (review F).
+        card = tk.Frame(outer, bg=COLORS["window"])
+        card.grid(row=row, column=0, sticky="ew", pady=(14, 4))
+        card.columnconfigure(0, weight=1)
+        history = tk.Label(card, text="Launch history", bg=COLORS["window"],
+                           fg=COLORS["accent"], font=self.fonts.small, cursor="hand2",
+                           anchor="w")
+        history.grid(row=0, column=0, sticky="w")
+        history.bind("<Button-1>", lambda _e: LaunchHistoryDialog(self.top, self.fonts))
 
     # -- which lab is this computer (item 8) --------------------------------
 

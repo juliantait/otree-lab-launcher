@@ -15,6 +15,7 @@ pytest tests/
 |------|--------|-------|
 | `test_core_features.py` | `otree_core`: launch-briefing caution flag, `create_database` argument handling, project-room enumeration, lab-preset storage + back-compat | stdlib only (one live-connection test self-skips without `psycopg2`) |
 | `test_db_management.py` | `otree_core`: `slugify_pg_dbname`, `edit_database`, register-without-create, DB-failure recovery (`issue_fix_for` / `switch_to_lab_default`) | stdlib only |
+| `test_session_history.py` | `otree_core`: the session-history log (`record_session` writes a well-formed `sessions.jsonl` line, `read_sessions` returns newest-first, fail-soft), plus the semver `APP_VERSION`, `parse_semver`/`version_is_newer`, and the once-a-day release update check (`parse_github_release_tag`, `check_for_update` with an injected fetcher — no network, fail-soft on error/404) | stdlib only |
 | `test_tk_parity.py` | that the Tk launcher's pure-logic names still match `otree_core` (the guard for the item-#10 consolidation): env dict, resetdb/prodserver commands, the settings block, a store round-trip | imports `otree_lab_launcher`, so it `pytest.importorskip("tkinter")`s — skips where Tk is absent; never opens a window, so no display is needed |
 
 The larger body of scratch tests and verification scripts lives in the

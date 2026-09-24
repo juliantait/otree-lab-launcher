@@ -70,7 +70,14 @@ import webbrowser
 # ---------------------------------------------------------------------------
 
 APP_NAME = "oTree Lab Launcher"
+# A semver version string (MAJOR.MINOR.PATCH). The app footer always shows it, and
+# the once-a-day update check compares it against the latest GitHub RELEASE tag
+# (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
+# release tag counts as "newer". Bump this whenever a release is cut.
+APP_VERSION = "1.0.0"
 PRESETS_FILENAME = "presets.json"
+SESSIONS_FILENAME = "sessions.jsonl"
+UPDATE_CHECK_FILENAME = "update_check.json"
 # A gitignored, one-word per-machine marker ("large"/"small") that identifies
 # which lab this computer is. It sits next to the launcher checkout, not in a
 # researcher's project, because it is a property of the machine.
@@ -2038,6 +2045,309 @@ def format_last_run(stamp):
     if (today - when.date()).days == 1:
         return "Last run yesterday at " + when.strftime("%H:%M")
     return "Last run " + when.strftime("%d %b %Y at %H:%M")
+
+
+# ---------------------------------------------------------------------------
+# Session history log (fable review F). ONE JSON line per launch appended to
+# data/sessions.jsonl, so a lab manager can answer "who reset the shared DB at
+# 14:03" or "which project ran in the small lab last Tuesday". This is a passive
+# LOG, not a data platform: the launcher writes it and offers a read-only viewer;
+# it never manages sessions or touches oTree's own data (see mission_and_review).
+# Everything here is FAIL-SOFT -- logging must never break or delay a launch.
+# ---------------------------------------------------------------------------
+
+
+def sessions_path():
+    """Where the launch history log lives. OTREE_LAB_SESSIONS overrides it
+    (used by tests). It sits in data/, never in a researcher's project."""
+    override = os.environ.get("OTREE_LAB_SESSIONS")
+    if override:
+        return override
+    return os.path.join(data_dir(), SESSIONS_FILENAME)
+
+
+def _session_database_label(cfg):
+    """A short, human database label for one session-log line (no secrets)."""
+    c = normalize_config(cfg)
+    mode = c["db_mode"]
+    if mode == DB_MODE_NONE:
+        return "SQLite (no lab DB)"
+    name = (c.get("db_name") or "otree").strip() or "otree"
+    if mode == DB_MODE_LAB:
+        return "Lab shared Postgres (%s)" % name
+    return "Custom Postgres (%s)" % name
+
+
+def build_session_entry(cfg, config_name="", author="", outcome="ok",
+                        server_ready_seconds=None, resetdb=None,
+                        lab_presets=None, when=None):
+    """One session-history record (a plain dict) for a single launch.
+
+    Pure and shared by BOTH faces so the JSONL lines are identical in shape. It
+    carries no secrets -- only the database LABEL, never the URL or password.
+    ``outcome`` is normalised to "ok"/"fail". ``server_ready_seconds`` is how long
+    the server took to answer the readiness poll (None when not measured).
+    """
+    c = normalize_config(cfg)
+    author = str(author or "").strip()
+    if not author:
+        try:
+            author = getpass.getuser()
+        except Exception:
+            author = ""
+    seconds = None
+    if server_ready_seconds is not None:
+        try:
+            seconds = round(float(server_ready_seconds), 1)
+        except (TypeError, ValueError):
+            seconds = None
+    return {
+        "timestamp": when or now_iso(),
+        "config": str(config_name or "").strip(),
+        "author": author,
+        "project": c["project_path"],
+        "lab": c["lab"],
+        "room": c["room_name"],
+        "database": _session_database_label(c),
+        "seats": len(resolve_seats(c, lab_presets)),
+        "resetdb": bool(c["resetdb"] if resetdb is None else resetdb),
+        "outcome": "ok" if outcome == "ok" else "fail",
+        "server_ready_seconds": seconds,
+    }
+
+
+def record_session(cfg, config_name="", author="", outcome="ok",
+                   server_ready_seconds=None, resetdb=None, lab_presets=None,
+                   path=None):
+    """Append ONE JSON line to data/sessions.jsonl for a launch.
+
+    FAIL-SOFT by contract: every error (a bad path, a full disk, a serialisation
+    quirk) is swallowed so logging can NEVER break or delay a launch. Returns the
+    entry dict that was written, or None if nothing could be written.
+
+    The append uses O_APPEND ("a" mode), whose single-line writes are atomic on
+    the platforms the launcher runs on, so a GUI and the headless one-click
+    shortcut can both log without a separate lock file cluttering data/.
+    """
+    try:
+        entry = build_session_entry(
+            cfg, config_name=config_name, author=author, outcome=outcome,
+            server_ready_seconds=server_ready_seconds, resetdb=resetdb,
+            lab_presets=lab_presets)
+        target = path or sessions_path()
+        folder = os.path.dirname(target) or "."
+        os.makedirs(folder, exist_ok=True)
+        line = json.dumps(entry, ensure_ascii=False)
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+        return entry
+    except Exception:
+        return None
+
+
+def read_sessions(limit=50, path=None):
+    """The most recent launches from data/sessions.jsonl, NEWEST FIRST.
+
+    Read-only and fail-soft: an absent or unreadable file returns []; malformed
+    lines are skipped. ``limit`` None returns every entry. The file is written in
+    append (oldest-first) order, so this reverses it for the viewer.
+    """
+    target = path or sessions_path()
+    entries = []
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    entries.append(obj)
+    except OSError:
+        return []
+    entries.reverse()
+    if limit is not None and limit >= 0:
+        return entries[:limit]
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Version + once-a-day update check (fable review I). A quiet, FAIL-SOFT nudge:
+# ask GitHub for the LATEST RELEASE at most once a day (cached in data/), read its
+# tag_name (e.g. "v1.2.0") and compare it to APP_VERSION with a small semver
+# compare. Only when the release tag is STRICTLY GREATER does the app footer show
+# "new version available" (a clickable link to the repo). No network, no
+# releases, or ANY error means silence: the check never disrupts the launcher.
+# ---------------------------------------------------------------------------
+
+GITHUB_RELEASES_URL = (
+    "https://api.github.com/repos/juliantait/otree-lab-launcher/releases/latest")
+REPO_URL = "https://github.com/juliantait/otree-lab-launcher"
+UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+# The short footer label shown when a newer release exists, and the explanatory
+# text shown on hover (both faces) next to the clickable repo link.
+UPDATE_LABEL = "new version available"
+UPDATE_TOOLTIP = ("Download the app folder from GitHub and replace the app "
+                  "folder — keep your data")
+
+
+def update_cache_path():
+    """Where the last update-check result is cached. OTREE_LAB_UPDATE_CACHE
+    overrides it (used by tests). Lives in data/, so it survives an update."""
+    override = os.environ.get("OTREE_LAB_UPDATE_CACHE")
+    if override:
+        return override
+    return os.path.join(data_dir(), UPDATE_CHECK_FILENAME)
+
+
+def parse_github_release_tag(raw):
+    """The latest release's ``tag_name`` (e.g. "v1.2.0") from a GitHub releases
+    API response, or None if it cannot be read.
+
+    Accepts bytes, a JSON string, or an already-parsed dict/list. ``releases/latest``
+    returns a single release object; a ``releases`` listing returns a list, so
+    both shapes are handled. Never raises.
+    """
+    try:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        release = data[0] if isinstance(data, list) else data
+        tag = str(release.get("tag_name", "") or "").strip()
+        return tag or None
+    except Exception:
+        return None
+
+
+def parse_semver(text):
+    """A (major, minor, patch) int tuple from a version string, or None.
+
+    Strips a leading "v"/"V" and reads up to three dot-separated numeric parts,
+    padding missing parts with 0 ("v1.2" -> (1, 2, 0)). Any non-numeric leading
+    part makes it None, so a garbage tag can never read as a version.
+    """
+    if text is None:
+        return None
+    s = str(text).strip()
+    if s[:1] in ("v", "V"):
+        s = s[1:]
+    if not s:
+        return None
+    nums = []
+    for part in s.split(".")[:3]:
+        match = re.match(r"\d+", part.strip())
+        if not match:
+            return None
+        nums.append(int(match.group()))
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums[:3])
+
+
+def version_is_newer(remote, current):
+    """True only when ``remote`` is a STRICTLY GREATER semver than ``current``.
+
+    Both are parsed with :func:`parse_semver`; if either cannot be parsed the
+    answer is False (never a phantom "newer"), so a missing or garbage tag is
+    silent.
+    """
+    remote_v = parse_semver(remote)
+    current_v = parse_semver(current)
+    if remote_v is None or current_v is None:
+        return False
+    return remote_v > current_v
+
+
+def _fetch_release_payload(timeout=4.0):
+    """GET the latest-release JSON from GitHub (raw bytes). Short timeout so a
+    stalled network never hangs the check; the caller swallows any error
+    (including the 404 GitHub returns when there are no releases yet)."""
+    import urllib.request
+    request = urllib.request.Request(
+        GITHUB_RELEASES_URL,
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "otree-lab-launcher"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _write_update_cache(path, data):
+    try:
+        folder = os.path.dirname(path) or "."
+        os.makedirs(folder, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+    except OSError:
+        pass
+
+
+def check_for_update(force=False, fetcher=None, path=None, now=None):
+    """Once-a-day, FAIL-SOFT release update check. Returns a dict:
+
+        {"update_available": bool,      # latest release tag > APP_VERSION (semver)
+         "current": APP_VERSION,        # what this build is
+         "remote_version": "v1.2.0",    # latest known release tag ("" if unknown)
+         "checked": bool,               # True only if the network was hit this call
+         "repo_url": REPO_URL,          # where the footer link points
+         "label": str,                  # UPDATE_LABEL when an update exists, else ""
+         "tooltip": UPDATE_TOOLTIP}     # the hover text next to the link
+
+    When the cached check is fresh (< a day old) and not ``force``, it returns the
+    cached verdict with NO network. Any network error, a 404 (no releases), or a
+    parse error is swallowed and the last known cache (or a silent "no update") is
+    returned -- the check never raises and never blocks longer than the fetch
+    timeout. ``fetcher`` (returns a payload for :func:`parse_github_release_tag`)
+    is injectable for tests.
+    """
+    path = path or update_cache_path()
+    now = now or _dt.datetime.now()
+
+    cache = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            cache = loaded
+    except (OSError, ValueError):
+        cache = {}
+
+    remote_version = str(cache.get("remote_version", "") or "")
+    last_checked = cache.get("last_checked", "")
+    fresh = False
+    if not force and last_checked:
+        try:
+            when = _dt.datetime.fromisoformat(str(last_checked))
+            fresh = (now - when).total_seconds() < UPDATE_CHECK_INTERVAL_SECONDS
+        except (TypeError, ValueError):
+            fresh = False
+
+    checked = False
+    if not fresh:
+        fetch = fetcher or _fetch_release_payload
+        try:
+            tag = parse_github_release_tag(fetch())
+            if tag:
+                remote_version = tag
+                checked = True
+                _write_update_cache(path, {
+                    "remote_version": remote_version,
+                    "last_checked": now.isoformat(timespec="seconds")})
+        except Exception:
+            # No network / no releases (404) / parse error => silent; keep the
+            # cache we had.
+            pass
+
+    update_available = version_is_newer(remote_version, APP_VERSION)
+    return {"update_available": update_available,
+            "current": APP_VERSION,
+            "remote_version": remote_version,
+            "checked": checked,
+            "repo_url": REPO_URL,
+            "label": UPDATE_LABEL if update_available else "",
+            "tooltip": UPDATE_TOOLTIP}
 
 
 # ---------------------------------------------------------------------------

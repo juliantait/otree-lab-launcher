@@ -27,6 +27,9 @@ data/presets.json.broken-*
 data/lab.local
 data/seats/
 data/*.log
+# the launch history log and the once-a-day update-check cache (runtime state)
+data/sessions.jsonl
+data/update_check.json
 # per-settings.py append locks the launcher keeps in its OWN data folder (so no
 # stray .lock is written into a researcher's project — see core._settings_lock_path)
 data/locks/

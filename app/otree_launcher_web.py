@@ -1006,6 +1006,30 @@ class Api(object):
                 "suggested": suggested}
 
     @api_call
+    def launch_history(self, limit=200):
+        """The recent launch history (fable review F), newest first, for the
+        read-only viewer opened from the bottom of Lab Settings. Read-only: it
+        never manages or re-runs anything. Fail-soft in core."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 200
+        return {"ok": True, "entries": core.read_sessions(limit=limit)}
+
+    @api_call
+    def version_info(self):
+        """The build version + a quiet, fail-soft once-a-day update check (fable
+        review I). The JS only renders what this returns; the network decision and
+        the newer-than comparison stay here in Python (re-skin rule)."""
+        try:
+            update = core.check_for_update()
+        except Exception:
+            update = {"update_available": False, "current": core.APP_VERSION,
+                      "remote_version": "", "label": "", "tooltip": core.UPDATE_TOOLTIP,
+                      "repo_url": core.REPO_URL}
+        return {"ok": True, "version": core.APP_VERSION, "update": update}
+
+    @api_call
     def save_default_db(self, db_id):
         """Promote a database to the lab-shared default BY REFERENCE (its id) and
         re-resolve core.LAB_DB, so every DB_MODE_LAB launch now uses it (Lab
@@ -1862,6 +1886,7 @@ class Api(object):
                 startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
                 popen_kwargs["startupinfo"] = startup
+            server_start = time.monotonic()
             server_proc = subprocess.Popen(launch["cmd"], **popen_kwargs)
             self._log("ok", "otree prodserver started in its OWN terminal window (in the "
                             "background). Watch that window for live server logs and any errors.")
@@ -1924,9 +1949,11 @@ class Api(object):
                 # the url so the operator can retry, but report the honest failure.
                 self._launch_result(False, msg, url=result.get("monitor_url", monitor_url),
                                     method=result.get("method", "manual"))
+                self._record_session(cfg, config_name, "fail", None)
                 return
 
             matched = self._mark_run(cfg, config_name)
+            self._record_session(cfg, config_name, "ok", time.monotonic() - server_start)
             self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
                                "server runs in its own window; watch there for live logs. You "
                                "can close this launcher.")
@@ -2057,6 +2084,21 @@ class Api(object):
         except OSError:
             pass
         return matched["preset"]
+
+    def _record_session(self, cfg, config_name, outcome, ready_seconds):
+        """Append ONE launch line to data/sessions.jsonl (fable review F).
+
+        Fail-soft in core, so it can never break a launch; logged alongside the
+        _mark_run last_run stamp so every launch (success or ready-failure) is
+        recorded. The author is the selected config's saved author when known.
+        Mirror of the Tk LauncherApp._record_session.
+        """
+        preset = self._find(config_name) if config_name else None
+        author = preset.get("author", "") if preset else ""
+        core.record_session(
+            cfg, config_name=config_name, author=author, outcome=outcome,
+            server_ready_seconds=ready_seconds,
+            lab_presets=core.lab_presets_from_store(self.store_extra))
 
     def _launched_config_state(self, matched):
         """Refreshed config rows + selected name for a live post-launch repaint.
