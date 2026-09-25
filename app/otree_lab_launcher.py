@@ -3843,11 +3843,11 @@ class LauncherApp(object):
             return
         name = self.presets[self.selected_index].get("name", "config")
         shortcut = core.headless_shortcut(name, os.path.abspath(__file__))
-        # Default suggested filename: the config name with a "_launcher" suffix
-        # (e.g. MyStudy -> MyStudy_launcher.vbs). Only the SUGGESTION changes -- the
-        # user can still rename it, and the shortcut's contents/behaviour are
-        # untouched (they come from core.headless_shortcut above).
-        suggested = os.path.splitext(shortcut["filename"])[0] + "_launcher" + shortcut["ext"]
+        # Default suggested filename: the "Launch_"-prefixed name from core
+        # (e.g. MyStudy -> Launch_MyStudy.vbs), matching the web app. Only the
+        # SUGGESTION changes -- the user can still rename it, and the shortcut's
+        # contents/behaviour are untouched (they come from core.headless_shortcut).
+        suggested = shortcut["filename"]
         target = filedialog.asksaveasfilename(
             parent=self.root, title="Save one-click shortcut",
             defaultextension=shortcut["ext"], initialfile=suggested,

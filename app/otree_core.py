@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.3"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -2668,7 +2668,10 @@ def headless_shortcut(config_name, launcher_path, platform_name=None):
     name = str(config_name or "").strip()
     launcher_path = os.path.abspath(launcher_path)
     launcher_dir = os.path.dirname(launcher_path)
-    base = sanitize_shortcut_name(name)
+    # Suggested file NAME only: prefix with "Launch_" so a config "Auction study"
+    # is offered as "Launch_Auction study.vbs" (or .command). This changes only
+    # the suggested filename -- the shortcut's contents and behaviour are untouched.
+    base = "Launch_" + sanitize_shortcut_name(name)
     stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     if platform_name.startswith("win"):
