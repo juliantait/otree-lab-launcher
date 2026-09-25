@@ -4,11 +4,16 @@
 
 ## Install
 
-Clone the repo:
+**Clone the repo (recommended on both macOS and Windows):**
 
 ```
 git clone https://github.com/juliantait/otree-lab-launcher.git
+cd otree-lab-launcher
 ```
+
+Then double-click the launcher in the folder: `Mac_Start oTree Lab Launcher.command` (macOS) or `Win_Start oTree Lab Launcher.vbs` (Windows).
+
+**Please clone rather than downloading the ZIP.** A downloaded ZIP is marked as quarantined by the operating system, and that causes launch problems: on macOS Gatekeeper prompts ("Apple could not verify...") on every launch, and on Windows it can trip Microsoft Defender SmartScreen. A `git clone` is not quarantined, so it launches cleanly on both. (No git yet? Install it from [git-scm.com](https://git-scm.com/downloads), or on macOS run `xcode-select --install`.)
 
 Once cloned, updating is super easy: just run `git pull` in the folder to get the latest version. See [Updating](#updating) below.
 

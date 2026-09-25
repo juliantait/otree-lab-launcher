@@ -22,6 +22,11 @@ setlocal
 
 set "APP=%~dp0..\app\otree_launcher_web.py"
 
+REM This is the DEBUG variant, so turn on verbose console logging: the launcher
+REM keeps the console handler at WARNING by default (quiet), and this env var
+REM promotes it to DEBUG so the full http + heartbeat log shows on screen.
+set "OTREE_LAB_LAUNCHER_DEBUG=1"
+
 REM Serve the UI locally and open the default browser (--browser = no pywebview).
 python "%APP%" --browser
 

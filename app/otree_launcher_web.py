@@ -164,9 +164,15 @@ def _setup_logging():
         logger.addHandler(fh)
     except OSError:
         pass
-    # Also echo to stderr, so a visible terminal shows the same lines.
+    # Also echo to stderr, so a visible terminal shows the same lines. The FILE
+    # handler above always keeps the full DEBUG log; the console is quiet by
+    # DEFAULT (WARNING and up, so the terminal is not flooded with DEBUG http
+    # logs and per-heartbeat lines) and only goes verbose (DEBUG) when the debug
+    # opt-in env var OTREE_LAB_LAUNCHER_DEBUG is truthy -- that is what the
+    # debug_ launcher scripts set.
     sh = logging.StreamHandler(sys.stderr)
     sh.setFormatter(fmt)
+    sh.setLevel(logging.DEBUG if webview_debug_enabled() else logging.WARNING)
     logger.addHandler(sh)
     return logger
 
@@ -204,13 +210,19 @@ def api_call(fn):
     WebView bridge. Method names are logged, but NOT their arguments (the field
     dicts carry admin/db passwords). On any exception the traceback goes to the
     log and a safe JSON value is returned so the caller's promise resolves.
+
+    The enter/exit lines are INFO for normal methods but DEBUG for ``heartbeat``:
+    the page beats every ~1.5s, so logging those at INFO would spam the console.
+    They still land in the DEBUG file log.
     """
+    log_level = logging.DEBUG if fn.__name__ == "heartbeat" else logging.INFO
+
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        LOG.info("Api.%s: enter", fn.__name__)
+        LOG.log(log_level, "Api.%s: enter", fn.__name__)
         try:
             result = fn(self, *args, **kwargs)
-            LOG.info("Api.%s: exit ok", fn.__name__)
+            LOG.log(log_level, "Api.%s: exit ok", fn.__name__)
             return result
         except Exception:
             LOG.exception("Api.%s: EXCEPTION", fn.__name__)
