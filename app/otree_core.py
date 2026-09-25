@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -1670,6 +1670,58 @@ def save_ui_theme(theme, path=None):
     return value
 
 
+# --- GitHub Organisation Sync opt-in (persisted like the theme) ------------
+# An OPT-IN, DEFAULT-OFF feature that wires the launcher into a lab's read-only
+# GitHub organisation git setup so an experimenter can clone/update a study repo
+# without touching a terminal. It works ONLY when the lab manager has already set
+# up git and a read-only GitHub organisation credential ON THIS lab experimenter
+# PC (the PC signed in read-only to the org). The launcher never stores or
+# handles any token itself -- it relies entirely on the machine's pre-stored git
+# credential. Two things persist here, in the SAME credential-free prefs file as
+# the theme (data/ui_prefs.json): the tick-box state and the organisation name
+# (so the clone target is <org>/<repo> and the org is NOT hardcoded). Both are
+# fail-soft: a missing/corrupt file yields the OFF default and an empty org.
+GITHUB_SYNC_ENABLED_KEY = "github_sync_enabled"
+GITHUB_ORG_KEY = "github_org"
+
+
+def load_github_sync_enabled(path=None):
+    """The saved GitHub Organisation Sync opt-in flag. Default OFF (False) when
+    nothing is stored (fail-soft)."""
+    return bool(load_ui_prefs(path).get(GITHUB_SYNC_ENABLED_KEY, False))
+
+
+def load_github_org(path=None):
+    """The saved GitHub organisation name, or '' when nothing is stored. This is
+    the <org> in the clone target https://github.com/<org>/<repo>; it is a
+    configured value, never hardcoded (fail-soft)."""
+    return str(load_ui_prefs(path).get(GITHUB_ORG_KEY, "") or "").strip()
+
+
+def save_github_sync_prefs(enabled, org, path=None):
+    """Persist the GitHub Organisation Sync opt-in flag AND the organisation name
+    into the prefs file (created if needed), preserving any other keys (e.g. the
+    theme). Returns the stored ``{"enabled": bool, "org": str}``. Never raises: a
+    write failure is swallowed (the UI has already updated in place)."""
+    path = path or ui_prefs_path()
+    enabled = bool(enabled)
+    org = str(org or "").strip()
+    prefs = load_ui_prefs(path)
+    prefs[GITHUB_SYNC_ENABLED_KEY] = enabled
+    prefs[GITHUB_ORG_KEY] = org
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(prefs, handle, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # fail-soft: the on-screen state already changed
+    return {"enabled": enabled, "org": org}
+
+
 # --- Per-machine lab identity (lab.local) ----------------------------------
 # Each lab PC carries a gitignored one-word marker file, `lab.local`, next to
 # the launcher, saying which lab it is ("large" or "small"). The launcher reads
@@ -2492,6 +2544,181 @@ def git_pull(repo=None):
     message = ("Update installed. Restart the launcher to apply."
                if ok else "git pull failed (exit code %s)." % result.returncode)
     return {"ok": ok, "output": output, "message": message}
+
+
+# --- Per-study Git update + GitHub Organisation clone -----------------------
+#
+# These extend the v1.2.0 launcher-self-update git plumbing (is_git_install /
+# git_pull, above) to the EXPERIMENT study folder, for the opt-in GitHub
+# Organisation Sync feature. They ALWAYS act on the selected STUDY folder that is
+# passed in, NEVER on the launcher's own app/ folder, and they NEVER touch any
+# oTree/experiment process -- they only run git on the folder's files. All are
+# fail-soft: git missing / a timeout / a bad path returns a well-formed result
+# rather than raising.
+GITHUB_URL_TEMPLATE = "https://github.com/%s/%s"
+
+
+def is_git_repo(folder):
+    """True when ``folder`` is inside a git working tree.
+
+    Detected with ``git -C <folder> rev-parse --is-inside-work-tree`` per spec: a
+    nonzero / fatal exit (not a repo, no such folder), git not being on PATH, or a
+    timeout all read as NOT a git repo. Never raises. Distinct from
+    :func:`is_git_install`, which checks the launcher's OWN install directory; this
+    one is pointed at an arbitrary study folder.
+    """
+    folder = str(folder or "").strip()
+    if not folder:
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", folder, "rev-parse", "--is-inside-work-tree"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    output = result.stdout or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    return output.strip().lower() == "true"
+
+
+def git_update_study(folder):
+    """Run ``git pull`` in a selected STUDY folder and classify the outcome.
+
+    Returns ``{"ok": bool, "status": str, "message": str, "output": str}`` where
+    ``status`` is one of:
+      * ``"not_repo"``  -> the folder is not a git repo (nothing pulled). Detected
+                           up front with :func:`is_git_repo`.
+      * ``"current"``   -> git printed "Already up to date" (no new commits).
+      * ``"updated"``   -> git pulled new commits.
+      * ``"error"``     -> a real pull failure (auth, network, merge conflict); the
+                           git error text is surfaced in ``message``/``output``.
+    NEVER touches the launcher app/ folder or any oTree/experiment process. Never
+    hangs (a bounded timeout) and never raises (git missing / bad path -> a
+    well-formed error result).
+    """
+    folder = str(folder or "").strip()
+    if not is_git_repo(folder):
+        return {"ok": False, "status": "not_repo", "output": "",
+                "message": "This folder is not a git repo."}
+    try:
+        result = subprocess.run(
+            ["git", "-C", folder, "pull"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=120)
+    except FileNotFoundError:
+        return {"ok": False, "status": "error", "output": "",
+                "message": "git is not installed on this machine."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "status": "error", "output": "",
+                "message": "git pull timed out."}
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return {"ok": False, "status": "error", "output": "",
+                "message": "Could not run git pull: %s" % error}
+    output = result.stdout or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    output = output.strip()
+    if result.returncode != 0:
+        # A real pull failure -- surface git's own text (auth, network, conflict).
+        detail = output or ("git pull failed (exit code %s)." % result.returncode)
+        return {"ok": False, "status": "error", "output": output,
+                "message": detail}
+    # git says "Already up to date." (a trailing full stop in some versions).
+    if "already up to date" in output.lower():
+        return {"ok": True, "status": "current", "output": output,
+                "message": "No updates available on git."}
+    return {"ok": True, "status": "updated", "output": output,
+            "message": "Updated."}
+
+
+def github_clone_url(org, repo):
+    """The HTTPS clone URL for ``<org>/<repo>``. The repo name is stripped of a
+    trailing ``.git`` and any surrounding whitespace so a user can type either
+    form. Raises ValueError when the org or repo is empty."""
+    org = str(org or "").strip().strip("/")
+    repo = str(repo or "").strip().strip("/")
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    if not org:
+        raise ValueError("Enter the GitHub organisation name first.")
+    if not repo:
+        raise ValueError("Enter the experiment repository name.")
+    return GITHUB_URL_TEMPLATE % (org, repo)
+
+
+def git_clone_org_repo(org, repo, dest_parent, runner=None):
+    """Clone ``https://github.com/<org>/<repo>`` into ``dest_parent`` using the
+    machine's already-stored read-only git credential (a plain ``git clone`` --
+    the launcher never handles the token itself).
+
+    ``dest_parent`` is the destination FOLDER the user chose; the repo is cloned
+    into a ``<repo>`` subfolder of it and that subfolder's absolute path is
+    returned as ``path`` on success, so the caller can auto-select it as the study
+    folder. Returns ``{"ok": bool, "message": str, "output": str, "path": str}``.
+
+    ``runner`` lets tests inject a fake clone spawn; it defaults to
+    :func:`subprocess.run`. Fail-soft and bounded: a bad/missing repo, a missing
+    credential, no git, a network error or a timeout all return ``ok`` False with
+    a clear message rather than hanging or raising. The clone target subfolder
+    must not already exist.
+    """
+    try:
+        url = github_clone_url(org, repo)
+    except ValueError as error:
+        return {"ok": False, "message": str(error), "output": "", "path": ""}
+    dest_parent = str(dest_parent or "").strip()
+    if not dest_parent:
+        return {"ok": False, "output": "", "path": "",
+                "message": "Choose a destination folder for the clone."}
+    if not os.path.isdir(dest_parent):
+        return {"ok": False, "output": "", "path": "",
+                "message": "Destination folder does not exist: %s" % dest_parent}
+    repo_name = url.rstrip("/").rsplit("/", 1)[-1]
+    target = os.path.join(dest_parent, repo_name)
+    if os.path.exists(target):
+        return {"ok": False, "output": "", "path": "",
+                "message": ("A folder named %r already exists in the destination. "
+                            "Remove it or pick another folder." % repo_name)}
+    run = runner if runner is not None else subprocess.run
+    try:
+        result = run(
+            ["git", "clone", url, target],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=600)
+    except FileNotFoundError:
+        return {"ok": False, "output": "", "path": "",
+                "message": "git is not installed on this machine."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "", "path": "",
+                "message": "git clone timed out (check the network)."}
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return {"ok": False, "output": "", "path": "",
+                "message": "Could not run git clone: %s" % error}
+    output = getattr(result, "stdout", b"") or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    output = output.strip()
+    if getattr(result, "returncode", 1) != 0:
+        detail = output or ("git clone failed (exit code %s)."
+                            % getattr(result, "returncode", "?"))
+        # Nudge toward the usual cause: no stored read-only org credential.
+        hint = ("\n\nThis needs git and a read-only GitHub organisation credential "
+                "already set up on this lab PC. Check the repository name and that "
+                "the PC is signed in to the organisation.")
+        return {"ok": False, "output": output, "path": "",
+                "message": detail + hint}
+    if not os.path.isdir(target):
+        return {"ok": False, "output": output, "path": "",
+                "message": "git clone reported success but the folder is missing."}
+    return {"ok": True, "output": output, "path": target,
+            "message": "Cloned %s into %s." % (repo_name, target)}
 
 
 def version_footer_lines():

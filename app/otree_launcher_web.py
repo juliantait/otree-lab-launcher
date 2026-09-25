@@ -752,6 +752,11 @@ class Api(object):
             # the served page already applied it pre-paint from an injected marker;
             # this lets the native pywebview path apply it right after boot too.
             "theme": core.load_ui_theme(),
+            # GitHub Organisation Sync opt-in (default OFF): the tick-box state and
+            # the configured org name (ui_prefs.json). Drives whether the page shows
+            # the GitHub Org. + Git update buttons.
+            "github_sync": {"enabled": core.load_github_sync_enabled(),
+                            "org": core.load_github_org()},
         }
 
     @api_call
@@ -1207,6 +1212,86 @@ class Api(object):
         next launch; a file in data/ is the durable store. Fail-soft (never raises;
         the UI has already updated instantly)."""
         return {"ok": True, "theme": core.save_ui_theme(theme)}
+
+    @api_call
+    def get_github_sync(self):
+        """The persisted GitHub Organisation Sync opt-in (data/ui_prefs.json).
+        Fail-soft: a missing/broken file returns the OFF default and an empty org.
+        """
+        return {"ok": True, "enabled": core.load_github_sync_enabled(),
+                "org": core.load_github_org()}
+
+    @api_call
+    def set_github_sync(self, enabled, org=""):
+        """Persist the GitHub Organisation Sync tick box AND the organisation name
+        to the per-user prefs file (ui_prefs.json), same mechanism as the theme.
+        The tick box only shows/hides the buttons; nothing runs here. Fail-soft."""
+        stored = core.save_github_sync_prefs(enabled, org)
+        return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
+
+    @api_call
+    def git_update_study(self, project_path):
+        """Per-config Git update: run ``git pull`` in the SELECTED study folder
+        (core.git_update_study, fail-soft), NEVER the launcher app/ folder and never
+        any oTree/experiment process. Returns the classified outcome (not_repo /
+        current / updated / error) with a clear message for the page to show."""
+        return core.git_update_study(project_path or "")
+
+    @api_call
+    def clone_org_repo(self, repo):
+        """GitHub Organisation Sync: clone ``<org>/<repo>`` in the BACKGROUND.
+
+        The org comes from the saved prefs (set in Settings). A native folder dialog
+        picks the destination, then the clone runs on a worker thread (so the WebView
+        thread never blocks) using the machine's read-only git credential. Progress
+        goes to the page status/log; the final result (with the cloned folder + its
+        project/settings summaries for auto-select) is pushed via pywOnCloneDone.
+        Returns immediately with ``pending`` True, or an error when the org is unset.
+        """
+        org = core.load_github_org()
+        if not org:
+            return {"ok": False,
+                    "message": ("Set the GitHub organisation name in Settings > "
+                                "GitHub Organisation Sync first.")}
+        repo = (repo or "").strip()
+        if not repo:
+            return {"ok": False, "message": "Enter the experiment repository name."}
+        self._spawn(lambda: self._do_clone_org_repo(org, repo), "git-clone")
+        return {"ok": True, "pending": True}
+
+    def _do_clone_org_repo(self, org, repo):
+        """Worker: pick the destination folder, clone, and push pywOnCloneDone.
+
+        Browser mode uses the short-lived stdlib-tkinter folder dialog subprocess;
+        the native pywebview path uses create_file_dialog. On cancel it reports a
+        cancelled result. On success it also builds the project + settings summaries
+        so the page can auto-select the cloned folder exactly like a Browse pick."""
+        dest = self._pick_folder_for_clone()
+        if not dest:
+            self._callback("pywOnCloneDone", {"ok": False, "cancelled": True,
+                                              "message": "GitHub clone cancelled."})
+            return
+        self._status("", "Cloning %s/%s into %s ..." % (org, repo, dest))
+        result = core.git_clone_org_repo(org, repo, dest)
+        if result.get("ok") and result.get("path"):
+            path = result["path"]
+            result["project"] = project_status(path)
+            result["settings"] = core.inspect_settings(path, self._lab_room_for())
+        self._callback("pywOnCloneDone", result)
+
+    def _pick_folder_for_clone(self):
+        """Return the chosen destination folder path (or "" on cancel), using the
+        right picker for the current mode. Browser mode runs the local subprocess
+        dialog; native pywebview uses create_file_dialog on this worker thread."""
+        if getattr(self, "browser_mode", False):
+            return _native_folder_dialog_subprocess()
+        try:
+            import webview
+            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception:
+            LOG.exception("clone destination dialog failed")
+            return ""
+        return self._dialog_path(result) or ""
 
     @api_call
     def save_default_db(self, db_id):

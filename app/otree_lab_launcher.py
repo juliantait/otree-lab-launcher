@@ -879,7 +879,7 @@ if __name__ == "__main__":
 
 
 import tkinter as tk  # noqa: E402  (kept below the logic so tests import cheaply)
-from tkinter import filedialog, messagebox, ttk  # noqa: E402
+from tkinter import filedialog, messagebox, simpledialog, ttk  # noqa: E402
 from tkinter import font as tkfont  # noqa: E402
 
 COLORS = {
@@ -1541,6 +1541,11 @@ class LauncherApp(object):
         self.running = False
         self.row_widgets = []
         self._password_entries = []
+        # GitHub Organisation Sync opt-in (default OFF), persisted in ui_prefs.json
+        # (same mechanism as the theme). Loaded before the cards are built so the
+        # GitHub Org. / Git update buttons start in the right (hidden) state.
+        self.github_sync_enabled = core.load_github_sync_enabled()
+        self.github_org = core.load_github_org()
 
         root.title(APP_NAME)
         root.configure(bg=COLORS["window"])
@@ -1955,6 +1960,17 @@ class LauncherApp(object):
         self.path_box.grid(row=0, column=0, sticky="ew", ipady=1)
         ttk.Button(picker, text="Browse...", command=self.browse_project).grid(
             row=0, column=1, padx=(8, 0))
+        # GitHub Organisation Sync (opt-in, DEFAULT OFF): two buttons that stay
+        # hidden until the tick box in Lab Settings > GitHub Organisation Sync is
+        # on. GitHub Org. clones an experiment repo from the configured org; Git
+        # update pulls the selected STUDY folder (never the launcher app/ folder).
+        self.github_org_btn = ttk.Button(
+            picker, text="GitHub Org...", command=self.github_org_clone)
+        self.git_update_btn = ttk.Button(
+            picker, text="Git update", command=self.git_update_study)
+        self.github_org_btn.grid(row=0, column=2, padx=(8, 0))
+        self.git_update_btn.grid(row=0, column=3, padx=(8, 0))
+        self._apply_github_sync_buttons()
 
         # The validation summary line (dot + one sentence)...
         self.project_status = StatusLine(body, self.fonts.small)
@@ -3385,6 +3401,124 @@ class LauncherApp(object):
         if offer_get_ready:
             self._maybe_offer_get_ready(path)
         return path
+
+    # -- GitHub Organisation Sync (opt-in, DEFAULT OFF) --------------------
+    #
+    # The tick box in Lab Settings shows/hides these two buttons; hiding them is
+    # the whole control (a user cannot invoke org sync when they are not shown).
+    # Everything here reuses the shared core git plumbing and NEVER touches the
+    # launcher app/ folder or any oTree/experiment process.
+
+    def _apply_github_sync_buttons(self):
+        """Show the GitHub Org. + Git update buttons only when the opt-in is on;
+        hide them otherwise. Safe to call before/after the buttons exist."""
+        show = bool(getattr(self, "github_sync_enabled", False))
+        for name in ("github_org_btn", "git_update_btn"):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            if show:
+                btn.grid()
+            else:
+                btn.grid_remove()
+
+    def _set_github_sync(self, enabled, org):
+        """Persist the tick box + org name (ui_prefs.json) and refresh the buttons.
+        Fail-soft in core; returns the stored state."""
+        stored = core.save_github_sync_prefs(enabled, org)
+        self.github_sync_enabled = stored["enabled"]
+        self.github_org = stored["org"]
+        self._apply_github_sync_buttons()
+        return stored
+
+    def github_org_clone(self):
+        """GitHub Org. button: clone <org>/<repo> from the configured organisation
+        in the background, then auto-select the cloned folder as the study folder.
+
+        The org name is a configured value (Lab Settings), so the target is not
+        hardcoded; the clone relies on the machine's pre-stored read-only git
+        credential. Errors (bad/missing repo, no credential, network) surface as a
+        clear message and never hang (bounded timeout in core)."""
+        if not self.github_org:
+            messagebox.showwarning(
+                "Set the organisation first",
+                "Set the GitHub organisation name in Lab Settings > GitHub "
+                "Organisation Sync before cloning.", parent=self.root)
+            self.open_lab_settings()
+            return
+        repo = simpledialog.askstring(
+            "Clone from GitHub organisation",
+            "Repository name to clone from %s:" % self.github_org,
+            parent=self.root)
+        if not repo or not repo.strip():
+            return
+        repo = repo.strip()
+        dest = filedialog.askdirectory(
+            parent=self.root,
+            title="Choose a destination folder for the clone")
+        if not dest:
+            return
+        self.github_org_btn.config(state="disabled", text="Cloning...")
+        self.log("Cloning %s/%s into %s ..." % (self.github_org, repo, dest), "info")
+
+        def worker():
+            result = core.git_clone_org_repo(self.github_org, repo, dest)
+            self.root.after(0, lambda: self._on_clone_done(result))
+
+        threading.Thread(target=worker, name="git-clone", daemon=True).start()
+
+    def _on_clone_done(self, result):
+        """Back on the UI thread: re-enable the button, report, and on success
+        auto-select the cloned folder as the study folder (same path as Browse)."""
+        self.github_org_btn.config(state="normal", text="GitHub Org...")
+        if result.get("ok") and result.get("path"):
+            path = os.path.normpath(result["path"])
+            self.var["project_path"].set(path)
+            level, message = validate_project(path)
+            self.log(result.get("message") or ("Cloned into %s." % path), "ok")
+            self.log(message, {"ok": "ok", "warn": "warn", "error": "err"}[level])
+            self._maybe_offer_get_ready(path)
+        else:
+            self.log(result.get("message") or "Could not clone the repository.", "err")
+            messagebox.showerror(
+                "Could not clone",
+                result.get("message") or "Could not clone the repository.",
+                parent=self.root)
+
+    def git_update_study(self):
+        """Git update button (per config): git pull in the SELECTED study folder
+        (never the launcher app/ folder). Three outcomes, each with a clear
+        message: not a git repo, updated, or already current; a real pull error is
+        surfaced as text. Reuses the shared core git plumbing."""
+        path = (self.var["project_path"].get() or "").strip()
+        if not path:
+            messagebox.showwarning(
+                "No study folder",
+                "Choose or clone a study folder first, then Git update.",
+                parent=self.root)
+            return
+        self.git_update_btn.config(state="disabled", text="Updating...")
+        self.log("Running git pull in %s ..." % path, "info")
+
+        def worker():
+            result = core.git_update_study(path)
+            self.root.after(0, lambda: self._on_git_update_done(result))
+
+        threading.Thread(target=worker, name="git-update", daemon=True).start()
+
+    def _on_git_update_done(self, result):
+        """Back on the UI thread: re-enable the button and report the outcome."""
+        self.git_update_btn.config(state="normal", text="Git update")
+        level = "ok" if result.get("ok") else "err"
+        self.log(result.get("message") or "Git update finished.", level)
+        if result.get("output"):
+            self.log(result["output"], "info")
+        if result.get("ok"):
+            messagebox.showinfo("Git update", result.get("message") or "Done.",
+                                parent=self.root)
+        else:
+            messagebox.showerror("Git update", result.get("message") or "Failed.",
+                                 parent=self.root)
 
     def save_as_new(self, on_success=None):
         """Save the on-screen settings as a new config. ``on_success`` (used by
@@ -7338,8 +7472,11 @@ class LabSettingsDialog(object):
                                       justify="left", wraplength=560)
         self.preset_status.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 10))
 
+        # -- GitHub Organisation Sync (opt-in, DEFAULT OFF) -------------------
+        self._build_github_sync_card(outer, row=5)
+
         # -- Footer: version, update notice, and the Launch history link ------
-        self._build_footer(outer, row=5)
+        self._build_footer(outer, row=6)
 
         self._reload_tree()
         _center_on(parent, top, divisor=6)
@@ -7347,6 +7484,85 @@ class LabSettingsDialog(object):
             _grab_modal(top)
         except tk.TclError:
             pass
+
+    # -- GitHub Organisation Sync card (opt-in, DEFAULT OFF) ---------------
+
+    def _build_github_sync_card(self, outer, row):
+        """The opt-in GitHub Organisation Sync card: an explanation + PREREQUISITE,
+        a single tick box (default off) that shows/hides the GitHub Org. + Git
+        update buttons, and the organisation name field so the clone target is
+        <org>/<repo> and not hardcoded. Both the tick box and org name persist to
+        disk (ui_prefs.json) via app._set_github_sync, the same mechanism as the
+        theme."""
+        fonts = self.fonts
+        card = tk.Frame(outer, bg=COLORS["card"], highlightthickness=1,
+                        highlightbackground=COLORS["card_line"])
+        card.grid(row=row, column=0, sticky="ew", pady=(12, 0))
+        card.columnconfigure(1, weight=1)
+        tk.Label(card, text="GitHub Organisation Sync", bg=COLORS["card"],
+                 fg=COLORS["text"], font=fonts.bold, anchor="w").grid(
+            row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=(10, 2))
+        tk.Label(card,
+                 text="Opt-in. Lets an experimenter clone and update a study "
+                      "straight from your lab GitHub organisation without opening a "
+                      "terminal.",
+                 bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small, anchor="w",
+                 justify="left", wraplength=560).grid(
+            row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        tk.Label(card,
+                 text="Prerequisite: this only works if the lab manager has already "
+                      "set up git on this lab experimenter PC and signed the PC in "
+                      "read-only to the GitHub organisation (a read-only "
+                      "organisation credential stored once per PC). The launcher "
+                      "never stores or handles any token itself. If that is not set "
+                      "up, leave this off.",
+                 bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small, anchor="w",
+                 justify="left", wraplength=560).grid(
+            row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
+
+        self.gh_enabled_var = tk.BooleanVar(
+            self.top, value=bool(getattr(self.app, "github_sync_enabled", False)))
+        self.gh_org_var = tk.StringVar(
+            self.top, value=str(getattr(self.app, "github_org", "") or ""))
+        ttk.Checkbutton(
+            card,
+            text="Enable GitHub Organisation Sync (shows the GitHub Org. and Git "
+                 "update buttons)",
+            variable=self.gh_enabled_var,
+            command=self._save_github_sync).grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
+        tk.Label(card, text="Organisation name", bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.body, anchor="w").grid(row=4, column=0, sticky="w",
+                                                   padx=12, pady=(0, 10))
+        org_entry = ttk.Entry(card, textvariable=self.gh_org_var)
+        org_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(0, 12),
+                       pady=(0, 10))
+        org_entry.bind("<FocusOut>", lambda _ev: self._save_github_sync())
+        org_entry.bind("<Return>", lambda _ev: self._save_github_sync())
+        self.gh_status = tk.Label(
+            card, text="Off by default. Saved on this computer.", bg=COLORS["card"],
+            fg=COLORS["faint"], font=fonts.small, anchor="w")
+        self.gh_status.grid(row=5, column=0, columnspan=3, sticky="w", padx=12,
+                            pady=(0, 10))
+        self._refresh_gh_status()
+
+    def _save_github_sync(self):
+        """Persist the tick box + org name and refresh the main-screen buttons."""
+        stored = self.app._set_github_sync(
+            self.gh_enabled_var.get(), self.gh_org_var.get())
+        self.gh_enabled_var.set(stored["enabled"])
+        self.gh_org_var.set(stored["org"])
+        self._refresh_gh_status()
+
+    def _refresh_gh_status(self):
+        status = getattr(self, "gh_status", None)
+        if status is None:
+            return
+        if self.gh_enabled_var.get():
+            org = self.gh_org_var.get().strip() or "(none set)"
+            status.config(text="On. Organisation: %s." % org)
+        else:
+            status.config(text="Off by default. Saved on this computer.")
 
     # -- footer: Launch history link + version / update nudge (reviews F + I) --
 

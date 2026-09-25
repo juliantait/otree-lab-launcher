@@ -133,6 +133,17 @@ The launch confirmation popup warns you about this when the chosen room is not `
 
 You can save a config per study. A saved config relaunches the study in one click in later sessions, so the common studies are always a double-click away.
 
+### GitHub Organisation Sync (opt-in, off by default)
+
+An optional convenience that lets a researcher clone and update an experiment repo straight from your lab's GitHub organisation without opening a terminal. It is **off by default** and lives in **gear -> Lab Settings -> GitHub Organisation Sync**: a single tick box shows or hides two buttons, and a field sets the organisation name (so the clone target is `<org>/<repo>` and is not hardcoded). Both the tick box and the organisation name are saved on this computer.
+
+When it is on:
+
+- **GitHub Org.** (next to Browse) asks for a repository name and a destination folder, then clones `https://github.com/<org>/<repo>` in the background and auto-selects the cloned folder as the study folder.
+- **Git update** (per config) runs `git pull` in the selected study folder (never the launcher's own folder) and reports one of three outcomes: this folder is not a git repo, Updated, or No updates available on git. A real pull error (auth, network, merge conflict) is shown as text.
+
+**Prerequisite (lab manager job):** this only works if you have already set up git on the lab experimenter PC and signed that PC in read-only to your GitHub organisation (a read-only organisation credential stored once per PC). The launcher never stores or handles any token itself; it relies entirely on the machine credential already on the PC. If that is not set up, leave the feature off.
+
 ---
 
 ## Alternative launchers

@@ -1148,6 +1148,12 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
             <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
               placeholder="Click Browse to choose your oTree project folder">
             <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
+            <!-- GitHub Organisation Sync (opt-in, default OFF): these two buttons
+                 are hidden until the tick box in Settings > GitHub Organisation
+                 Sync is turned on. GitHub Org. clones an experiment repo from the
+                 configured org; Git update pulls the selected STUDY folder. -->
+            <button class="btn" id="githubOrgBtn" hidden onclick="onGithubOrgClone()">GitHub Org...</button>
+            <button class="btn" id="gitUpdateStudyBtn" hidden onclick="onGitUpdateStudy()">Git update</button>
           </div>
           <p class="pathhint" id="projPathHint">Click Browse to pick your oTree project folder with a native dialog, or paste the full path here and press Enter.</p>
           <script>
@@ -1444,6 +1450,9 @@ var currentSeatExcluded=[];
 /* True while the first-run "create a new lab" flow is open, so on save the new
    lab is adopted as this machine's lab via set_lab_marker (item 6). */
 var pendingIdentityAdopt=false;
+/* GitHub Organisation Sync (opt-in, DEFAULT OFF). Loaded from ui_prefs.json via
+   the initial state; drives whether the GitHub Org. + Git update buttons show. */
+var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
 /* The "get ready for the lab" popup fires at most once per project selection;
    this remembers the path already offered so re-inspecting the same folder
    (or a config load) does not nag again. Cleared implicitly by a new path. */
@@ -1614,6 +1623,20 @@ window.pywOnBatResult=function(r){if(!r)return;
   if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file.");
   else if(r.message)window.pywStatus("err",r.message);};
 window.pywOnShortcutsResult=function(r){pcShortcutsResult(r);};
+/* GitHub Organisation Sync: the background clone finished. On success auto-select
+   the cloned folder as the study folder (same path as a Browse pick) and clear the
+   working state; on failure/cancel show the message and re-enable the button. */
+window.pywOnCloneDone=function(r){
+  r=r||{};
+  var g=el("githubOrgBtn");if(g){g.disabled=false;g.textContent="GitHub Org...";}
+  if(r.cancelled){window.pywStatus("","GitHub clone cancelled.");return;}
+  if(r.ok&&r.path){
+    window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
+    window.pywStatus("ok",r.message||("Cloned into "+r.path+" and selected it as the study folder."));
+  }else{
+    window.pywStatus("err",r.message||"Could not clone the repository.");
+  }
+};
 
 /* ======================================================================
    SIDEBAR: saved configs
@@ -2122,6 +2145,49 @@ function onBrowseProject(){
 function onBrowseFile(){
   if(BROWSER){window.pywStatus("","Type or paste the participant file path in the box (native file pickers need the desktop app).");return;}
   if(NATIVE&&API)API.pick_participant_file();}
+/* GitHub Organisation Sync: clone an experiment repo from the configured org.
+   Ask for the repo name in a small modal; the destination folder is chosen with a
+   native dialog on the Python side, then the clone runs in the BACKGROUND with
+   progress and finishes via window.pywOnCloneDone (auto-selects the folder). */
+function onGithubOrgClone(){
+  if(!GITHUB_ORG){window.pywStatus("err","Set the GitHub organisation name in Settings > GitHub Organisation Sync first.");openLabSettings();return;}
+  openModal("Clone from GitHub organisation",
+    '<p class="modal-desc">Clones <code>https://github.com/'+escapeHtml(GITHUB_ORG)+'/&lt;repo&gt;</code> using this PC’s read-only organisation credential. You will pick a destination folder next; the cloned folder is auto-selected as the study folder.</p>'+
+    '<div class="mfield"><label>Repository name</label><input id="ghRepo" type="text" placeholder="experiment-repo" autocomplete="off"></div>'+
+    '<div class="modal-err" id="ghRepoErr"></div>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<button class="btn accent" id="ghCloneGo" onclick="doGithubOrgClone()">Choose folder &amp; clone</button></div>');
+}
+function doGithubOrgClone(){
+  var repo=(val("ghRepo")||"").trim(),e=el("ghRepoErr");
+  if(!repo){if(e){e.style.display="block";e.textContent="Enter the experiment repository name.";}return;}
+  if(!NATIVE||!API||!API.clone_org_repo){closeModal();window.pywStatus("","Cloning works in the app, not the static preview.");return;}
+  closeModal();
+  var g=el("githubOrgBtn");if(g){g.disabled=true;g.textContent="Cloning…";}
+  window.pywStatus("","Choose a destination folder for the clone…");
+  API.clone_org_repo(repo).then(function(r){
+    /* Native pushes the real result via pywOnCloneDone; this promise only carries
+       the "pending" ack (or an immediate error). */
+    if(r&&r.ok&&r.pending)return;
+    if(r&&!r.ok){window.pywOnCloneDone(r);}
+  });
+}
+/* GitHub Organisation Sync: per-config Git update. Pulls the SELECTED study folder
+   (never the launcher folder). Three outcomes surfaced with clear messages. */
+function onGitUpdateStudy(){
+  var p=(currentProjectPath||val("projPathInput")||"").trim();
+  if(!p){window.pywStatus("err","Choose or clone a study folder first, then Git update.");return;}
+  if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git update works in the app, not the static preview.");return;}
+  var u=el("gitUpdateStudyBtn");if(u){u.disabled=true;u.textContent="Updating…";}
+  window.pywStatus("","Running git pull in the study folder…");
+  API.git_update_study(p).then(function(r){
+    if(u){u.disabled=false;u.textContent="Git update";}
+    r=r||{};
+    var level=r.ok?(r.status==="current"?"":"ok"):"err";
+    window.pywStatus(level,r.message||"Git update finished.");
+    if(r.output)appendLog(r.ok?"muted":"err",r.output);
+  });
+}
 function validateProjectPath(){
   var p=(val("projPathInput")||"").trim();if(!p)return;
   if(!NATIVE||!API){window.pywStatus("","Typing a path works in the app, not the static preview.");return;}
@@ -2652,6 +2718,19 @@ function openLabSettings(){
       '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
       lsDefaultDbSummary()+
       lsDefaultDbRows()+'</div>'+
+    /* GitHub Organisation Sync (opt-in, DEFAULT OFF). The tick box shows/hides the
+       two buttons on the main screen (GitHub Org. next to Browse, and per-config
+       Git update); there is no service to turn on -- hiding the buttons is enough.
+       The org name is a configured value so the clone target is <org>/<repo> and
+       not hardcoded. Both the tick box and org name persist to disk (ui_prefs.json,
+       same mechanism as the theme). PREREQUISITE spelled out for the lab manager. */
+    '<div class="ls-card"><h4>GitHub Organisation Sync</h4>'+
+      '<p class="d">Opt-in. Lets an experimenter clone and update a study straight from your lab GitHub organisation without opening a terminal.</p>'+
+      '<p class="d"><b>Prerequisite:</b> this only works if the lab manager has already set up git on this lab experimenter PC and signed the PC in read-only to the GitHub organisation (a read-only organisation credential stored once per PC). The launcher never stores or handles any token itself; it uses the machine credential already on the PC. If that is not set up, leave this off.</p>'+
+      '<label class="chk" style="margin:2px 0 8px"><input type="checkbox" id="ghSyncEnabled" onchange="saveGithubSync()"> Enable GitHub Organisation Sync (shows the GitHub Org. and Git update buttons)</label>'+
+      '<div class="mfield" style="grid-template-columns:150px 1fr"><label>Organisation name</label>'+
+      '<input id="ghSyncOrg" type="text" placeholder="e.g. CREED" onchange="saveGithubSync()"></div>'+
+      '<div class="ls-status" id="ghSyncStatus">Off by default. Saved on this computer.</div></div>'+
     /* Appearance LAST, just above the footer (moved here; contents unchanged). */
     '<div class="ls-card"><h4>Appearance</h4>'+
       '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
@@ -2682,7 +2761,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.2.0</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.3.0</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -2697,7 +2776,36 @@ function openLabSettings(){
   el("infoCard").classList.add("settings-modal");
   ["pgUser","pgPw","pgHost","pgPort"].forEach(function(id){var e=el(id);if(e)e.addEventListener("change",savePgAdmin);});
   syncThemeControls();
+  syncGithubSyncControls();
   loadSettingsVersion();
+}
+/* Reflect the persisted GitHub Organisation Sync state into the Settings card
+   controls whenever the panel opens (mirror of syncThemeControls). */
+function syncGithubSyncControls(){
+  var cb=el("ghSyncEnabled");if(cb)cb.checked=!!GITHUB_SYNC_ENABLED;
+  var org=el("ghSyncOrg");if(org)org.value=GITHUB_ORG||"";
+}
+/* Persist the tick box + org name (API.set_github_sync -> ui_prefs.json), update
+   the in-page state, and show/hide the two main-screen buttons. Fail-soft: in the
+   static preview it just updates the UI without a backend call. */
+function saveGithubSync(){
+  var cb=el("ghSyncEnabled"),org=el("ghSyncOrg"),st=el("ghSyncStatus");
+  GITHUB_SYNC_ENABLED=!!(cb&&cb.checked);
+  GITHUB_ORG=(org&&org.value?org.value:"").trim();
+  applyGithubSyncButtons();
+  if(!NATIVE||!API||!API.set_github_sync){if(st)st.textContent=GITHUB_SYNC_ENABLED?"On (preview: not saved).":"Off.";return;}
+  API.set_github_sync(GITHUB_SYNC_ENABLED,GITHUB_ORG).then(function(r){
+    if(r&&r.ok){GITHUB_SYNC_ENABLED=!!r.enabled;GITHUB_ORG=r.org||"";applyGithubSyncButtons();
+      if(st)st.textContent=GITHUB_SYNC_ENABLED?("On. Organisation: "+(GITHUB_ORG||"(none set)")+"."):"Off by default. Saved on this computer.";}
+  });
+}
+/* Show the GitHub Org. + Git update buttons only when the opt-in is on; hide them
+   otherwise. Hiding is the whole control: a user cannot invoke org sync when the
+   buttons are not shown. */
+function applyGithubSyncButtons(){
+  var g=el("githubOrgBtn"),u=el("gitUpdateStudyBtn");
+  if(g)g.hidden=!GITHUB_SYNC_ENABLED;
+  if(u)u.hidden=!GITHUB_SYNC_ENABLED;
 }
 /* Fill the Lab Settings footer: the version always; the "new version available"
    note + GitHub link only when the (persisted, once-a-day) update check has
@@ -3815,6 +3923,11 @@ function initNative(state){
   applyFields(state.fields);applyProject(state.project);applySettings(state.settings);
   appendLog("muted","oTree Lab Launcher ready. Config file: "+state.presets_path);
   if(haveLab)maybeChooseLab(state.lab_marker);
+  /* GitHub Organisation Sync opt-in (default off): reflect the persisted state and
+     show/hide the two buttons accordingly. */
+  var gs=state.github_sync||{};
+  GITHUB_SYNC_ENABLED=!!gs.enabled;GITHUB_ORG=gs.org||"";
+  applyGithubSyncButtons();
   loadFooterVersion();
 }
 /* Fill the sidebar footer's version line. IDENTITY ONLY -- no update check here
