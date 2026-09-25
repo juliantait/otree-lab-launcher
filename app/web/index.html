@@ -733,6 +733,12 @@ input::placeholder{color:var(--faint)}
    sticky header carries its own). */
 .modal-card.settings-modal{padding:0;display:flex;flex-direction:column;overflow:hidden}
 .modal-card.settings-modal>.modal-x,.modal-card.settings-modal>#modalTitle{display:none}
+/* #modalBody is the intermediate wrapper openModal fills; the sticky head + scroll
+   region live INSIDE it, so it must itself be the flex column that fills the card
+   and clips. Without this it has no height/overflow, .settings-content cannot flex,
+   and content below the fold is clipped by the card with no scrollbar. */
+.modal-card.settings-modal>.modal-body{flex:1 1 auto;min-height:0;display:flex;
+  flex-direction:column;overflow:hidden}
 .settings-head{position:sticky;top:0;z-index:2;flex:0 0 auto;display:flex;align-items:center;
   justify-content:space-between;gap:14px;padding:16px 24px;background:var(--panel);
   border-bottom:1px solid var(--line-soft);border-radius:var(--r-xl) var(--r-xl) 0 0}
