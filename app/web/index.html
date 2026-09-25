@@ -1145,7 +1145,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.6</div>
+      <div class="af-ver" id="footVersion">version 1.4.7</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -2875,7 +2875,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.6</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.7</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -2990,9 +2990,10 @@ function githubLinkHTML(){
     'target="_blank" rel="noopener">GitHub</a>.';
 }
 /* Clicking Update (git install only): execute git pull on the install; on success
-   the server relaunches itself on the SAME port with the browser auto-open
-   suppressed, and this tab reloads itself onto the new server (exactly one tab).
-   A native-window session comes back as a native window instead. */
+   the server relaunches the new version on a FRESH FREE port with the browser
+   auto-open suppressed, keeps THIS server up until the new one is confirmed
+   answering, then this tab navigates itself onto the new server (exactly one tab,
+   no port contention). A native-window session comes back as a native window. */
 function runGitPull(){
   var res=el("lsCheckResult"),btn=el("lsUpdateBtn");
   if(!NATIVE||!API||!API.run_git_pull)return;
@@ -3006,14 +3007,13 @@ function runGitPull(){
     var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
     if(r.ok){
       if(r.relaunching&&r.browser_reload){
-        /* Browser mode: the new server is coming up on the SAME port with the
-           browser auto-open suppressed. Do NOT expect a new tab -- wait for THIS
-           server to go down and the new one to answer, then reload this very tab
-           onto it (one tab, no orphan). A full reload re-fetches the page and
-           picks up the new per-run security token cleanly. */
+        /* Browser mode: the new server is coming up on a FRESH FREE port with the
+           browser auto-open suppressed, while THIS server stays up. Poll the old
+           server's relaunch_status; once it says the new server is ready, navigate
+           this very tab onto the new URL (one tab, no orphan, no port race). */
         openModal("Updating",
-          '<p class="modal-desc">Updated. Reloading this tab onto the new version…</p>'+out,true);
-        reloadOntoRelaunchedServer();
+          '<p class="modal-desc">Updated. Starting the new version, then moving this tab to it…</p>'+out,true);
+        pollRelaunchThenNavigate(r.new_url||"");
         return;
       }
       /* Native window (or no relaunch): the old window closes and reopens as a
@@ -3031,22 +3031,38 @@ function runGitPull(){
     }
   });
 }
-/* Reuse THIS browser tab after a same-port relaunch. The current server stays up
-   for a brief moment (RELAUNCH_SHUTDOWN_DELAY) while the new one waits to bind the
-   SAME port; they cannot both hold the port, so the reliable signal that the NEW
-   server is answering is: first see this server go DOWN, then see it come back UP.
-   Only then reload. A cache-busting GET / probes liveness without the API token. */
-function reloadOntoRelaunchedServer(){
-  var probe=location.pathname+"?relaunch_probe=";
-  var sawDown=false, start=Date.now();
+/* SAFE self-update hand-off (browser mode). The OLD server (still up) has spawned
+   the new version on a NEW FREE port and is health-checking it. We poll the OLD
+   server's relaunch_status:
+     "ready"  -> the new server is answering; navigate THIS tab to its URL (same
+                 tab, now the new version). The old server shuts itself down a
+                 moment later, once we have had the chance to move.
+     "failed" -> the new server did not come up; the OLD server stays up, so tell
+                 the operator to Quit and relaunch by hand. Never a dead app.
+   newUrl is the new server URL the old server reported up front; we prefer the URL
+   the poll returns but fall back to it. */
+function relaunchUpdateFailed(){
+  openModal("Update downloaded",
+    '<p class="modal-desc">The update was downloaded, but the new version did not '+
+    'start. This launcher is still running, so nothing is lost. Please Quit and '+
+    'relaunch to finish updating.</p>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
+}
+function pollRelaunchThenNavigate(newUrl){
+  var start=Date.now();
   function tick(){
-    if(Date.now()-start>60000){location.reload();return;}   /* give up: reload anyway */
-    fetch(probe+Date.now(),{method:"GET",cache:"no-store"}).then(function(){
-      if(sawDown){location.reload();return;}                 /* new server is up */
-      setTimeout(tick,400);                                  /* old still up; keep waiting */
+    if(Date.now()-start>90000){relaunchUpdateFailed();return;} /* overall safety net */
+    if(!API||!API.relaunch_status){if(newUrl){location.href=newUrl;}return;}
+    API.relaunch_status().then(function(r){
+      r=r||{};
+      if(r.state==="ready"){location.href=(r.url||newUrl);return;}
+      if(r.state==="failed"){relaunchUpdateFailed();return;}
+      setTimeout(tick,500);                                  /* still starting */
     }).catch(function(){
-      sawDown=true;                                          /* old server gone */
-      setTimeout(tick,400);                                  /* now wait for the new one */
+      /* The old server may have shut down right after telling us "ready" (we would
+         already be navigating). Otherwise keep polling until it answers or we hit
+         the overall timeout. */
+      setTimeout(tick,500);
     });
   }
   tick();
