@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -2445,16 +2445,24 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
 
     remote_version = str(cache.get("remote_version", "") or "")
     last_checked = cache.get("last_checked", "")
+    # Freshness is computed INDEPENDENTLY of ``force`` so the decision below is
+    # unambiguous: the automatic (non-force) check reuses a still-fresh daily cache,
+    # but a FORCED check always fetches regardless of freshness.
     fresh = False
-    if not force and last_checked:
+    if last_checked:
         try:
             when = _dt.datetime.fromisoformat(str(last_checked))
             fresh = (now - when).total_seconds() < UPDATE_CHECK_INTERVAL_SECONDS
         except (TypeError, ValueError):
             fresh = False
 
+    # A FORCED check (the on-demand Update button) genuinely BYPASSES the cache: it
+    # hits the network NOW and OVERWRITES the cache, even if the cached result is
+    # still fresh -- so a release that landed since the last daily check (e.g. 1.3.1
+    # > 1.3.0) is reported immediately instead of the stale cached latest (item 10).
+    # It is never short-circuited by a fresh-enough cache.
     checked = False
-    if not fresh:
+    if force or not fresh:
         fetch = fetcher or _fetch_release_payload
         try:
             tag = parse_github_release_tag(fetch())

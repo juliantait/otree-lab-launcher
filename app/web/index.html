@@ -397,7 +397,14 @@ html[data-webmode="browser"] .pathhint{display:block}
 .study-card{
   margin-top:4px;background:var(--bg-deep);border:1px solid var(--line-soft);
   border-radius:var(--r-sm);padding:7px 10px;
+  display:flex;align-items:flex-start;gap:10px;
 }
+/* The always-present project STATUS CARD (v1.4.0): a small Git Pull button on the
+   LEFT (only when Org Sync is on and a folder is selected) and the status text /
+   detected apps / empty-state or problem message to its right. */
+.study-card .sc-gitpull{flex:none;margin-top:1px}
+.study-card .sc-body{flex:1;min-width:0}
+.study-card .sc-empty{font-size:11.5px;color:var(--muted);line-height:1.5;margin:0}
 .study-card .statusline{margin-top:0;font-size:11.5px;color:var(--muted);line-height:1.4}
 .study-card .statusline.ok{color:var(--ok)}   /* green confirmation, matching the app-name bullets below */
 .study-card .statusline .dot{display:none}
@@ -496,6 +503,13 @@ input::placeholder{color:var(--faint)}
 .btn.accent{background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-color:var(--accent-dim);color:var(--accent-on)}
 .btn.accent:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi))}
 .btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+/* GitHub Organisation button (left of Browse): the inline GitHub mark logo + the
+   organisation name from the Org Sync setting (e.g. "Creed"). The logo is inlined
+   SVG (never fetched -- CSP + offline). Falls back to just the logo when no org
+   name is set. */
+.btn-gh{display:inline-flex;align-items:center;gap:6px}
+.btn-gh svg{width:15px;height:15px;flex:none;display:block}
+.btn-gh span{overflow:hidden;text-overflow:ellipsis;max-width:120px}
 /* SHARED HOLD-TO-DELETE control. Press and hold: a red bar fills left->right
    over --delete-hold-ms; releasing early snaps it back (cancel); holding the
    full duration fires the confirm. --delete-hold-ms is SET FROM JS (from the one
@@ -695,18 +709,21 @@ input::placeholder{color:var(--faint)}
   pointer-events:none;
   background:linear-gradient(180deg,var(--fade-0),var(--bg));
 }
-/* "Activity log" button: left-aligned on the launch bar (margin-right:auto
-   pushes Save-one-click + Launch to the right). Nothing is printed inline, so
-   the row holds only the three buttons and never wraps a status message above
-   them. */
+/* "Activity log" + "Quit launcher" buttons: left-aligned on the launch bar. The
+   Save-one-click + Launch group is pushed to the right by margin-left:auto on
+   .btn-shortcut (the first of the right group), so Activity log and Quit stay
+   together on the left. Nothing is printed inline, so the row never wraps a
+   status message above the buttons. */
 .btn-logexpand{
   font-family:inherit;font-size:12.5px;font-weight:600;color:var(--muted);flex:0 0 auto;
-  margin-right:auto;
   background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);
   padding:9px 14px;cursor:pointer;transition:background .14s,border-color .14s,color .14s;
 }
 .btn-logexpand:hover{background:var(--panel-2);border-color:var(--line-strong);color:var(--text)}
 .btn-logexpand:active{transform:translateY(1px)}
+/* Quit launcher: reuses the Activity-log button look but highlights red on hover
+   (it stops the launcher's OWN server; a running study keeps running). */
+.btn-quit:hover{background:var(--err-soft);border-color:var(--err);color:var(--err)}
 .btn-launch{
   font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:var(--accent-on);
   background:linear-gradient(180deg,var(--accent-hi),var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
@@ -718,6 +735,7 @@ input::placeholder{color:var(--faint)}
 .btn-launch:active{transform:translateY(1px)}
 .btn-shortcut{
   font-family:inherit;font-size:14px;font-weight:600;color:var(--accent);
+  margin-left:auto;   /* first of the right group: pushes Save-one-click + Launch right */
   background:transparent;border:1px solid var(--accent-dim);border-radius:var(--r-md);
   padding:12px 20px;cursor:pointer;transition:background .14s,border-color .14s;
 }
@@ -885,7 +903,8 @@ input::placeholder{color:var(--faint)}
 .ls-foot-result.avail{color:var(--accent);font-weight:600}
 .ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
 .ls-foot-link:hover{filter:brightness(1.12)}
-/* the LEFT footer cell holds Launch history + Quit side by side. */
+/* the LEFT footer cell holds the Launch history button (Quit moved to the launch
+   bar in v1.4.0, next to Activity log). */
 .ls-foot-left{justify-self:start;display:inline-flex;align-items:center;gap:8px}
 /* the git-aware Update action + the "Run" pill (git pull) it reveals for a git
    install. Both are small accent pills; the Run pill carries the exact tooltip. */
@@ -1144,16 +1163,15 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
         <section class="card">
           <h2 class="card-num"><span class="n">1</span> oTree project</h2>
 
+          <!-- Line 1: the GitHub org button (left of Browse; shown only when Org
+               Sync is on) + the folder path field + Browse. The org button carries
+               the GitHub logo + organisation name (filled by updateGithubOrgBtn). -->
           <div class="pathrow">
+            <button class="btn btn-gh" id="githubOrgBtn" hidden onclick="onGithubOrgClone()"
+              title="Clone a study from your lab GitHub organisation">GitHub</button>
             <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
               placeholder="Click Browse to choose your oTree project folder">
             <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
-            <!-- GitHub Organisation Sync (opt-in, default OFF): these two buttons
-                 are hidden until the tick box in Settings > GitHub Organisation
-                 Sync is turned on. GitHub Org. clones an experiment repo from the
-                 configured org; Git update pulls the selected STUDY folder. -->
-            <button class="btn" id="githubOrgBtn" hidden onclick="onGithubOrgClone()">GitHub Org...</button>
-            <button class="btn" id="gitUpdateStudyBtn" hidden onclick="onGitUpdateStudy()">Git update</button>
           </div>
           <p class="pathhint" id="projPathHint">Click Browse to pick your oTree project folder with a native dialog, or paste the full path here and press Enter.</p>
           <script>
@@ -1167,9 +1185,19 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           }
           </script>
 
+          <!-- Line 2: ONE always-present STATUS CARD. It absorbs the old loose grey
+               helper lines and the not-an-oTree warning. Contents are rendered by
+               applyProject by state: empty prompt / green valid project (+ a small
+               Git Pull button on the LEFT when Org Sync is on) / red problem. -->
           <div class="study-card" id="projDetect">
-            <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">Choose your oTree project folder.</span></div>
-            <ul class="bullets" id="appBullets" hidden></ul>
+            <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
+              onclick="onGitUpdateStudy()"
+              title="Run git pull in the study folder to fetch the latest version">Git Pull</button>
+            <div class="sc-body">
+              <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
+              <ul class="bullets" id="appBullets" hidden></ul>
+              <p class="sc-empty" id="projEmptyExtra" hidden></p>
+            </div>
           </div>
 
           <div class="divider"></div>
@@ -1335,10 +1363,12 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
     </div>
 
     <!-- Launch bar. Nothing is printed inline; the left-aligned "Activity log"
-         button opens the full log as an internal overlay, and Save-one-click +
-         Launch sit to the right. -->
+         (opens the full log overlay) and "Quit launcher" sit together on the left,
+         and Save-one-click + Launch sit to the right. -->
     <div class="launchbar">
       <button class="btn-logexpand" onclick="openLogModal()">Activity log</button>
+      <button class="btn-logexpand btn-quit" onclick="quitLauncher()"
+        title="Shut down the launcher. Any running study keeps running.">Quit launcher</button>
       <button class="btn-shortcut" onclick="onExport()">Save one-click shortcut</button>
       <button class="btn-launch" onclick="onLaunch()">Launch</button>
     </div>
@@ -1451,7 +1481,7 @@ var currentSeatExcluded=[];
    lab is adopted as this machine's lab via set_lab_marker (item 6). */
 var pendingIdentityAdopt=false;
 /* GitHub Organisation Sync (opt-in, DEFAULT OFF). Loaded from ui_prefs.json via
-   the initial state; drives whether the GitHub Org. + Git update buttons show. */
+   the initial state; drives whether the GitHub org button + the per-config Git Pull button show. */
 var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
 /* The "get ready for the lab" popup fires at most once per project selection;
    this remembers the path already offered so re-inspecting the same folder
@@ -1701,18 +1731,50 @@ function lastConfigDisplay(name){
 /* ======================================================================
    CARD 1: oTree project
    ====================================================================== */
-function setPath(p){var i=el("projPathInput");if(i)i.value=p||"";updateDirtyState();}
+function setPath(p){var i=el("projPathInput");if(i)i.value=p||"";updateProjectGitPull();updateDirtyState();}
+/* Whether a project folder is currently chosen (typed or picked). */
+function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")||"").trim());}
+/* The one project STATUS CARD (v1.4.0). It replaces the old loose grey helper
+   lines and shows, by state:
+     empty   -> "No project folder chosen yet. Click Browse to pick one." and,
+                only when Org Sync is on, a second line pointing at the org button;
+     valid   -> a green line naming the detected project + its app bullets;
+     problem -> the red not-an-oTree warning (level warn/err), in this same card.
+   The Git Pull button (left) is shown whenever Org Sync is on and a folder is
+   selected (see updateProjectGitPull). */
+var lastProject=null;
 function applyProject(p){
-  p=p||{};
-  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets");
-  if(p.name){el("cfgTitle");}
-  msg.textContent=p.message||"Choose your oTree project folder.";
+  lastProject=p=p||{};
+  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets"),extra=el("projEmptyExtra");
   var lvl=p.level||"muted";
+  var empty=!hasProjectFolder()&&!p.message;
+  if(empty){
+    lvl="muted";
+    msg.textContent="No project folder chosen yet. Click Browse to pick one.";
+    if(extra){
+      if(GITHUB_SYNC_ENABLED){extra.textContent="or use the GitHub org button to clone from an organisation repository.";extra.hidden=false;}
+      else extra.hidden=true;
+    }
+  }else{
+    msg.textContent=p.message||"No project folder chosen yet. Click Browse to pick one.";
+    if(extra)extra.hidden=true;
+  }
   line.className="statusline "+lvl;
   line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
   bul.innerHTML="";
   if(p.apps&&p.apps.length){p.apps.forEach(function(a){var li=document.createElement("li");li.textContent=titlecase(a);bul.appendChild(li);});bul.hidden=false;}
   else bul.hidden=true;
+  updateProjectGitPull();
+}
+/* Show the small Git Pull button inside the status card only when Org Sync is on
+   AND a project folder is selected (item 7). Also re-run when Org Sync toggles. */
+function updateProjectGitPull(){
+  var b=el("gitPullBtn");if(b)b.hidden=!(GITHUB_SYNC_ENABLED&&hasProjectFolder());
+  var extra=el("projEmptyExtra");
+  /* keep the empty-state second line in step with the Org Sync toggle */
+  if(extra&&!extra.hidden&&!GITHUB_SYNC_ENABLED)extra.hidden=true;
+  else if(extra&&!hasProjectFolder()&&(lastProject&&!lastProject.message)&&GITHUB_SYNC_ENABLED){
+    extra.textContent="or use the GitHub org button to clone from an organisation repository.";extra.hidden=false;}
 }
 function titlecase(s){return String(s).replace(/[_-]+/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});}
 /* The pen beside "oTree admin" opens a popover holding the admin username +
@@ -1972,7 +2034,14 @@ function fitSeatMap(box,cols,rows){
   cell=Math.max(12,Math.min(cell,46));         /* never tiny, never huge */
   box.style.gridTemplateColumns="repeat("+cols+","+cell+"px)";
   box.style.gridAutoRows=cell+"px";            /* SAME px on both tracks => square */
-  box.style.minHeight=availH+"px";             /* reserve height so V-centring shows */
+  /* HEIGHT tracks the ACTUAL scaled map (item 6 fix): when the WIDTH constrains the
+     square (a narrow laptop window), the grid is shorter than the space down to the
+     fold, so reserving the full availH left dead vertical space. Reserve exactly the
+     scaled grid height instead -- rows*cell + the gaps between them (always <= availH
+     since cell <= cellH) -- so the container shrinks in proportion to width with no
+     leftover vertical margin. */
+  var mapH=cell*rows+gap*(rows-1);
+  box.style.minHeight=mapH+"px";
   box.style.setProperty("--seat-font",Math.max(7,Math.round(cell*0.34))+"px");
 }
 function refitSeatMap(){
@@ -2172,19 +2241,19 @@ function doGithubOrgClone(){
     if(r&&!r.ok){window.pywOnCloneDone(r);}
   });
 }
-/* GitHub Organisation Sync: per-config Git update. Pulls the SELECTED study folder
+/* GitHub Organisation Sync: per-config Git Pull. Pulls the SELECTED study folder
    (never the launcher folder). Three outcomes surfaced with clear messages. */
 function onGitUpdateStudy(){
   var p=(currentProjectPath||val("projPathInput")||"").trim();
-  if(!p){window.pywStatus("err","Choose or clone a study folder first, then Git update.");return;}
-  if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git update works in the app, not the static preview.");return;}
-  var u=el("gitUpdateStudyBtn");if(u){u.disabled=true;u.textContent="Updating…";}
+  if(!p){window.pywStatus("err","Choose or clone a study folder first, then Git Pull.");return;}
+  if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git Pull works in the app, not the static preview.");return;}
+  var u=el("gitPullBtn");if(u){u.disabled=true;u.textContent="Pulling…";}
   window.pywStatus("","Running git pull in the study folder…");
   API.git_update_study(p).then(function(r){
-    if(u){u.disabled=false;u.textContent="Git update";}
+    if(u){u.disabled=false;u.textContent="Git Pull";}
     r=r||{};
     var level=r.ok?(r.status==="current"?"":"ok"):"err";
-    window.pywStatus(level,r.message||"Git update finished.");
+    window.pywStatus(level,r.message||"Git Pull finished.");
     if(r.output)appendLog(r.ok?"muted":"err",r.output);
   });
 }
@@ -2655,8 +2724,16 @@ function saveDefaultDb(id){
   defaultDatabase=id;
   if(NATIVE&&API&&API.save_default_db)API.save_default_db(id);
 }
+/* Expand the (auto-collapsed) Postgres admin card to its full form. */
+function expandPgAdmin(){
+  var d=el("pgAdminDetail"),c=el("pgAdminCollapsed");
+  if(d)d.hidden=false;if(c)c.hidden=true;
+}
 function openLabSettings(){
   var marker=labMarker,markerName=(LAB_BY_ID[marker]||{}).name||marker;
+  /* Postgres admin is "Completed" once a username AND password are set; a completed
+     card auto-collapses (item 3). */
+  var pgComplete=!!(((PG_ADMIN.admin_username||"").trim())&&((PG_ADMIN.admin_password||"").trim()));
   var opts=LAB_PRESETS.map(function(p){return '<option value="'+escapeHtml(p.id)+'"'+(p.id===marker?" selected":"")+'>'+escapeHtml(p.name)+'</option>';}).join("");
   var rows=LAB_PRESETS.map(function(p){
     var pid=escapeHtml(p.id);
@@ -2674,7 +2751,8 @@ function openLabSettings(){
       '<button class="settings-x" onclick="closeModal()" aria-label="Close">&times;</button></div>'+
     '<div class="settings-content">'+
     /* Section order (top -> bottom): Which lab, Lab presets, Custom databases,
-       Postgres admin, Lab shared default, then Appearance LAST just above the
+       Lab shared default (sits just below Custom databases), Postgres admin
+       (collapsible), GitHub Organisation Sync, then Appearance LAST just above the
        footer. Appearance is the theme control; its contents/behaviour are
        unchanged, only its DOM position. */
     '<div class="ls-card"><h4>Which lab is this computer</h4>'+
@@ -2703,34 +2781,47 @@ function openLabSettings(){
       '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
       '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
       '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
-    '<div class="ls-card"><h4>Postgres admin (used only to create databases)</h4>'+
-      '<p class="d">Only used by “Create a new database”. Never used to launch.</p>'+
-      '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
-      '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
-      '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
-      '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
-      '<div class="ls-status" id="pgStatus">Saved automatically.</div></div>'+
     /* Database section, part 3: WHICH database is the lab-shared default. It is
        a REFERENCE to one entry in the custom-databases list above -- the
        setup-wizard DB, or any custom DB made later -- chosen by selecting it, not
-       by re-typing credentials. Mirror of the Tk _build_default_db_card. */
+       by re-typing credentials. Mirror of the Tk _build_default_db_card. Sits
+       JUST BELOW Custom databases (v1.4.0 reorder). */
     '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
       '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
       lsDefaultDbSummary()+
       lsDefaultDbRows()+'</div>'+
-    /* GitHub Organisation Sync (opt-in, DEFAULT OFF). The tick box shows/hides the
-       two buttons on the main screen (GitHub Org. next to Browse, and per-config
-       Git update); there is no service to turn on -- hiding the buttons is enough.
-       The org name is a configured value so the clone target is <org>/<repo> and
-       not hardcoded. Both the tick box and org name persist to disk (ui_prefs.json,
-       same mechanism as the theme). PREREQUISITE spelled out for the lab manager. */
-    '<div class="ls-card"><h4>GitHub Organisation Sync</h4>'+
-      '<p class="d">Opt-in. Lets an experimenter clone and update a study straight from your lab GitHub organisation without opening a terminal.</p>'+
-      '<p class="d"><b>Prerequisite:</b> this only works if the lab manager has already set up git on this lab experimenter PC and signed the PC in read-only to the GitHub organisation (a read-only organisation credential stored once per PC). The launcher never stores or handles any token itself; it uses the machine credential already on the PC. If that is not set up, leave this off.</p>'+
-      '<label class="chk" style="margin:2px 0 8px"><input type="checkbox" id="ghSyncEnabled" onchange="saveGithubSync()"> Enable GitHub Organisation Sync (shows the GitHub Org. and Git update buttons)</label>'+
+    /* Postgres admin (collapsible, v1.4.0). When it is already configured
+       (username + password present) the card AUTO-COLLAPSES to just its title +
+       an Edit button + a green "Completed"; Edit expands it to the full form. When
+       not yet configured it shows expanded, as before. Title stripped to plain
+       "Postgres admin" (the "used only to create databases" text was removed). */
+    '<div class="ls-card" id="pgAdminCard">'+
+      '<div class="ls-card-head"><h4>Postgres admin</h4>'+
+        '<span id="pgAdminCollapsed" style="display:inline-flex;align-items:center;gap:10px"'+(pgComplete?"":" hidden")+'>'+
+          '<button class="btn tiny" onclick="expandPgAdmin()">Edit</button>'+
+          '<span style="color:var(--ok);font-weight:650">Completed</span></span></div>'+
+      '<div id="pgAdminDetail"'+(pgComplete?" hidden":"")+'>'+
+        '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
+        '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
+        '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
+        '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
+        '<div class="ls-status" id="pgStatus">Saved automatically.</div></div></div>'+
+    /* GitHub Organisation Sync (opt-in, DEFAULT OFF). Decluttered (item 5): by
+       default the card shows only the heading, an info (i) button, the tick box and
+       the org-name field. ALL the grey explanatory text now lives behind the info
+       button (toggleGhInfo reveals #ghSyncInfo). The tick box shows/hides the two
+       main-screen buttons (GitHub org button next to Browse, and the per-config Git
+       Pull button); there is no service to turn on -- hiding the buttons is enough.
+       Both the tick box and org name persist to disk (ui_prefs.json). */
+    '<div class="ls-card"><h4 style="display:flex;align-items:center;gap:8px">GitHub Organisation Sync'+
+        '<button type="button" class="i-btn" title="About GitHub Organisation Sync" aria-label="About GitHub Organisation Sync" aria-expanded="false" id="ghInfoBtn" onclick="toggleGhInfo()">i</button></h4>'+
+      '<div id="ghSyncInfo" hidden>'+
+        '<p class="d">Opt-in. Lets an experimenter clone and update a study straight from your lab GitHub organisation without opening a terminal.</p>'+
+        '<p class="d"><b>Prerequisite:</b> this only works if the lab manager has already set up git on this lab experimenter PC and signed the PC in read-only to the GitHub organisation (a read-only organisation credential stored once per PC). The launcher never stores or handles any token itself; it uses the machine credential already on the PC. If that is not set up, leave this off.</p></div>'+
+      '<label class="chk" style="margin:2px 0 8px"><input type="checkbox" id="ghSyncEnabled" onchange="saveGithubSync()"> Enable GitHub Organisation Sync</label>'+
       '<div class="mfield" style="grid-template-columns:150px 1fr"><label>Organisation name</label>'+
       '<input id="ghSyncOrg" type="text" placeholder="e.g. CREED" onchange="saveGithubSync()"></div>'+
-      '<div class="ls-status" id="ghSyncStatus">Off by default. Saved on this computer.</div></div>'+
+      '<div class="ls-status" id="ghSyncStatus"></div></div>'+
     /* Appearance LAST, just above the footer (moved here; contents unchanged). */
     '<div class="ls-card"><h4>Appearance</h4>'+
       '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
@@ -2756,7 +2847,6 @@ function openLabSettings(){
       '<div class="ls-foot-bar">'+
         '<div class="ls-foot-left">'+
           '<button class="btn ls-foot-hist" onclick="openLaunchHistory()">Launch history</button>'+
-          '<button class="btn" onclick="quitLauncher()">Quit launcher</button>'+
         '</div>'+
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
@@ -2785,6 +2875,13 @@ function syncGithubSyncControls(){
   var cb=el("ghSyncEnabled");if(cb)cb.checked=!!GITHUB_SYNC_ENABLED;
   var org=el("ghSyncOrg");if(org)org.value=GITHUB_ORG||"";
 }
+/* Reveal / hide the grey explanatory text behind the info (i) button (item 5). */
+function toggleGhInfo(){
+  var e=el("ghSyncInfo"),b=el("ghInfoBtn");
+  if(!e)return;
+  e.hidden=!e.hidden;
+  if(b)b.setAttribute("aria-expanded",e.hidden?"false":"true");
+}
 /* Persist the tick box + org name (API.set_github_sync -> ui_prefs.json), update
    the in-page state, and show/hide the two main-screen buttons. Fail-soft: in the
    static preview it just updates the UI without a backend call. */
@@ -2799,13 +2896,34 @@ function saveGithubSync(){
       if(st)st.textContent=GITHUB_SYNC_ENABLED?("On. Organisation: "+(GITHUB_ORG||"(none set)")+"."):"Off by default. Saved on this computer.";}
   });
 }
-/* Show the GitHub Org. + Git update buttons only when the opt-in is on; hide them
+/* Show the GitHub org button (+ refresh the Git Pull button) only when the opt-in is on; hide them
    otherwise. Hiding is the whole control: a user cannot invoke org sync when the
    buttons are not shown. */
 function applyGithubSyncButtons(){
-  var g=el("githubOrgBtn"),u=el("gitUpdateStudyBtn");
+  var g=el("githubOrgBtn");
   if(g)g.hidden=!GITHUB_SYNC_ENABLED;
-  if(u)u.hidden=!GITHUB_SYNC_ENABLED;
+  updateGithubOrgBtn();
+  updateProjectGitPull();
+}
+/* The GitHub "mark" logo, inlined as SVG (item 9): never fetched, so it is CSP-safe
+   and works offline. Rendered inside the org button, followed by the organisation
+   name from the Org Sync setting (e.g. "Creed"); logo only when no name is set. */
+var GH_LOGO_SVG='<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">'+
+  '<path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58'+
+  ' 0-.29-.01-1.04-.02-2.05-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76'+
+  '-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78'+
+  '.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.96 0-1.32.47-2.39 1.24-3.23-.12-.31-.54-1.53'+
+  '.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66'+
+  ' 1.65.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.23 0 4.63-2.81 5.66-5.49 5.96.43.37.82'+
+  ' 1.1.82 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.7.83.58C20.56 22.29 24 17.8 24 12.5'+
+  ' 24 5.87 18.63.5 12 .5z"/></svg>';
+/* Fill the org button with the logo + the current organisation name. */
+function updateGithubOrgBtn(){
+  var g=el("githubOrgBtn");if(!g)return;
+  var name=(GITHUB_ORG||"").trim();
+  g.innerHTML=GH_LOGO_SVG+(name?('<span>'+escapeHtml(name)+'</span>'):'');
+  g.title=name?("Clone a study from the "+name+" GitHub organisation")
+              :"Clone a study from your lab GitHub organisation";
 }
 /* Fill the Lab Settings footer: the version always; the "new version available"
    note + GitHub link only when the (persisted, once-a-day) update check has
@@ -2902,16 +3020,32 @@ function quitLauncher(){
   openModal("Launcher closed",
     '<p class="modal-desc">The launcher has been shut down. Any study you already launched keeps running; the launcher never stops it. You can close this tab now.</p>',false);
 }
-/* Browser-mode liveness heartbeat: POST /api/heartbeat about every 1.5s so the
-   server knows the tab is still open. When the beats stop the server shuts ITSELF
-   down within about 4 seconds (roughly two missed beats). A CLEAN tab-close also
-   fires an instant /api/quit beacon below, so the watchdog is only the fallback
-   for a crash / sleep / lost network. Browser mode only (the pywebview window
-   ends the process by its own close). */
+/* Browser-mode liveness heartbeat (item 8: NEVER kill a backgrounded-but-open tab).
+   POST /api/heartbeat about every 1.5s so the server knows the tab is still open,
+   ALWAYS carrying the current document.hidden state. Two things keep a backgrounded
+   tab alive:
+     * the server watchdog is now only a GENEROUS ~60s fallback (raised from ~4s),
+       well above browser background-timer throttling; and
+     * we send the hidden state via the Page Visibility API, and the server does NOT
+       fire the watchdog while the tab is hidden (a hidden tab is expected to be
+       throttled). visibilitychange fires immediately (never throttled), so the
+       server learns of a hide the instant it happens and of a re-show the instant
+       the tab is visible again (which resets the normal countdown).
+   A REAL close still stops the server promptly: pagehide/beforeunload fire an
+   instant /api/quit sendBeacon below (the PRIMARY close signal). This only ever
+   stops the launcher's OWN server; it never touches any oTree/experiment process.
+   Browser mode only (the pywebview window ends the process by its own close). */
+function sendHeartbeat(){
+  if(API&&API.heartbeat){try{API.heartbeat(!!document.hidden);}catch(e){}}
+}
 function startHeartbeat(){
   if(!BROWSER||!API||!API.heartbeat)return;
-  try{API.heartbeat();}catch(e){}
-  setInterval(function(){ if(API&&API.heartbeat){try{API.heartbeat();}catch(e){}} },1500);
+  sendHeartbeat();
+  setInterval(sendHeartbeat,1500);
+  /* Tell the server the moment the tab is hidden or shown again. This event is not
+     throttled, so the hidden/visible transition always gets through even when the
+     periodic beats are being throttled by the background tab. */
+  document.addEventListener("visibilitychange",sendHeartbeat);
   /* Instant clean shutdown on a real tab close / navigation away. sendBeacon is
      delivered even as the page unloads; it cannot set custom headers, so the
      per-run token rides in the query string (the server also accepts it there for
@@ -3024,6 +3158,10 @@ function labPresetEdit(id){
     '<div class="mfield"><label>Shortcut label</label><input id="lpShortcut" type="text" placeholder="(optional) name of the participant-PC desktop shortcuts" value="'+escapeHtml(shortcut)+'"></div>'+
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
     '<label class="chk" style="margin:6px 0 2px"><input type="checkbox" id="lpMakeShortcuts"> Create participant-PC shortcuts (a folder of per-seat kiosk .lnk files)</label>'+
+    /* Export PC shortcuts is ALSO available here inside Edit (item 2), in addition
+       to the button on each Lab-presets table row. Only for an existing lab (a new
+       lab has no id yet -- tick the box above to export it right after saving). */
+    (id?'<div style="margin:8px 0 2px"><button class="btn tiny" onclick="askHotkeyThenExport(\''+escapeHtml(id)+'\')">Export PC shortcuts</button></div>':'')+
     '<div class="ls-status" id="lpStatus"></div>'+
     /* Delete lives ONLY here, inside Edit (removed from the table rows). It is
        the shared hold-to-delete; margin-right:auto pushes it to the far left so
@@ -3966,6 +4104,7 @@ function bootPreview(){
     resetdb:true,seat_mode:"lab_default",room_name:"study"});
   applyProject({});setPath("");
   applySettings(null);
+  applyGithubSyncButtons();   /* fills the org-button logo; stays hidden while off */
   loadFooterVersion();
 }
 /* ======================================================================
@@ -3980,20 +4119,39 @@ function bootPreview(){
      * static file preview      -> canned data, no backend            (bootPreview)
    The Proxy below turns any API.<method>(args...) call into the matching POST,
    so no method list is hardcoded and the JS logic is untouched. ==================*/
+/* Every browser-mode API call is FAIL-SOFT (item 8): it has a hard timeout and, on
+   a timeout or network error, RESOLVES to a well-formed error object rather than
+   rejecting or hanging. Callers already branch on `r.ok`, so no call (especially
+   the update check / version_info) can spin forever if the server is unreachable;
+   they show a clear "not responding" message instead. */
+var API_TIMEOUT_MS=20000;   /* generous: the forced update check hits the network */
 function makeHttpApi(){
   return new Proxy({},{get:function(_t,name){
     if(typeof name!=="string"||name==="then")return undefined; /* not a thenable */
     return function(){
       var args=Array.prototype.slice.call(arguments);
-      /* Send the per-run launcher token the server injected next to the
-         browser-mode marker. A custom header also forces a CORS preflight for a
-         cross-origin caller, which the server never answers, so only this
-         same-origin page can POST to the local API (see the origin/token check
-         in otree_launcher_web.do_POST). */
-      return fetch("/api/"+name,{method:"POST",
+      var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;
+      var timer=null;
+      if(ctrl)timer=setTimeout(function(){try{ctrl.abort();}catch(e){}},API_TIMEOUT_MS);
+      var opts={method:"POST",
+        /* Send the per-run launcher token the server injected next to the
+           browser-mode marker. A custom header also forces a CORS preflight for a
+           cross-origin caller, which the server never answers, so only this
+           same-origin page can POST to the local API (see the origin/token check
+           in otree_launcher_web.do_POST). */
         headers:{"Content-Type":"application/json",
                  "X-Launcher-Token":(window.__LAUNCHER_TOKEN__||"")},
-        body:JSON.stringify(args)}).then(function(r){return r.json();});
+        body:JSON.stringify(args)};
+      if(ctrl)opts.signal=ctrl.signal;
+      return fetch("/api/"+name,opts).then(function(r){return r.json();})
+        .then(function(j){if(timer)clearTimeout(timer);return j;})
+        .catch(function(){
+          if(timer)clearTimeout(timer);
+          /* fail-soft: resolve (never reject) with an error object every caller
+             already understands, so the UI shows a message instead of hanging. */
+          return {ok:false,error:true,unreachable:true,
+            message:"The launcher server is not responding. It may be busy or was closed; try again."};
+        });
     };
   }});
 }

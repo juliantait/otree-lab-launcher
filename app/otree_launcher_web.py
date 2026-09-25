@@ -46,13 +46,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "web", "index.html")
 
 # Browser-mode self-shutdown timing. The open page POSTs /api/heartbeat every
-# ~HEARTBEAT_INTERVAL_MS ms; when the beats stop for HEARTBEAT_TIMEOUT seconds
-# (roughly two missed beats) the server shuts ITSELF down. A clean tab-close also
-# fires a navigator.sendBeacon to /api/quit for an INSTANT shutdown, so this
-# watchdog is only the fallback for a crash / sleep / lost network. The interval
-# constant is exported so the served page and the watchdog stay in step.
+# ~HEARTBEAT_INTERVAL_MS ms, always carrying the tab's document.hidden state.
+#
+# The PRIMARY real-close signal is a navigator.sendBeacon to /api/quit (fired on
+# pagehide/beforeunload), which shuts the server down INSTANTLY on an actual close.
+# The heartbeat watchdog is only a GENEROUS FALLBACK for a crash / sleep / lost
+# network: HEARTBEAT_TIMEOUT is deliberately well ABOVE browser background-tab
+# timer throttling (~60s, not a few seconds) so a backgrounded-but-open tab -- whose
+# heartbeats the browser throttles -- is NEVER falsely killed. In addition, the
+# watchdog does not fire at all while the tab reports itself hidden (see
+# BrowserBridge._heartbeat_watchdog): a hidden tab is expected to be throttled.
+# The interval constant is exported so the served page and the watchdog stay in step.
 HEARTBEAT_INTERVAL_MS = 1500
-HEARTBEAT_TIMEOUT = 4.0
+HEARTBEAT_TIMEOUT = 60.0
 HEARTBEAT_CHECK_INTERVAL = 1.5
 # After a successful in-place update the server relaunches a fresh instance and
 # then shuts itself down; this short delay lets the run_git_pull HTTP response
@@ -2214,16 +2220,19 @@ class Api(object):
             LOG.exception("window.destroy failed")
 
     @api_call
-    def heartbeat(self):
-        """Browser-mode liveness ping from the open page (sent every few seconds).
+    def heartbeat(self, hidden=False):
+        """Browser-mode liveness ping from the open page (sent every few seconds and
+        immediately on every Page Visibility change).
 
-        The server's watchdog uses it to notice when the tab has been closed: once
-        the beats stop for ~12s, the server shuts ITSELF down cleanly. This is the
-        ONLY process the launcher ever stops. No-op under the pywebview window
-        (whose own close ends the process)."""
+        ``hidden`` carries the page's document.hidden state. The server's watchdog
+        uses the beats to notice a closed tab, but is only a GENEROUS ~60s fallback
+        and never fires while the tab reports itself hidden -- so a backgrounded but
+        open tab is never falsely killed (item 8). A real close is caught promptly by
+        the /api/quit sendBeacon instead. This is the ONLY process the launcher ever
+        stops. No-op under the pywebview window (whose own close ends the process)."""
         beat = getattr(self.window, "heartbeat", None)
         if callable(beat):
-            beat()
+            beat(bool(hidden))
         return {"ok": True}
 
     @api_call
@@ -2608,10 +2617,13 @@ class BrowserBridge(object):
         # ever stops; it never touches any oTree/experiment process. The Quit button
         # takes the same path via request_shutdown. Armed by enable_self_shutdown.
         self._shutdown = None
-        self._hb_timeout = 12.0
+        self._hb_timeout = HEARTBEAT_TIMEOUT
         self._hb_interval = 3.0
         self._hb_last = None
         self._hb_seen = False
+        # The tab's last-reported Page Visibility state. While True the watchdog
+        # does NOT fire from missed beats (a hidden tab is expected to be throttled).
+        self._hb_hidden = False
         self._shutting_down = False
 
     def enable_self_shutdown(self, shutdown, heartbeat_timeout=HEARTBEAT_TIMEOUT,
@@ -2626,11 +2638,16 @@ class BrowserBridge(object):
         threading.Thread(target=self._heartbeat_watchdog,
                          name="heartbeat-watchdog", daemon=True).start()
 
-    def heartbeat(self):
-        """Record a liveness beat from the open page (Api.heartbeat calls this)."""
+    def heartbeat(self, hidden=False):
+        """Record a liveness beat from the open page (Api.heartbeat calls this).
+
+        ``hidden`` is the page's current document.hidden state; it is remembered so
+        the watchdog can suppress a shutdown while the tab is a throttled background
+        tab (see _heartbeat_watchdog)."""
         with self._lock:
             self._hb_last = time.monotonic()
             self._hb_seen = True
+            self._hb_hidden = bool(hidden)
 
     def request_shutdown(self):
         """Shut the launcher's own server down now (the Quit button / hand-off)."""
@@ -2640,6 +2657,13 @@ class BrowserBridge(object):
         # Poll for a heartbeat gap. Only AFTER the first beat (a page actually
         # connected) does a gap count, so a slow browser open never trips it; once
         # the beats stop for longer than _hb_timeout the tab is gone -> shut down.
+        #
+        # A HIDDEN tab is never killed by this watchdog (item 8): the browser
+        # throttles a background tab's timers, so its beats legitimately slow down or
+        # pause. While the last-reported state is hidden we simply skip the gap check;
+        # a real close still fires the /api/quit sendBeacon promptly. The tab tells us
+        # the moment it is shown again (an un-throttled visibilitychange beat), which
+        # resets the countdown.
         while True:
             time.sleep(self._hb_interval)
             with self._lock:
@@ -2647,6 +2671,9 @@ class BrowserBridge(object):
                     return
                 seen = self._hb_seen
                 last = self._hb_last
+                hidden = self._hb_hidden
+            if hidden:
+                continue
             if seen and last is not None and (time.monotonic() - last) > self._hb_timeout:
                 self._trigger_shutdown("heartbeat lost (browser tab closed)")
                 return
@@ -2799,10 +2826,21 @@ def _make_browser_handler(api, bridge, token="", allowed_origins=()):
             finally:
                 bridge.unsubscribe(q)
 
+        # Icon paths the browser auto-requests but we do not ship. Answer them with
+        # an empty 204 so they stop logging "code 404, message Not found" (item 11).
+        _ICON_PATHS = frozenset((
+            "/favicon.ico", "/apple-touch-icon.png",
+            "/apple-touch-icon-precomposed.png"))
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/events":
                 self._serve_events()
+            elif path in self._ICON_PATHS:
+                # No content: quiet the harmless favicon / touch-icon probes.
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
             else:
                 self._serve_static()
 
@@ -2959,10 +2997,11 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
     actual_port = httpd.server_address[1]
     for origin_host in (host, "127.0.0.1", "localhost"):
         allowed_origins.add("http://%s:%d" % (origin_host, actual_port))
-    # Closing the browser tab must actually END this Python process. The open page
-    # POSTs /api/heartbeat every ~1.5s; when the beats stop for ~4s (the tab was
-    # closed) the server shuts ITSELF down cleanly, and a clean close also fires an
-    # instant /api/quit beacon. The Quit button takes the same path. This is the
+    # Closing the browser tab must actually END this Python process. A clean close
+    # fires an instant /api/quit beacon (the primary signal); the heartbeat watchdog
+    # is only a generous ~60s fallback for a crash / sleep / lost network, and never
+    # fires while the tab reports itself hidden, so a backgrounded but open tab is
+    # never falsely killed (item 8). The Quit button takes the same path. This is the
     # ONLY process the launcher ever stops -- it never touches any oTree process.
     bridge.enable_self_shutdown(httpd.shutdown, heartbeat_timeout=HEARTBEAT_TIMEOUT,
                                 check_interval=HEARTBEAT_CHECK_INTERVAL)
