@@ -1157,7 +1157,8 @@ class Api(object):
             update = core.check_for_update(force=bool(force))
         except Exception:
             update = {"update_available": False, "current": core.APP_VERSION,
-                      "remote_version": "", "label": "", "tooltip": core.UPDATE_TOOLTIP,
+                      "remote_version": "", "checked": False, "check_failed": True,
+                      "label": "", "tooltip": core.UPDATE_TOOLTIP,
                       "repo_url": core.REPO_URL}
         return {"ok": True, "version": core.APP_VERSION, "update": update}
 

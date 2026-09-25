@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -2419,7 +2419,8 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
         {"update_available": bool,      # latest release tag > APP_VERSION (semver)
          "current": APP_VERSION,        # what this build is
          "remote_version": "v1.2.0",    # latest known release tag ("" if unknown)
-         "checked": bool,               # True only if the network was hit this call
+         "checked": bool,               # True only if a release tag was fetched OK
+         "check_failed": bool,          # True if a fetch was TRIED this call but failed
          "repo_url": REPO_URL,          # where the footer link points
          "label": str,                  # UPDATE_LABEL when an update exists, else ""
          "tooltip": UPDATE_TOOLTIP}     # the hover text next to the link
@@ -2430,6 +2431,15 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
     returned -- the check never raises and never blocks longer than the fetch
     timeout. ``fetcher`` (returns a payload for :func:`parse_github_release_tag`)
     is injectable for tests.
+
+    ``check_failed`` is the honesty flag that fixes the "silently says up to date"
+    bug: it is True only when this call actually ATTEMPTED a network fetch (forced,
+    or the daily cache was stale) and that fetch failed -- offline, rate-limited
+    (GitHub allows 60 unauthenticated req/hour per IP), an SSL/proxy error, or a
+    response with no parseable release tag. A forced manual check can then report
+    "could not check" instead of a false "you are up to date", which is exactly the
+    verdict a failed fetch used to masquerade as. It stays False when a fresh cache
+    is served without any fetch, so the passive daily path never cries wolf.
     """
     path = path or update_cache_path()
     now = now or _dt.datetime.now()
@@ -2462,6 +2472,7 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
     # > 1.3.0) is reported immediately instead of the stale cached latest (item 10).
     # It is never short-circuited by a fresh-enough cache.
     checked = False
+    check_failed = False
     if force or not fresh:
         fetch = fetcher or _fetch_release_payload
         try:
@@ -2472,16 +2483,22 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
                 _write_update_cache(path, {
                     "remote_version": remote_version,
                     "last_checked": now.isoformat(timespec="seconds")})
+            else:
+                # We reached something but it had no parseable release tag (a 404
+                # body, a rate-limit message, garbage): the fetch did not succeed.
+                check_failed = True
         except Exception:
-            # No network / no releases (404) / parse error => silent; keep the
-            # cache we had.
-            pass
+            # No network / no releases (404) / rate limit / SSL / parse error. Keep
+            # whatever cache we had, but REMEMBER the fetch failed so a forced check
+            # can say "could not check" instead of a false "up to date".
+            check_failed = True
 
     update_available = version_is_newer(remote_version, APP_VERSION)
     return {"update_available": update_available,
             "current": APP_VERSION,
             "remote_version": remote_version,
             "checked": checked,
+            "check_failed": check_failed,
             "repo_url": REPO_URL,
             "label": UPDATE_LABEL if update_available else "",
             "tooltip": UPDATE_TOOLTIP}

@@ -399,12 +399,13 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
   border-radius:var(--r-sm);padding:7px 10px;
   display:flex;align-items:flex-start;gap:10px;
 }
-/* The always-present project STATUS CARD (v1.4.0): a small Git Pull button
-   anchored at the BOTTOM-LEFT (only when Org Sync is on and a folder is
-   selected) and the status text / detected apps / empty-state or problem
-   message to its right. align-self:flex-end drops the button to the bottom of
-   the row while the card container keeps its top-aligned default. */
-.study-card .sc-gitpull{flex:none;align-self:flex-end}
+/* The always-present project STATUS CARD (v1.4.0): the status text / detected
+   apps / empty-state or problem message on the LEFT (sc-body, flex:1), and a
+   small Git Pull button anchored TOP-RIGHT (only when Org Sync is on and a
+   folder is selected). The button is the LAST flex child and align-self
+   flex-start keeps it in the top-right corner, in the same row as the detection
+   status line, so it never shoves the green detection text to the right. */
+.study-card .sc-gitpull{flex:none;align-self:flex-start}
 .study-card .sc-body{flex:1;min-width:0}
 /* Empty-state "ways to add a project" list: quiet grey guidance, distinct from
    the green detected-app bullets above. */
@@ -1144,7 +1145,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.1</div>
+      <div class="af-ver" id="footVersion">version 1.4.2</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1194,16 +1195,18 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
                helper lines and the not-an-oTree warning. Contents are rendered by
                applyProject by state: empty prompt (the "ways to add a project"
                list) / green valid project / red problem. A small Git Pull button
-               sits at the BOTTOM-LEFT when Org Sync is on and a folder is chosen. -->
+               sits at the TOP-RIGHT when Org Sync is on and a folder is chosen; it
+               comes AFTER the status body in the DOM so the body (and its green
+               detection text) stays LEFT and is never shoved right by the button. -->
           <div class="study-card" id="projDetect">
-            <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
-              onclick="onGitUpdateStudy()"
-              title="Run git pull in the study folder to fetch the latest version">Git Pull</button>
             <div class="sc-body">
               <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet.</span></div>
               <ul class="bullets" id="appBullets" hidden></ul>
               <ul class="ways" id="projWays" hidden></ul>
             </div>
+            <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
+              onclick="onGitUpdateStudy()"
+              title="Run git pull in the study folder to fetch the latest version">Git Pull</button>
           </div>
 
           <div class="divider"></div>
@@ -2867,7 +2870,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.1</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.2</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -3098,6 +3101,10 @@ function checkForUpdateNow(){
     var up=r.update||{};
     if(up.update_available){
       if(res){res.className="ls-foot-result avail";res.innerHTML=updateAvailHTML(up);}
+    }else if(up.check_failed){
+      /* A forced check that could NOT reach GitHub (offline, rate limit, SSL/proxy)
+         must NOT masquerade as "up to date" -- that was the reported bug. Say so. */
+      if(res){res.className="ls-foot-result";res.textContent="Could not reach GitHub to check. You may be offline or rate-limited. Try again later.";}
     }else{
       if(res){res.className="ls-foot-result ok";res.textContent="You are up to date (version "+(r.version||"")+").";}
     }
