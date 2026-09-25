@@ -11,7 +11,7 @@ powers (full filesystem, real subprocesses).
 web front end. On first run they build a private virtualenv in your home folder
 (`~/.otree-lab-launcher-venv`) and install pywebview into it, then launch. Nothing
 touches the system Python. (The `.vbs` is the windowless Windows entry; the visible-
-console `(debug).bat` variant lives in `Alternative Launchers/`.)
+console `debug_...bat` variant lives in `alternative_launchers/`.)
 
 **Manual:** don't `pip install` into a Homebrew/system Python: modern Pythons
 refuse it (PEP 668, "externally-managed-environment"). Use a venv (run from the

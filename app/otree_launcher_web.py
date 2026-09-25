@@ -45,6 +45,20 @@ import otree_core as core
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "web", "index.html")
 
+# Browser-mode self-shutdown timing. The open page POSTs /api/heartbeat every
+# ~HEARTBEAT_INTERVAL_MS ms; when the beats stop for HEARTBEAT_TIMEOUT seconds
+# (roughly two missed beats) the server shuts ITSELF down. A clean tab-close also
+# fires a navigator.sendBeacon to /api/quit for an INSTANT shutdown, so this
+# watchdog is only the fallback for a crash / sleep / lost network. The interval
+# constant is exported so the served page and the watchdog stay in step.
+HEARTBEAT_INTERVAL_MS = 1500
+HEARTBEAT_TIMEOUT = 4.0
+HEARTBEAT_CHECK_INTERVAL = 1.5
+# After a successful in-place update the server relaunches a fresh instance and
+# then shuts itself down; this short delay lets the run_git_pull HTTP response
+# reach the page (so it can show the "restarting" confirmation) before we stop.
+RELAUNCH_SHUTDOWN_DELAY = 1.5
+
 # WebView devtools are a security exposure (they run JS against the privileged
 # js_api), so they are OFF unless this env var is explicitly set to a truthy
 # value. Debugging on a dev machine: set OTREE_LAB_LAUNCHER_DEBUG=1.
@@ -159,6 +173,25 @@ def _setup_logging():
 
 LOG = _setup_logging()
 
+
+def _close_logging():
+    """Close and detach the launcher's file log handler(s).
+
+    Called on a clean shutdown so the launcher does not keep an open handle on
+    ``data/web_launcher.log``. On Windows an open file handle blocks deleting the
+    ``data/`` folder, so releasing it lets the operator delete the folder once
+    the launcher has closed. Fail-soft: any error is swallowed."""
+    for handler in list(LOG.handlers):
+        if isinstance(handler, logging.FileHandler):
+            try:
+                handler.close()
+            except Exception:
+                pass
+            try:
+                LOG.removeHandler(handler)
+            except Exception:
+                pass
+
 # The value an Api method returns if its body raises. Returning *something*
 # JSON-serializable is what keeps the JS promise from hanging forever (a hung
 # promise is indistinguishable from a frozen UI on EdgeChromium).
@@ -216,11 +249,15 @@ def project_status(path):
 
 
 def _lab_rows(presets):
-    """Lab-settings table rows (every lab, shown and hidden), in stored order."""
+    """Lab-settings table rows (every lab, shown and hidden), in stored order.
+
+    Soft-deleted presets are skipped, so a deleted lab vanishes from the
+    settings table while staying in the store JSON (core.soft_delete_lab_preset).
+    """
     return [{"id": p["id"], "name": p["name"], "ip": p["ip"],
              "seats": p["seats"], "display": p["display"],
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
-            for p in presets]
+            for p in presets if not p.get("deleted")]
 
 
 def _lab_tiles(presets, config_lab=None):
@@ -1102,6 +1139,61 @@ class Api(object):
         return {"ok": True, "version": core.APP_VERSION, "update": update}
 
     @api_call
+    def git_repo_status(self):
+        """Is the launcher's OWN install a git working tree? Drives the Update
+        button: a git install offers a one-click ``git pull`` (the Run pill); a
+        plain download points at the GitHub page instead. Fail-soft (a False
+        answer just routes to the download path)."""
+        return {"ok": True, "is_git_repo": core.is_git_install(),
+                "repo_url": core.REPO_URL}
+
+    @api_call
+    def run_git_pull(self):
+        """Run ``git pull`` on the launcher's OWN install directory (core.git_pull,
+        fail-soft), and on SUCCESS auto-restart: spawn a fresh detached launcher
+        on the just-pulled code and then cleanly shut this server down. This
+        updates and restarts ONLY the launcher; it never touches any
+        oTree/experiment process. Returns the captured output plus ``relaunching``
+        so the page can show the 'restarting' confirmation before this server
+        stops."""
+        result = core.git_pull()
+        result.setdefault("ok", False)
+        if result.get("ok"):
+            relaunching = self._relaunch_after_update()
+            result["relaunching"] = relaunching
+            if relaunching:
+                result["message"] = ("Updated, restarting the launcher (a fresh "
+                                      "window/tab opens on the new version).")
+        return result
+
+    def _relaunch_after_update(self):
+        """Spawn a fresh detached launcher, then (after a short delay so the HTTP
+        response reaches the page) cleanly shut THIS server down via the existing
+        request_shutdown path. Returns True when the fresh instance was spawned.
+
+        Fail-soft: if the spawn fails we log it and do NOT shut down, so the
+        current launcher stays usable (the operator can restart by hand). Only the
+        launcher is ever restarted/stopped here; no experiment process is touched.
+        """
+        try:
+            spawn_new_launcher()
+        except Exception:
+            LOG.exception("relaunch: could not spawn a fresh launcher")
+            return False
+        shutdown = getattr(self.window, "request_shutdown", None)
+        if callable(shutdown):
+            timer = threading.Timer(RELAUNCH_SHUTDOWN_DELAY, shutdown)
+            timer.daemon = True
+            timer.start()
+        else:
+            # pywebview window path: close it (ends the process) after the delay.
+            timer = threading.Timer(RELAUNCH_SHUTDOWN_DELAY,
+                                    lambda: self._spawn(self._do_close, "relaunch-close"))
+            timer.daemon = True
+            timer.start()
+        return True
+
+    @api_call
     def get_theme(self):
         """The persisted light/dark theme (data/ui_prefs.json). Fail-soft: a
         missing/broken file returns the 'dark' default."""
@@ -1225,6 +1317,27 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "entry": entry,
+                "databases": core.known_databases_from_store(self.store_extra),
+                "default_db_options": core.default_database_options(self.store_extra),
+                "default_database": core.default_database_id(self.store_extra)}
+
+    @api_call
+    def delete_database(self, db_id):
+        """Soft-delete a custom database from the Lab Settings custom-databases
+        list. Flags the registry entry ``deleted`` (core.soft_delete_database) so
+        it is hidden from every UI list but KEPT in presets.json (recoverable by
+        hand-editing). It never touches Postgres or any real database -- only the
+        launcher's record of it is hidden. If the database was the lab-shared
+        default, the default reference is reset to the lab built-in. Returns the
+        refreshed registry + default lists so the page can repaint."""
+        try:
+            ok, message = self._mutate_store(
+                lambda: core.soft_delete_database(self.store_extra, db_id))
+        except ValueError as error:
+            return {"ok": False, "message": str(error)}
+        except OSError as error:
+            return {"ok": False, "message": "Could not save: %s" % error}
+        return {"ok": ok, "message": message,
                 "databases": core.known_databases_from_store(self.store_extra),
                 "default_db_options": core.default_database_options(self.store_extra),
                 "default_database": core.default_database_id(self.store_extra)}
@@ -1446,15 +1559,17 @@ class Api(object):
 
     @api_call
     def delete_lab(self, lab_id, selected_lab=None, config_lab=None):
-        """Delete a lab preset from the Lab Settings page (web/Tk parity).
+        """Soft-delete a lab preset from the Lab Settings Edit view (web/Tk parity).
 
-        Refuses to remove the last displayed lab (core.delete_lab_preset), so the
-        selector always keeps a lab. Returns the next lab to select when the
-        deleted one was the current selection. ``config_lab`` keeps the open
-        config's own (possibly hidden) lab in the returned tiles when it still
-        exists (BUG B, Tk parity)."""
+        Flags the preset ``deleted`` (core.soft_delete_lab_preset) so it is
+        hidden from every UI list but KEPT in presets.json (recoverable by
+        hand-editing). Refuses to remove the last displayed lab, so the selector
+        always keeps a lab. Returns the next lab to select when the deleted one
+        was the current selection. ``config_lab`` keeps the open config's own
+        (possibly hidden) lab in the returned tiles when it still exists (BUG B,
+        Tk parity)."""
         presets = core.lab_presets_from_store(self.store_extra)
-        ok, message, presets, next_selected = core.delete_lab_preset(
+        ok, message, presets, next_selected = core.soft_delete_lab_preset(
             presets, lab_id, selected_lab=selected_lab)
         if not ok:
             return {"ok": False, "message": message}
@@ -2001,6 +2116,33 @@ class Api(object):
         except Exception:
             LOG.exception("window.destroy failed")
 
+    @api_call
+    def heartbeat(self):
+        """Browser-mode liveness ping from the open page (sent every few seconds).
+
+        The server's watchdog uses it to notice when the tab has been closed: once
+        the beats stop for ~12s, the server shuts ITSELF down cleanly. This is the
+        ONLY process the launcher ever stops. No-op under the pywebview window
+        (whose own close ends the process)."""
+        beat = getattr(self.window, "heartbeat", None)
+        if callable(beat):
+            beat()
+        return {"ok": True}
+
+    @api_call
+    def quit(self):
+        """Explicit, clean shutdown of the launcher's OWN web-UI server (the Quit
+        button). Stops ONLY this Python process; it NEVER stops or kills any
+        oTree/experiment process, not even one the launcher started. Under the
+        pywebview window this closes the window instead (same effect)."""
+        shutdown = getattr(self.window, "request_shutdown", None)
+        if callable(shutdown):
+            shutdown()
+            return {"ok": True}
+        # pywebview window path: close the native window (ends the process).
+        self._spawn(self._do_close, "quit")
+        return {"ok": True}
+
     def _run_launch(self, cfg, config_name=""):
         LOG.info("_run_launch: begin (resetdb=%s, open_browser=%s)",
                  cfg.get("resetdb"), cfg.get("open_browser"))
@@ -2362,59 +2504,77 @@ class BrowserBridge(object):
         self._queue_cls = queue.Queue
         self._subscribers = []
         self._lock = threading.Lock()
-        # Optional idle self-shutdown: when enabled (windowless pythonw run only),
-        # the server exits ``_idle_grace`` seconds after the LAST /events subscriber
-        # disconnects, so a browser-mode launcher started by the .vbs no longer
-        # leaves pythonw running forever after the tab is closed (item 13). A new
-        # subscriber within the grace cancels the pending shutdown.
-        self._idle_shutdown = None
-        self._idle_grace = 60.0
-        self._idle_timer = None
+        # Clean self-shutdown driven by the page HEARTBEAT (browser mode). The open
+        # page POSTs /api/heartbeat every few seconds; when the beats stop for
+        # _hb_timeout seconds -- because the tab was closed -- the server shuts
+        # ITSELF down (clean flush then exit). This is the ONLY process the launcher
+        # ever stops; it never touches any oTree/experiment process. The Quit button
+        # takes the same path via request_shutdown. Armed by enable_self_shutdown.
+        self._shutdown = None
+        self._hb_timeout = 12.0
+        self._hb_interval = 3.0
+        self._hb_last = None
+        self._hb_seen = False
+        self._shutting_down = False
 
-    def enable_idle_shutdown(self, shutdown, grace=60.0):
-        """Arm the idle self-shutdown with ``shutdown`` (httpd.shutdown) and a
-        grace period. Only called for a windowless (pythonw) browser-mode run."""
-        self._idle_shutdown = shutdown
-        self._idle_grace = float(grace)
+    def enable_self_shutdown(self, shutdown, heartbeat_timeout=HEARTBEAT_TIMEOUT,
+                             check_interval=HEARTBEAT_CHECK_INTERVAL):
+        """Arm the heartbeat watchdog: after the page's heartbeats stop for
+        ``heartbeat_timeout`` seconds, call ``shutdown`` (httpd.shutdown) exactly
+        once. Also the target of the Quit button (request_shutdown). Browser mode
+        only; the pywebview window ends the process by its own close."""
+        self._shutdown = shutdown
+        self._hb_timeout = float(heartbeat_timeout)
+        self._hb_interval = float(check_interval)
+        threading.Thread(target=self._heartbeat_watchdog,
+                         name="heartbeat-watchdog", daemon=True).start()
 
-    def _cancel_idle_timer(self):
-        if self._idle_timer is not None:
-            try:
-                self._idle_timer.cancel()
-            except Exception:
-                pass
-            self._idle_timer = None
+    def heartbeat(self):
+        """Record a liveness beat from the open page (Api.heartbeat calls this)."""
+        with self._lock:
+            self._hb_last = time.monotonic()
+            self._hb_seen = True
+
+    def request_shutdown(self):
+        """Shut the launcher's own server down now (the Quit button / hand-off)."""
+        self._trigger_shutdown("quit requested")
+
+    def _heartbeat_watchdog(self):
+        # Poll for a heartbeat gap. Only AFTER the first beat (a page actually
+        # connected) does a gap count, so a slow browser open never trips it; once
+        # the beats stop for longer than _hb_timeout the tab is gone -> shut down.
+        while True:
+            time.sleep(self._hb_interval)
+            with self._lock:
+                if self._shutting_down or self._shutdown is None:
+                    return
+                seen = self._hb_seen
+                last = self._hb_last
+            if seen and last is not None and (time.monotonic() - last) > self._hb_timeout:
+                self._trigger_shutdown("heartbeat lost (browser tab closed)")
+                return
+
+    def _trigger_shutdown(self, reason):
+        with self._lock:
+            if self._shutting_down or self._shutdown is None:
+                return
+            self._shutting_down = True
+            shutdown = self._shutdown
+        LOG.info("browser mode: %s; shutting down the launcher's OWN server", reason)
+        # shutdown() (httpd.shutdown) must not run on a serving thread; give it its
+        # own. serve_forever then returns and run_browser's finally cleans up.
+        threading.Thread(target=shutdown, name="server-shutdown", daemon=True).start()
 
     def subscribe(self):
         q = self._queue_cls()
         with self._lock:
             self._subscribers.append(q)
-            # A page (re)connected: cancel any pending idle shutdown.
-            self._cancel_idle_timer()
         return q
 
     def unsubscribe(self, q):
         with self._lock:
             if q in self._subscribers:
                 self._subscribers.remove(q)
-            # Last subscriber gone: after the grace period, shut the server down
-            # unless a new subscriber has connected in the meantime.
-            if not self._subscribers and self._idle_shutdown is not None:
-                self._cancel_idle_timer()
-                self._idle_timer = threading.Timer(
-                    self._idle_grace, self._maybe_idle_shutdown)
-                self._idle_timer.daemon = True
-                self._idle_timer.start()
-
-    def _maybe_idle_shutdown(self):
-        with self._lock:
-            still_idle = not self._subscribers and self._idle_shutdown is not None
-            shutdown = self._idle_shutdown
-            self._idle_timer = None
-        if still_idle and shutdown is not None:
-            LOG.info("browser mode: idle since the last tab closed; shutting down")
-            # shutdown() must not run on a serving thread; give it its own.
-            threading.Thread(target=shutdown, daemon=True).start()
 
     def evaluate_js(self, snippet):
         """Fan a JS snippet out to every connected page (worker threads only)."""
@@ -2426,9 +2586,10 @@ class BrowserBridge(object):
     def destroy(self):
         """The hand-off 'close the launcher' button. A browser tab cannot be
         force-closed by script the way a native window can, so we ask the page to
-        try window.close() and otherwise the operator just closes the tab; the
-        server keeps running until its console window is closed."""
+        try window.close(); then we shut the launcher's OWN server down cleanly
+        (this stops only this Python process, never any oTree/experiment process)."""
         self.evaluate_js("window.close && window.close()")
+        self.request_shutdown()
 
 
 def _make_browser_handler(api, bridge, token="", allowed_origins=()):
@@ -2576,7 +2737,15 @@ def _make_browser_handler(api, bridge, token="", allowed_origins=()):
                 self._send_json({"ok": False, "error": True,
                                  "message": "Bad origin."}, code=403)
                 return
-            if (self.headers.get("X-Launcher-Token") or "") != token:
+            # The genuine page sends the per-run token in the X-Launcher-Token
+            # header. A page-close beacon (navigator.sendBeacon -> /api/quit) cannot
+            # set custom headers, so the token is ALSO accepted from a ?token= query
+            # parameter; the Origin check above still rejects a cross-site beacon.
+            supplied = self.headers.get("X-Launcher-Token")
+            if supplied is None:
+                from urllib.parse import urlparse, parse_qs
+                supplied = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+            if supplied != token:
                 self._send_json({"ok": False, "error": True,
                                  "message": "Bad or missing launcher token."}, code=403)
                 return
@@ -2604,6 +2773,46 @@ def _make_browser_handler(api, bridge, token="", allowed_origins=()):
             self._send_json(result)
 
     return Handler
+
+
+def _detached_popen_kwargs():
+    """Popen kwargs that fully DETACH a child so it outlives this process.
+
+    On Windows: DETACHED_PROCESS + a new process group (no shared console). On
+    POSIX: a new session (start_new_session). Used only to relaunch the LAUNCHER
+    itself after an update; never for an oTree/experiment process."""
+    if sys.platform.startswith("win"):
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        return {"creationflags": flags, "close_fds": True}
+    return {"start_new_session": True, "close_fds": True}
+
+
+def spawn_new_launcher():
+    """Start a FRESH, DETACHED launcher instance via the platform's normal entry
+    point, so an in-place update comes back running the just-pulled code.
+
+    Prefers the same double-click entry the operator uses: the Windows ``.vbs``
+    (via ``wscript``) or the macOS ``.command`` (via ``open``); otherwise it
+    re-execs the web launcher with the current Python (``--browser``). Returns the
+    spawned Popen. Raises on failure (the caller logs and skips the shutdown so the
+    current launcher stays up). This ONLY ever starts another launcher; it never
+    touches any oTree/experiment process.
+    """
+    root = core.repo_root()
+    kwargs = _detached_popen_kwargs()
+    if sys.platform.startswith("win"):
+        vbs = os.path.join(root, "Win_Start oTree Lab Launcher.vbs")
+        if os.path.isfile(vbs):
+            return subprocess.Popen(["wscript", vbs], **kwargs)
+    elif sys.platform == "darwin":
+        command = os.path.join(root, "Mac_Start oTree Lab Launcher.command")
+        if os.path.isfile(command):
+            return subprocess.Popen(["open", command], **kwargs)
+    # Fallback (Linux, or the platform script is missing): re-exec THIS launcher.
+    return subprocess.Popen(
+        [sys.executable, os.path.join(core.app_dir(), "otree_launcher_web.py"),
+         "--browser"], **kwargs)
 
 
 def run_browser(host="127.0.0.1", port=0, open_browser=True):
@@ -2635,15 +2844,31 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         daemon_threads = True    # SSE threads never block shutdown
         allow_reuse_address = True
 
-    httpd = _Server((host, port), _make_browser_handler(api, bridge, token, allowed_origins))
+    # Robust bind: right after an auto-restart the just-quit instance may still be
+    # releasing a FIXED --port for a moment, so retry a few times, then fall back to
+    # an OS-chosen free port rather than fail to come up. (port=0 never collides.)
+    handler = _make_browser_handler(api, bridge, token, allowed_origins)
+    httpd = None
+    for attempt in range(6):
+        try:
+            httpd = _Server((host, port), handler)
+            break
+        except OSError as error:
+            LOG.warning("port %s busy (attempt %d/6): %s", port, attempt + 1, error)
+            time.sleep(0.3)
+    if httpd is None:
+        LOG.warning("requested port %s stayed busy; taking an OS-chosen free port", port)
+        httpd = _Server((host, 0), handler)
     actual_port = httpd.server_address[1]
     for origin_host in (host, "127.0.0.1", "localhost"):
         allowed_origins.add("http://%s:%d" % (origin_host, actual_port))
-    # Under the windowless pythonw (the browser-mode .vbs shortcut) there is no
-    # console to close, so the server would otherwise run forever after the tab is
-    # closed. Arm an idle self-shutdown so it exits ~60s after the last tab closes.
-    if os.path.basename(sys.executable or "").lower().startswith("pythonw"):
-        bridge.enable_idle_shutdown(httpd.shutdown, grace=60.0)
+    # Closing the browser tab must actually END this Python process. The open page
+    # POSTs /api/heartbeat every ~1.5s; when the beats stop for ~4s (the tab was
+    # closed) the server shuts ITSELF down cleanly, and a clean close also fires an
+    # instant /api/quit beacon. The Quit button takes the same path. This is the
+    # ONLY process the launcher ever stops -- it never touches any oTree process.
+    bridge.enable_self_shutdown(httpd.shutdown, heartbeat_timeout=HEARTBEAT_TIMEOUT,
+                                check_interval=HEARTBEAT_CHECK_INTERVAL)
     url = "http://%s:%d/" % (host, actual_port)
     LOG.info("browser mode serving at %s", url)
     sys.stderr.write("\noTree Lab Launcher (browser mode) is serving at:\n  %s\n" % url)
@@ -2661,6 +2886,9 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         LOG.info("browser mode: interrupted, shutting down")
     finally:
         httpd.server_close()
+        # Release the launcher's OWN log file handle so the data/ folder is not
+        # left locked (Windows) and can be deleted once the launcher is closed.
+        _close_logging()
     return 0
 
 

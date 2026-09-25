@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.2.0"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -2427,6 +2427,73 @@ def check_for_update(force=False, fetcher=None, path=None, now=None):
             "tooltip": UPDATE_TOOLTIP}
 
 
+# --- git-aware in-place update ---------------------------------------------
+#
+# When an update is available the launcher offers ONE of two update paths,
+# depending on how this copy was installed:
+#   * a GIT working tree  -> a one-click "git pull" on the install directory,
+#   * a plain download    -> a link to the GitHub page to re-download.
+# Both act ONLY on the launcher's own install directory (repo_root(), the parent
+# of app/). Neither ever touches an oTree/experiment process. Both are fail-soft.
+GIT_PULL_TOOLTIP = "This will run git pull to update the project."
+
+
+def is_git_install(repo=None):
+    """True when the launcher's install directory is a git working tree.
+
+    Runs ``git -C <repo> status``; a nonzero exit, git not being on PATH, or a
+    timeout all read as NOT a git install (so the caller falls back to the
+    GitHub-download path). ``repo`` defaults to :func:`repo_root` (the parent of
+    app/, which the launcher already anchors DATA_DIR to). Never raises.
+    """
+    repo = repo if repo is not None else repo_root()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "status"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def git_pull(repo=None):
+    """Run ``git -C <repo> pull`` on the install directory and capture its output.
+
+    Returns ``{"ok": bool, "output": str, "message": str}``: ``ok`` is True only
+    when git exits 0, ``output`` is git's combined stdout/stderr, and ``message``
+    is the confirmation line ("Update installed. Restart the launcher to apply.")
+    on success or a short failure note otherwise. Acts ONLY on the launcher's own
+    install directory; never touches any oTree/experiment process. Fail-soft: git
+    missing / not a repo / a timeout returns ``ok`` False with a message rather
+    than raising.
+    """
+    repo = repo if repo is not None else repo_root()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "pull"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=120)
+    except FileNotFoundError:
+        return {"ok": False, "output": "",
+                "message": "git is not installed on this machine."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "", "message": "git pull timed out."}
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return {"ok": False, "output": "",
+                "message": "Could not run git pull: %s" % error}
+    output = result.stdout or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    output = output.strip()
+    ok = result.returncode == 0
+    message = ("Update installed. Restart the launcher to apply."
+               if ok else "git pull failed (exit code %s)." % result.returncode)
+    return {"ok": ok, "output": output, "message": message}
+
+
 def version_footer_lines():
     """The three identity lines for the WHOLE-APP footer (pinned at the bottom of
     the left config sidebar, centred). Identity ONLY -- no update tag; the update
@@ -2943,6 +3010,10 @@ def normalize_lab_preset(preset):
         out["seats"] = []
     out["display"] = bool(out.get("display", True))
     out["builtin"] = bool(out.get("builtin", False))
+    # Soft-delete flag: a deleted preset stays in the store JSON (recoverable by
+    # hand-editing) but is hidden from every UI list -- the settings table, the
+    # main selector and the per-config tiles. See soft_delete_lab_preset.
+    out["deleted"] = bool(out.get("deleted", False))
     geo = str(out.get("geometry", "") or "")
     if geo not in LAB_GEOMETRIES:
         geo = LAB_GEO_GRID
@@ -3007,8 +3078,11 @@ def lab_presets_from_store(extra):
 
 
 def displayed_lab_presets(lab_presets):
-    """Only the presets the lab selector should show, in stored order."""
-    return [p for p in (lab_presets or []) if p.get("display", True)]
+    """Only the presets the lab selector should show, in stored order.
+
+    A soft-deleted preset (``deleted`` True) is never shown."""
+    return [p for p in (lab_presets or [])
+            if p.get("display", True) and not p.get("deleted")]
 
 
 def lab_options_for_config(lab_presets, config_lab):
@@ -3025,9 +3099,11 @@ def lab_options_for_config(lab_presets, config_lab):
     """
     presets = lab_presets or []
     cid = str(config_lab).strip() if config_lab not in (None, "") else None
+    # A soft-deleted preset is never offered, even as a config's own saved lab.
     return [p for p in presets
-            if p.get("display", True)
-            or (cid is not None and str(p.get("id", "")) == cid)]
+            if not p.get("deleted")
+            and (p.get("display", True)
+                 or (cid is not None and str(p.get("id", "")) == cid))]
 
 
 def selectable_lab_presets(lab_presets):
@@ -3255,6 +3331,40 @@ def delete_lab_preset(lab_presets, lab_id, selected_lab=None):
     return True, "Deleted the lab %r." % target["name"], remaining, next_selected
 
 
+def soft_delete_lab_preset(lab_presets, lab_id, selected_lab=None):
+    """Soft-delete a lab preset: hide it from the UI but KEEP it in the store.
+
+    Same contract as :func:`delete_lab_preset` -- returns
+    (ok, message, new_list, next_selected) and refuses to remove the last
+    remaining displayed lab -- but instead of dropping the preset it flags it
+    ``deleted``, so it stays in presets.json (recoverable by hand-editing) while
+    every UI list (:func:`displayed_lab_presets`, :func:`lab_options_for_config`,
+    the settings table) skips it. The returned list still CONTAINS the deleted
+    preset, so persisting it keeps the entry in the store.
+    """
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    target = find_lab_preset(lab_id, presets)
+    if target is None:
+        return False, "No lab preset with that id.", presets, selected_lab
+    if target.get("deleted"):
+        return False, "That lab is already deleted.", presets, selected_lab
+    # What would remain VISIBLE if this preset were hidden.
+    remaining = [p for p in presets
+                 if p["id"] != str(lab_id) and not p.get("deleted")]
+    if not displayed_lab_presets(remaining):
+        return False, ("This is the last lab the selector can show, so it cannot be deleted. "
+                       "Add another lab first."), presets, selected_lab
+    for preset in presets:
+        if preset["id"] == str(lab_id):
+            preset["deleted"] = True
+            break
+    next_selected = selected_lab
+    if str(selected_lab) == str(lab_id):
+        shown = displayed_lab_presets(remaining)
+        next_selected = shown[0]["id"] if shown else remaining[0]["id"]
+    return True, "Deleted the lab %r." % target["name"], presets, next_selected
+
+
 # ---------------------------------------------------------------------------
 # Postgres admin config (Feature 2/4), used ONLY to create databases, never as
 # launch environment variables. Stored, like lab presets, in the store's extra.
@@ -3373,6 +3483,11 @@ def normalize_database_entry(raw):
         "created": str(raw.get("created", "") or ""),
         "builtin": False,
         "db_mode": DB_MODE_CUSTOM,
+        # Soft-delete flag: a deleted entry stays in the store JSON (recoverable
+        # by hand-editing) but is hidden from every app UI list. It NEVER means
+        # the underlying Postgres database was touched -- only the launcher's
+        # record of it is hidden. See soft_delete_database.
+        "deleted": bool(raw.get("deleted", False)),
     }
     for key in DATABASE_CONN_KEYS:
         entry[key] = str(raw.get(key, "") or "")
@@ -3384,6 +3499,10 @@ def normalize_database_entry(raw):
 def known_databases_from_store(extra):
     """The custom databases saved in the store (the append-only registry),
     normalized and in registry (insertion) order. Never includes the built-ins.
+
+    Soft-deleted entries (``deleted`` True) are skipped, so they vanish from
+    every UI list and picker while remaining in the store JSON (recoverable by
+    hand-editing). See soft_delete_database.
     """
     raw = (extra or {}).get("databases")
     if not isinstance(raw, list):
@@ -3392,7 +3511,7 @@ def known_databases_from_store(extra):
     for item in raw:
         if isinstance(item, dict):
             entry = normalize_database_entry(item)
-            if entry["id"]:
+            if entry["id"] and not entry["deleted"]:
                 out.append(entry)
     return out
 
@@ -3574,6 +3693,41 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
     if default_database_id(extra) == entry["id"]:
         apply_default_database(extra)
     return entry
+
+
+def soft_delete_database(extra, db_id):
+    """Soft-delete a custom database: hide it from the app but KEEP it in the
+    store JSON (recoverable by hand-editing).
+
+    Sets ``deleted`` on the matching registry entry in ``extra["databases"]``,
+    so every UI list (which reads :func:`known_databases_from_store`) skips it.
+    It does NOT touch Postgres or any real database -- it only hides the
+    launcher's record of it. The two built-ins (SQLite / lab-shared) have no
+    registry row, so they cannot be soft-deleted. If the hidden database was the
+    lab-shared default, the default reference is reset to the lab built-in so
+    nothing points at a hidden entry. Mutates ``extra`` in place and returns
+    (ok, message).
+    """
+    if extra is None:
+        raise ValueError("soft_delete_database needs a store `extra` dict to write into")
+    db_id = str(db_id or "").strip()
+    if db_id in (DB_BUILTIN_SQLITE, DB_BUILTIN_LAB):
+        return False, "A built-in database cannot be deleted."
+    stored = extra.get("databases")
+    if not isinstance(stored, list):
+        stored = []
+    for item in stored:
+        if isinstance(item, dict) and str(item.get("id", "")).strip() == db_id:
+            if item.get("deleted"):
+                return False, "That database is already deleted."
+            title = str(item.get("title", "") or item.get("db_name", "") or db_id)
+            item["deleted"] = True
+            extra["databases"] = stored
+            # Never leave the lab-shared default pointing at a hidden entry.
+            if default_database_id(extra) == db_id:
+                set_default_database(extra, DB_BUILTIN_LAB)
+            return True, "Hid the database %r." % title
+    return False, "No database with that id."
 
 
 # -- The lab-shared DEFAULT database (a reference into the one list) ---------
@@ -5030,9 +5184,14 @@ def preflight_check_port(config):
             str(error))
 
     def _in_use(err):
+        # INFORM, never kill: the launcher only starts its own things and never
+        # stops whatever holds the port. The operator chooses a different port or
+        # stops the other server themselves.
         return _preflight_result(
             "port", False,
-            "Port %d is already in use: another server is running." % port,
+            "Port %d is already in use: another study may already be running. "
+            "Choose a different port, or stop that server yourself -- the "
+            "launcher will not stop it for you." % port,
             str(err))
 
     # EACCES is a permission problem (a privileged port), not a TIME_WAIT lag --

@@ -13,7 +13,7 @@ REM  runs it under python.exe in a VISIBLE console window instead, so you can
 REM  watch the server log and CLOSE the console to stop the server (hence "debug").
 REM
 REM  Leave this window open while you work; CLOSING the console stops the server.
-REM  This script lives in "Alternative Launchers\", one level below the repo root,
+REM  This script lives in "alternative_launchers\", one level below the repo root,
 REM  so %~dp0..\ points back at the root; the app code is in app\ and config and
 REM  maps live in data\ at the repo root.
 REM ===========================================================================

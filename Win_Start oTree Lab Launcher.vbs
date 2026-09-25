@@ -8,13 +8,14 @@
 ' window (the "0" in the Run call), so NO black console box is left behind.
 '
 ' Use this .vbs for a clean, no-window start. Use
-' "Alternative Launchers\Win_Start oTree Lab Launcher (debug).bat" instead when
+' "alternative_launchers\debug_Win_Start oTree Lab Launcher.bat" instead when
 ' you want a VISIBLE console to watch the server or close it by hand.
 '
 ' The server keeps running in the background after this script exits; close the
-' browser tab and the server keeps serving. To stop it, use the (debug) .bat in
-' "Alternative Launchers\" (whose console you can close) or end the pythonw.exe
-' task.
+' browser tab and the server shuts itself down within about 12 seconds (it
+' watches for a heartbeat from the open page). To stop it sooner, use the Quit
+' button in the launcher, use the debug .bat in "alternative_launchers\" (whose
+' console you can close), or end the pythonw.exe task.
 '
 ' The script resolves its own folder (the repo root) and runs the app code in
 ' app\ with --browser. Config and maps live in data\ at the repo root. Because

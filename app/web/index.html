@@ -496,6 +496,22 @@ input::placeholder{color:var(--faint)}
 .btn.accent{background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-color:var(--accent-dim);color:var(--accent-on)}
 .btn.accent:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi))}
 .btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+/* SHARED HOLD-TO-DELETE control. Press and hold: a red bar fills left->right
+   over --delete-hold-ms; releasing early snaps it back (cancel); holding the
+   full duration fires the confirm. --delete-hold-ms is SET FROM JS (from the one
+   DELETE_HOLD_MS constant) at boot, so the fill duration and the JS timer always
+   agree. Reused by every delete (custom databases, lab presets, ...). */
+.hold-del{position:relative;overflow:hidden;font-family:inherit;font-size:12.5px;font-weight:500;
+  border:1px solid var(--err);border-radius:var(--r-sm);background:transparent;color:var(--err);
+  padding:8px 15px;cursor:pointer;white-space:nowrap;user-select:none;touch-action:none;
+  transition:background .14s,color .14s}
+.hold-del.tiny{padding:6px 11px;font-size:11.5px;border-radius:var(--r-xs)}
+.hold-del:hover{background:var(--err-soft)}
+.hold-del-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--err);
+  z-index:0;pointer-events:none}
+.hold-del.holding .hold-del-fill{width:100%;transition:width var(--delete-hold-ms,1000ms) linear}
+.hold-del.holding{color:#fff}
+.hold-del-label{position:relative;z-index:1}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
 .link:hover{color:var(--accent)}
@@ -824,6 +840,9 @@ input::placeholder{color:var(--faint)}
 /* lab settings */
 .ls-card{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:15px 16px;margin-bottom:14px}
 .ls-card h4{margin:0 0 3px;font-size:13.5px;font-weight:650;color:var(--text-strong)}
+/* Card header row: title on the left, an action (e.g. Add lab) on the right. */
+.ls-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:3px}
+.ls-card-head h4{margin:0}
 .ls-card .d{margin:0 0 12px;font-size:11.5px;color:var(--faint);line-height:1.5}
 .ls-status{font-size:12px;color:var(--ok);margin-top:9px}
 .ls-status.warn{color:var(--warn)}
@@ -866,6 +885,15 @@ input::placeholder{color:var(--faint)}
 .ls-foot-result.avail{color:var(--accent);font-weight:600}
 .ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
 .ls-foot-link:hover{filter:brightness(1.12)}
+/* the LEFT footer cell holds Launch history + Quit side by side. */
+.ls-foot-left{justify-self:start;display:inline-flex;align-items:center;gap:8px}
+/* the git-aware Update action + the "Run" pill (git pull) it reveals for a git
+   install. Both are small accent pills; the Run pill carries the exact tooltip. */
+.ls-foot-update,.ls-foot-run{font:inherit;font-size:11.5px;font-weight:650;cursor:pointer;
+  border:1px solid var(--accent-dim);border-radius:999px;padding:2px 11px;
+  background:linear-gradient(180deg,var(--accent-hi),var(--accent));color:var(--accent-on)}
+.ls-foot-update:hover,.ls-foot-run:hover{filter:brightness(1.07)}
+.ls-foot-update:disabled,.ls-foot-run:disabled{opacity:.7;cursor:default}
 /* green success tick shown next to "Experiment launched" on the running screen */
 .ok-tick{color:var(--ok);font-weight:800;font-size:14px;margin-right:3px}
 /* Launch-history "DB reset" badge (amber = the database was wiped for that run)
@@ -1474,6 +1502,66 @@ function jsQuote(s){return "'"+String(s==null?"":s).replace(/\\/g,"\\\\").replac
   .replace(/&/g,"&amp;").replace(/"/g,"&quot;")+"'";}
 function togglePw(btn){var i=el(btn.dataset.target);
   if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
+
+/* ============================ HOLD-TO-DELETE ============================
+   ONE shared press-hold delete control, reused everywhere we delete. Press and
+   hold a button; a red bar fills left->right over DELETE_HOLD_MS; releasing
+   early cancels; holding the full duration pops a confirm and, on OK, runs the
+   registered delete handler for the button's kind.
+
+   DELETE_HOLD_MS is the SINGLE place to change the hold duration (a dev/app
+   setting, not user-facing). The matching CSS fill animation reads --delete-hold-ms,
+   which is derived from this same constant at boot (see applyHoldDuration), so
+   the bar and the timer always agree.
+
+   Usage: emit a button with holdDeleteBtn(kind,id[,opts]) inside any modal HTML,
+   and register HOLD_ACTIONS[kind]=function(id){...} for the actual delete. Every
+   modal body is wired automatically by openModal -> wireHoldDeletes. */
+var DELETE_HOLD_MS=1000;              /* hold duration, ms -- change here only */
+var HOLD_ACTIONS={};                  /* kind -> function(id): the delete to run on confirm */
+function applyHoldDuration(){
+  document.documentElement.style.setProperty("--delete-hold-ms",DELETE_HOLD_MS+"ms");
+}
+function holdDeleteBtn(kind,id,opts){
+  opts=opts||{};
+  var label=opts.label||"Delete";
+  var cls="hold-del"+(opts.tiny?" tiny":"");
+  var style=opts.style?(' style="'+opts.style+'"'):"";
+  return '<button type="button" class="'+cls+'"'+style+
+    ' data-hold-kind="'+escapeHtml(kind)+'" data-hold-id="'+escapeHtml(id)+'"'+
+    ' aria-label="Press and hold to delete">'+
+    '<span class="hold-del-fill"></span>'+
+    '<span class="hold-del-label">'+escapeHtml(label)+'</span></button>';
+}
+function wireHoldDeletes(root){
+  if(!root)return;
+  var btns=root.querySelectorAll(".hold-del");
+  for(var i=0;i<btns.length;i++)wireOneHoldDelete(btns[i]);
+}
+function wireOneHoldDelete(btn){
+  if(btn._holdWired)return;btn._holdWired=true;
+  var timer=null,fired=false;
+  function stop(){if(timer){clearTimeout(timer);timer=null;}btn.classList.remove("holding");}
+  function down(e){
+    if(e.button&&e.button!==0)return;   /* left button / touch only */
+    e.preventDefault();fired=false;stop();
+    /* Restart the fill from 0 on every fresh press. */
+    void btn.offsetWidth;btn.classList.add("holding");
+    try{btn.setPointerCapture(e.pointerId);}catch(_){}
+    timer=setTimeout(function(){
+      fired=true;stop();
+      if(window.confirm("Are you sure you want to delete this?")){
+        var fn=HOLD_ACTIONS[btn.getAttribute("data-hold-kind")];
+        if(fn)fn(btn.getAttribute("data-hold-id"));
+      }
+    },DELETE_HOLD_MS);
+  }
+  function release(){if(!fired)stop();}
+  btn.addEventListener("pointerdown",down);
+  btn.addEventListener("pointerup",release);
+  btn.addEventListener("pointerleave",release);
+  btn.addEventListener("pointercancel",release);
+}
 function labById(id){return LAB_BY_ID[id]||null;}
 function currentLab(){if(selectedLabId&&LAB_BY_ID[selectedLabId])return selectedLabId;return LABS.length?LABS[0].id:"";}
 /* The active lab's default room ("study" fallback), used to pin the room picker
@@ -2042,6 +2130,7 @@ function validateProjectPath(){
     if(r.settings){applySettings(r.settings);maybeOfferGetReady(r.settings);}});
 }
 document.addEventListener("DOMContentLoaded",function(){
+  applyHoldDuration();   /* derive the hold-to-delete CSS fill duration from DELETE_HOLD_MS */
   var i=el("projPathInput");
   if(i){
     i.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();validateProjectPath();}});
@@ -2062,6 +2151,7 @@ function openModal(title,html,wide){
   el("infoCard").className="modal-card"+(wide?" wide":"");
   el("infoCard").style.transform="";   /* clear any get-ready expand offset from a prior open */
   el("modalTitle").textContent=title;el("modalBody").innerHTML=html;el("infoModal").hidden=false;
+  wireHoldDeletes(el("modalBody"));   /* activate any hold-to-delete buttons in this modal */
 }
 function closeModal(){el("infoModal").hidden=true;}
 document.addEventListener("keydown",function(e){
@@ -2394,10 +2484,13 @@ function lsCustomDbRows(){
   if(!list||!list.length)return '<p class="d" style="margin:0">No custom databases yet.</p>';
   return list.map(function(e){
     var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
-    /* Feature 2: each registered database is EDITABLE right here. */
+    /* Feature 2: each registered database is EDITABLE right here, and can be
+       soft-deleted (hidden from the app, kept in the store JSON) with the shared
+       hold-to-delete control. */
     return '<div style="padding:3px 0;display:flex;align-items:center;gap:8px">'+
       '<span style="flex:1;min-width:0">'+escapeHtml(e.title)+grey+'</span>'+
-      '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(e.id)+'\')">Edit</button></div>';
+      '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(e.id)+'\')">Edit</button>'+
+      holdDeleteBtn("db",e.id,{tiny:true})+'</div>';
   }).join("");
 }
 /* The selected default's one-line summary + an Edit button (Feature 2): even the
@@ -2457,6 +2550,23 @@ function doEditDb(id,isLab){
     }else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not save the database.";}el("edbSave").textContent="Save";}
   });
 }
+/* SOFT-delete a custom database (shared hold-to-delete confirm handler). Marks
+   the entry deleted in the store JSON so it vanishes from the app UI but stays
+   recoverable by hand-editing; never touches Postgres or any real database. */
+function doDeleteCustomDb(id){
+  if(!NATIVE||!API){window.pywStatus("","Deleting a database works in the app, not the static preview.");return;}
+  API.delete_database(id).then(function(r){
+    if(r&&r.ok){
+      if(r.databases)DATABASES=r.databases;
+      if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
+      if(r.default_database)defaultDatabase=r.default_database;
+      refreshDbSummary();refreshUrl();
+      openLabSettings();       /* repaint Lab Settings without the hidden entry */
+      window.pywStatus("ok",r.message||"Database hidden.");
+    }else{window.pywStatus("err",(r&&r.message)||"Could not delete the database.");}
+  });
+}
+HOLD_ACTIONS.db=doDeleteCustomDb;
 /* The lab-shared-default picker rows: one radio per selectable database (the lab
    built-in + every custom DB), the current default checked. Mirror of the Tk
    _build_default_db_card radio list. */
@@ -2487,8 +2597,7 @@ function openLabSettings(){
     return '<tr><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.ip||p.host||"")+'</td><td class="c">'+(p.seats?p.seats.length:0)+
       '</td><td class="c"><span class="shown-toggle'+(p.display===false?" off":"")+'" onclick="toggleLabShown(\''+pid+'\')">'+(p.display===false?"–":"✓")+'</span></td>'+
       '<td class="c"><button class="btn tiny" onclick="labPresetEdit(\''+pid+'\')">Edit</button> '+
-      '<button class="btn tiny" onclick="askHotkeyThenExport(\''+pid+'\')">Export PC shortcuts</button> '+
-      '<button class="btn tiny" onclick="deleteLabPreset(\''+pid+'\')">Delete</button></td></tr>';
+      '<button class="btn tiny" onclick="askHotkeyThenExport(\''+pid+'\')">Export PC shortcuts</button></td></tr>';
   }).join("");
   openModal("Settings",
     /* Sticky header: the title + an X close that STAYS FIXED at the top while the
@@ -2506,15 +2615,21 @@ function openLabSettings(){
       '<p class="d">Sets the machine’s lab (saved to lab.local) and shows only that lab in the main selector. No file editing needed.</p>'+
       '<div class="mfield" style="grid-template-columns:110px 1fr auto"><label>This computer</label>'+
       '<select id="lsMarker">'+opts+'</select><button class="btn" onclick="makeThisTheLab()">Make this the lab</button></div>'+
-      '<div class="ls-status'+(marker?"":" warn")+'" id="lsIdentityStatus">'+(marker?("This computer is set to "+escapeHtml(markerName)+"."):"Not set yet: pick this computer’s lab.")+'</div></div>'+
-    '<div class="ls-card"><h4>Lab presets</h4>'+
+      '<div class="ls-status'+(marker?"":" warn")+'" id="lsIdentityStatus">'+(marker?("This computer is set to "+escapeHtml(markerName)+"."):"Not set yet: pick this computer’s lab.")+'</div>'+
+      /* View settings.py block lives here now (moved out of the Lab shared default
+         database section): a lab machine wires a project into the lab by pasting
+         this block, so it belongs with the machine's lab identity. Behaviour is
+         unchanged -- same viewBlock() viewer. */
+      '<button class="btn" style="margin-top:12px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
+    /* Add lab sits in the card HEADER, just to the right of the title -- the
+       action that adds to this list lives with the list. Delete moved OUT of the
+       table rows and INTO the preset Edit view (a hold-to-delete). */
+    '<div class="ls-card"><div class="ls-card-head"><h4>Lab presets</h4>'+
+      '<button class="btn tiny" onclick="labPresetEdit(null)">Add lab</button></div>'+
       '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Labs are seeded from lab_info.json.</p>'+
       '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
       '<p class="ls-tip">Tip: click a lab’s ✓ / – in the Shown column to show or hide it.</p>'+
-      '<div class="ls-status" id="lsLabStatus"></div>'+
-      /* Add lab lives INSIDE the presets card (bottom), so it sits WITH the
-         presets it adds to -- not stranded below Launch history. */
-      '<button class="btn" style="margin-top:10px" onclick="labPresetEdit(null)">Add lab</button></div>'+
+      '<div class="ls-status" id="lsLabStatus"></div></div>'+
     /* Database section, part 2: the whole global registry of custom databases,
        each with its creator researcher (grey). Add here; edit/remove is a
        future idea (append-only). Mirror of the Tk _build_custom_db_card. */
@@ -2536,8 +2651,7 @@ function openLabSettings(){
     '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
       '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
       lsDefaultDbSummary()+
-      lsDefaultDbRows()+
-      '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
+      lsDefaultDbRows()+'</div>'+
     /* Appearance LAST, just above the footer (moved here; contents unchanged). */
     '<div class="ls-card"><h4>Appearance</h4>'+
       '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
@@ -2561,11 +2675,14 @@ function openLabSettings(){
        (version_info -> core.check_for_update). */
     '<div class="ls-foot" id="lsFoot">'+
       '<div class="ls-foot-bar">'+
-        '<button class="btn ls-foot-hist" onclick="openLaunchHistory()">Launch history</button>'+
+        '<div class="ls-foot-left">'+
+          '<button class="btn ls-foot-hist" onclick="openLaunchHistory()">Launch history</button>'+
+          '<button class="btn" onclick="quitLauncher()">Quit launcher</button>'+
+        '</div>'+
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.1.1</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.2.0</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -2600,11 +2717,108 @@ function loadSettingsVersion(){
 }
 /* The update-available message shown in the footer's right slot (shared by the
    on-open surfacing and the on-demand check). Names the remote version when
-   known and points at "git pull" plus the GitHub page. */
+   known and offers an Update button; pressing it decides the update path (git
+   pull vs GitHub download) based on how this copy was installed. */
 function updateAvailHTML(up){
-  var extra=up&&up.remote_version?(" ("+up.remote_version+")"):"";
-  return "Update available"+escapeHtml(extra)+". Run <code>git pull</code>, or open the "+
-    '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub page</a>.';
+  var extra=up&&up.remote_version?(" ("+escapeHtml(up.remote_version)+")"):"";
+  return "Update available"+extra+". "+
+    '<button class="ls-foot-update" id="lsUpdateBtn" onclick="startUpdate()">Update</button>';
+}
+/* The public repo download link (blue), shown only for a NON-git install. */
+function githubLinkHTML(){
+  return 'See <a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" '+
+    'target="_blank" rel="noopener">GitHub</a>.';
+}
+/* Pressing Update: check whether THIS install is a git working tree, then branch.
+   git install  -> reveal a "Run" pill (git pull) with the exact hover tooltip,
+                   and show NO GitHub link.
+   not a git repo -> show "Update available. See GitHub" with the repo URL as a
+                   blue link, and NO Run pill. */
+function startUpdate(){
+  var res=el("lsCheckResult");if(!res)return;
+  if(!NATIVE||!API||!API.git_repo_status){
+    res.className="ls-foot-result avail";res.innerHTML="Update available. "+githubLinkHTML();
+    return;
+  }
+  var btn=el("lsUpdateBtn");if(btn){btn.disabled=true;btn.textContent="Checking…";}
+  API.git_repo_status().then(function(r){
+    res.className="ls-foot-result avail";
+    if(r&&r.is_git_repo){
+      /* git install: one-click Run (git pull). Tooltip text is EXACT. No GitHub link. */
+      res.innerHTML='Update available. '+
+        '<button class="ls-foot-run" id="lsRunBtn" title="This will run git pull to update the project." '+
+        'onclick="runGitPull()">Run</button>';
+    }else{
+      /* not a git install: point at the GitHub download page. No Run pill. */
+      res.innerHTML="Update available. "+githubLinkHTML();
+    }
+  });
+}
+/* Clicking Run: execute git pull on the install, show the captured output, then a
+   confirmation popup ("Update installed. Restart the launcher to apply."). */
+function runGitPull(){
+  var res=el("lsCheckResult"),btn=el("lsRunBtn");
+  if(!NATIVE||!API||!API.run_git_pull)return;
+  if(btn){btn.disabled=true;btn.textContent="Running…";}
+  API.run_git_pull().then(function(r){
+    r=r||{};
+    if(res){
+      res.className="ls-foot-result"+(r.ok?" ok":"");
+      res.textContent=r.message||(r.ok?"Done.":"git pull failed.");
+    }
+    var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
+    if(r.ok){
+      /* On success the server relaunches itself and shuts down; a fresh window/tab
+         opens on the new version, so there is no manual restart. */
+      var line=r.relaunching
+        ?"Updated, restarting the launcher (a fresh window/tab opens on the new version)."
+        :"Update installed. Restart the launcher to apply.";
+      openModal("Update installed",
+        '<p class="modal-desc">'+escapeHtml(line)+'</p>'+out+
+        '<div class="cta"><button class="btn accent" onclick="closeModal()">OK</button></div>',true);
+    }else{
+      openModal("Update did not complete",
+        '<p class="modal-desc">'+escapeHtml(r.message||"git pull failed.")+'</p>'+out+
+        '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
+    }
+  });
+}
+/* Explicit clean shutdown of the launcher's OWN web-UI server (the Quit button).
+   Stops ONLY the launcher process; a running study keeps running untouched (the
+   launcher never stops an experiment). Same clean shutdown the heartbeat loss
+   triggers when the tab is closed. */
+function quitLauncher(){
+  if(!NATIVE||!API||!API.quit){window.pywStatus("","Quit works in the app, not the static preview.");return;}
+  API.quit();
+  try{window.close();}catch(e){}
+  openModal("Launcher closed",
+    '<p class="modal-desc">The launcher has been shut down. Any study you already launched keeps running; the launcher never stops it. You can close this tab now.</p>',false);
+}
+/* Browser-mode liveness heartbeat: POST /api/heartbeat about every 1.5s so the
+   server knows the tab is still open. When the beats stop the server shuts ITSELF
+   down within about 4 seconds (roughly two missed beats). A CLEAN tab-close also
+   fires an instant /api/quit beacon below, so the watchdog is only the fallback
+   for a crash / sleep / lost network. Browser mode only (the pywebview window
+   ends the process by its own close). */
+function startHeartbeat(){
+  if(!BROWSER||!API||!API.heartbeat)return;
+  try{API.heartbeat();}catch(e){}
+  setInterval(function(){ if(API&&API.heartbeat){try{API.heartbeat();}catch(e){}} },1500);
+  /* Instant clean shutdown on a real tab close / navigation away. sendBeacon is
+     delivered even as the page unloads; it cannot set custom headers, so the
+     per-run token rides in the query string (the server also accepts it there for
+     this beacon). This stops the launcher's OWN server at once; it never touches
+     any oTree/experiment process. */
+  var quitBeacon=function(){
+    try{
+      if(navigator.sendBeacon){
+        var body=new Blob(["[]"],{type:"application/json"});
+        navigator.sendBeacon("/api/quit?token="+encodeURIComponent(window.__LAUNCHER_TOKEN__||""),body);
+      }
+    }catch(e){}
+  };
+  window.addEventListener("pagehide",quitBeacon);
+  window.addEventListener("beforeunload",quitBeacon);
 }
 /* ON-DEMAND update check, run from the subtle "Update?" text-link in the Lab
    Settings footer. The auto-check only runs on Settings open, at most once a day;
@@ -2703,7 +2917,13 @@ function labPresetEdit(id){
     '<div class="mfield"><label>Columns (optional)</label><input id="lpCols" type="text" placeholder="blank = auto" style="max-width:140px" value="'+escapeHtml(cols)+'"></div>'+
     '<label class="chk" style="margin:6px 0 2px"><input type="checkbox" id="lpMakeShortcuts"> Create participant-PC shortcuts (a folder of per-seat kiosk .lnk files)</label>'+
     '<div class="ls-status" id="lpStatus"></div>'+
-    '<div class="cta"><button class="btn" onclick="cancelLabPreset()">Cancel</button><button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
+    /* Delete lives ONLY here, inside Edit (removed from the table rows). It is
+       the shared hold-to-delete; margin-right:auto pushes it to the far left so
+       Cancel/Save stay on the right. Add-a-lab (id null) shows no delete. */
+    '<div class="cta">'+
+      (id?holdDeleteBtn("preset",id,{style:"margin-right:auto"}):"")+
+      '<button class="btn" onclick="cancelLabPreset()">Cancel</button>'+
+      '<button class="btn accent" onclick="saveLabPreset('+(id?("\'"+escapeHtml(id)+"\'"):"null")+')">Save</button></div>',true);
 }
 function saveLabPreset(id){
   var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
@@ -2780,17 +3000,23 @@ function exportPcShortcuts(id,hotkeyKey){
      {pending:true} and pushes the result through window.pywOnShortcutsResult. */
   API.export_pc_shortcuts(id,hotkeyKey||"").then(function(r){if(r&&r.pending)return;pcShortcutsResult(r);});
 }
+/* SOFT-delete a lab preset (shared hold-to-delete confirm handler, run only from
+   the preset Edit view now). The backend flags the preset deleted so it is hidden
+   from the UI but stays in presets.json (recoverable by hand-editing). The
+   hold-to-delete control already confirmed, so there is no extra confirm here. On
+   success the Edit modal is replaced by a repainted Lab Settings. */
 function deleteLabPreset(id){
-  var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];var nm=p?p.name:id;
-  if(!NATIVE||!API){var s=el("lsLabStatus");if(s){s.className="ls-status warn";s.textContent="Deleting labs works in the app, not the static preview.";}return;}
-  if(!confirm("Delete the lab \""+nm+"\"? This cannot be undone."))return;
+  if(!NATIVE||!API){window.pywStatus("warn","Deleting labs works in the app, not the static preview.");return;}
   API.delete_lab(id,selectedLabId,currentLab()).then(function(r){
     if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
       if(r.next_selected&&(selectedLabId===id))selectLab(r.next_selected);
-      openLabSettings();var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Deleted.";}}
-    else{var s2=el("lsLabStatus");if(s2){s2.className="ls-status warn";s2.textContent=(r&&r.message)||"Could not delete the lab.";}}
+      openLabSettings();
+      var s=el("lsLabStatus");if(s){s.className="ls-status";s.textContent=r.message||"Deleted.";}
+      window.pywStatus("ok",r.message||"Lab hidden.");}
+    else{window.pywStatus("err",(r&&r.message)||"Could not delete the lab.");}
   });
 }
+HOLD_ACTIONS.preset=deleteLabPreset;
 
 /* ======================================================================
    FIRST-RUN "which lab is this computer in?"
@@ -3685,7 +3911,7 @@ function hideBrowseButtons(){
 }
 function bootBrowser(){
   if(booted)return;booted=true;NATIVE=true;BROWSER=true;
-  API=makeHttpApi();startEventStream();clearPreviewContent();
+  API=makeHttpApi();startEventStream();startHeartbeat();clearPreviewContent();
   API.get_initial_state().then(function(state){initNative(state);hideBrowseButtons();});
 }
 window.addEventListener("pywebviewready",bootNative);

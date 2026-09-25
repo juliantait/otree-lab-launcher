@@ -25,7 +25,7 @@ Once cloned, updating is super easy: just run `git pull` in the folder to get th
 
 Prefer a desktop icon? Run `Mac_Create desktop shortcut.command` / `Win_Create desktop shortcut.bat` once to drop a branded shortcut on your Desktop that points at it.
 
-(There are a few other variants in `Alternative Launchers/` for troubleshooting or preference - see [Alternative launchers](#alternative-launchers) at the bottom. Most people never need them.)
+(There are a few other variants in `alternative_launchers/` for troubleshooting or preference - see [Alternative launchers](#alternative-launchers) at the bottom. Most people never need them.)
 
 ## Quick start
 
@@ -53,11 +53,11 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
   Win_Start oTree Lab Launcher.vbs                       (default/browser, Windows, windowless)
   Mac_Create desktop shortcut.command                   (make a Desktop shortcut, macOS)
   Win_Create desktop shortcut.bat                        (make a Desktop shortcut, Windows)
-  Alternative Launchers/
+  alternative_launchers/
     Mac_Start oTree Lab Launcher (simple).command       (Simple/Tk, macOS)
     Win_Start oTree Lab Launcher (simple).vbs           (Simple/Tk, Windows, windowless)
-    Win_Start oTree Lab Launcher (simple, debug).bat    (Simple/Tk, Windows, visible console)
-    Win_Start oTree Lab Launcher (debug).bat            (default/browser, Windows, visible console)
+    debug_Win_Start oTree Lab Launcher (simple).bat     (Simple/Tk, Windows, visible console)
+    debug_Win_Start oTree Lab Launcher.bat              (default/browser, Windows, visible console)
   app/    the app code (and app/branding/ logo files)
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```
@@ -137,8 +137,8 @@ You can save a config per study. A saved config relaunches the study in one clic
 
 ## Alternative launchers
 
-For normal use, ignore this section: the default browser launcher at the folder root (`Win_Start oTree Lab Launcher.vbs` / `Mac_Start oTree Lab Launcher.command`) is the one everyone should use. The variants below live in `Alternative Launchers/` and exist only for troubleshooting or personal preference. All of them run the same app code in `app/`.
+For normal use, ignore this section: the default browser launcher at the folder root (`Win_Start oTree Lab Launcher.vbs` / `Mac_Start oTree Lab Launcher.command`) is the one everyone should use. The variants below live in `alternative_launchers/` and exist only for troubleshooting or personal preference. All of them run the same app code in `app/`.
 
 - **`(simple)`** - `Mac_Start oTree Lab Launcher (simple).command` / `Win_Start oTree Lab Launcher (simple).vbs`. The standard-library **Tkinter** launcher (a native window instead of the browser). Handy if you would rather not use a browser tab.
-- **`(debug)`** - `Win_Start oTree Lab Launcher (debug).bat` (Windows). The default browser launcher, but run in a **visible console** so you can watch the server log and see any crash on screen. The window stays open on exit so errors are readable.
-- **`(simple, debug)`** - `Win_Start oTree Lab Launcher (simple, debug).bat` (Windows). The same, for the simple/Tk launcher.
+- **`debug_`** - `debug_Win_Start oTree Lab Launcher.bat` (Windows). The default browser launcher, but run in a **visible console** so you can watch the server log and see any crash on screen. The window stays open on exit so errors are readable.
+- **`debug_ (simple)`** - `debug_Win_Start oTree Lab Launcher (simple).bat` (Windows). The same, for the simple/Tk launcher.

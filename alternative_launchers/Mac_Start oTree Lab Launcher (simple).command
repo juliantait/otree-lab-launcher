@@ -3,7 +3,7 @@
 # If double-clicking does nothing, run:
 #   chmod +x "Mac_Start oTree Lab Launcher (simple).command"
 #
-# This script lives in "Alternative Launchers/", one level below the repo root,
+# This script lives in "alternative_launchers/", one level below the repo root,
 # so it goes up one folder to reach app/ (and data/).
 
 cd "$(dirname "$0")/.." || exit 1

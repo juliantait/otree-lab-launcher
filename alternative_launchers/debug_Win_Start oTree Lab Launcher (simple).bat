@@ -7,7 +7,7 @@ REM  Tk launcher under pythonw.exe with a HIDDEN window (no console). THIS .bat
 REM  instead runs it under python.exe in a VISIBLE console window, so you can
 REM  watch the logs and see any crash on screen (hence "debug").
 REM
-REM  This script lives in "Alternative Launchers\", one level below the repo root,
+REM  This script lives in "alternative_launchers\", one level below the repo root,
 REM  so %~dp0..\ points back at the root; the app code is in app\ and your config
 REM  and maps live in data\ at the repo root. If the app fails, the console stays
 REM  open (pause below) so the error is readable, and there is also a crash log at
