@@ -2,6 +2,16 @@
 
 **Make any working oTree project run in your lab with one click.** Point it at your project and it wires up Postgres, per-seat participant links, and the experiment room, then starts the server ready for participants.
 
+## Install
+
+Clone the repo:
+
+```
+git clone https://github.com/juliantait/otree-lab-launcher.git
+```
+
+Once cloned, updating is super easy: just run `git pull` in the folder to get the latest version. See [Updating](#updating) below.
+
 ## What it does
 
 - **Select your database once.** Postgres, wired for you: the launcher builds the `DATABASE_URL` and hands it to oTree.
@@ -52,9 +62,19 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```
 
-**Updating.** Copy the new version over the top and keep your `data/` folder. Labs, saved configs, the database registry and this machine's identity all carry over.
-
 **Requirements.** Python 3 (the Simple app uses the standard-library `tkinter`). Your oTree project, runnable with `otree`. To use the create-a-database button: PostgreSQL reachable from the machine and `psycopg2` (`pip install psycopg2-binary`); an existing database needs only its connection details.
+
+## Updating
+
+If you cloned the repo, run `git pull` in the folder:
+
+```
+git pull
+```
+
+That fetches the latest version and leaves your own `data/` config untouched: your `lab_info.json`, `presets.json`, saved shortcuts, the database registry and this machine's identity all carry over.
+
+If you did not clone, you can instead download the repo and drop the `app/` folder over your existing one. But cloning once and using `git pull` is the recommended and easiest way to stay up to date.
 
 ---
 

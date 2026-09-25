@@ -837,19 +837,17 @@ input::placeholder{color:var(--faint)}
 .shown-toggle{cursor:pointer;color:var(--ok);font-weight:700;display:inline-block;box-sizing:border-box;min-width:52px;padding:8px 14px;margin:-8px 0;border-radius:4px;text-align:center;line-height:1}
 .shown-toggle.off{color:var(--faint)}
 .ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
-/* Lab Settings page footer bar: a SYMMETRIC 3-part bar. LEFT the Launch history
-   button, RIGHT the panel Close button, and CENTRED between them the identity on
-   two lines (name; then version + a subtle "Update?" text-link inline after a
-   dash). The 1fr / auto / 1fr grid keeps the centre block truly centred while
-   the two buttons stay balanced at the edges. The update RESULT / nudge lines
-   drop in below only when the check runs. */
+/* Lab Settings page footer bar: a SYMMETRIC 3-part SINGLE-ROW bar. LEFT the
+   Launch history button, CENTRED the identity on two lines (name; then version +
+   a subtle "Update?" text-link inline after a dash), and RIGHT the update-check
+   result as plain text (symmetric to the Launch history button). The
+   1fr / auto / 1fr grid keeps the centre block truly centred while the left
+   button and the right result stay balanced at the edges. The result renders IN
+   the right column, so the footer never grows downward when it appears. */
 .ls-foot{margin:16px 2px 2px;padding-top:13px;border-top:1px solid var(--line-soft);
   font-size:12px;color:var(--faint);line-height:1.55}
 .ls-foot-bar{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px}
 .ls-foot-hist{justify-self:start}
-/* empty right 1fr column: balances the left button so the centre block sits
-   dead-centre of the whole footer (the Close button moved to the header X). */
-.ls-foot-spacer{justify-self:end}
 .ls-foot-id{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center}
 .ls-foot-verline{display:inline-flex;align-items:baseline;gap:2px}
 .ls-foot-dash{color:var(--faint)}
@@ -861,12 +859,11 @@ input::placeholder{color:var(--faint)}
   color:var(--faint);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .ls-foot-check:hover{color:var(--muted)}
 .ls-foot-check:disabled{cursor:default;text-decoration:none;color:var(--faint);opacity:.7}
-.ls-foot-result{margin-top:9px;font-size:12px;color:var(--muted);text-align:right}
+/* the update-check RESULT, in the RIGHT 1fr column. Right-aligned plain text; it
+   shares the bar's single row and does not add height (empty when idle). */
+.ls-foot-result{justify-self:end;text-align:right;font-size:12px;color:var(--muted)}
 .ls-foot-result.ok{color:var(--ok)}
 .ls-foot-result.avail{color:var(--accent);font-weight:600}
-.ls-foot-upd{margin-top:7px;text-align:right}
-.ls-foot-badge{color:var(--accent);font-weight:600}
-.ls-foot-txt{color:var(--muted)}
 .ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
 .ls-foot-link:hover{filter:brightness(1.12)}
 /* green success tick shown next to "Experiment launched" on the running screen */
@@ -2501,38 +2498,15 @@ function openLabSettings(){
     '<div class="settings-head"><h3 class="settings-title">Settings</h3>'+
       '<button class="settings-x" onclick="closeModal()" aria-label="Close">&times;</button></div>'+
     '<div class="settings-content">'+
-    '<div class="ls-card"><h4>Appearance</h4>'+
-      '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
-      '<div class="mfield" style="grid-template-columns:110px 1fr"><label>Theme</label>'+
-      '<select id="lsTheme" onchange="applyTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option></select></div></div>'+
+    /* Section order (top -> bottom): Which lab, Lab presets, Custom databases,
+       Postgres admin, Lab shared default, then Appearance LAST just above the
+       footer. Appearance is the theme control; its contents/behaviour are
+       unchanged, only its DOM position. */
     '<div class="ls-card"><h4>Which lab is this computer</h4>'+
       '<p class="d">Sets the machine’s lab (saved to lab.local) and shows only that lab in the main selector. No file editing needed.</p>'+
       '<div class="mfield" style="grid-template-columns:110px 1fr auto"><label>This computer</label>'+
       '<select id="lsMarker">'+opts+'</select><button class="btn" onclick="makeThisTheLab()">Make this the lab</button></div>'+
       '<div class="ls-status'+(marker?"":" warn")+'" id="lsIdentityStatus">'+(marker?("This computer is set to "+escapeHtml(markerName)+"."):"Not set yet: pick this computer’s lab.")+'</div></div>'+
-    '<div class="ls-card"><h4>Postgres admin (used only to create databases)</h4>'+
-      '<p class="d">Only used by “Create a new database”. Never used to launch.</p>'+
-      '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
-      '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
-      '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
-      '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
-      '<div class="ls-status" id="pgStatus">Saved automatically.</div></div>'+
-    /* Database section, part 2: the whole global registry of custom databases,
-       each with its creator researcher (grey). Add here; edit/remove is a
-       future idea (append-only). Mirror of the Tk _build_custom_db_card. */
-    '<div class="ls-card"><h4>Custom databases</h4>'+
-      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
-      '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
-      '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
-    /* Database section, part 3: WHICH database is the lab-shared default. It is
-       a REFERENCE to one entry in the one database list above -- the setup-wizard
-       DB, or any custom DB made later -- chosen by selecting it, not by re-typing
-       credentials. Mirror of the Tk _build_default_db_card. */
-    '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
-      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
-      lsDefaultDbSummary()+
-      lsDefaultDbRows()+
-      '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
     '<div class="ls-card"><h4>Lab presets</h4>'+
       '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Labs are seeded from lab_info.json.</p>'+
       '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
@@ -2541,6 +2515,34 @@ function openLabSettings(){
       /* Add lab lives INSIDE the presets card (bottom), so it sits WITH the
          presets it adds to -- not stranded below Launch history. */
       '<button class="btn" style="margin-top:10px" onclick="labPresetEdit(null)">Add lab</button></div>'+
+    /* Database section, part 2: the whole global registry of custom databases,
+       each with its creator researcher (grey). Add here; edit/remove is a
+       future idea (append-only). Mirror of the Tk _build_custom_db_card. */
+    '<div class="ls-card"><h4>Custom databases</h4>'+
+      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
+      '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
+      '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
+    '<div class="ls-card"><h4>Postgres admin (used only to create databases)</h4>'+
+      '<p class="d">Only used by “Create a new database”. Never used to launch.</p>'+
+      '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
+      '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
+      '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
+      '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
+      '<div class="ls-status" id="pgStatus">Saved automatically.</div></div>'+
+    /* Database section, part 3: WHICH database is the lab-shared default. It is
+       a REFERENCE to one entry in the custom-databases list above -- the
+       setup-wizard DB, or any custom DB made later -- chosen by selecting it, not
+       by re-typing credentials. Mirror of the Tk _build_default_db_card. */
+    '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
+      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
+      lsDefaultDbSummary()+
+      lsDefaultDbRows()+
+      '<button class="btn" style="margin-top:10px" onclick="viewBlock()">View settings.py block&hellip;</button></div>'+
+    /* Appearance LAST, just above the footer (moved here; contents unchanged). */
+    '<div class="ls-card"><h4>Appearance</h4>'+
+      '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
+      '<div class="mfield" style="grid-template-columns:110px 1fr"><label>Theme</label>'+
+      '<select id="lsTheme" onchange="applyTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option></select></div></div>'+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
        has NO Close button (avoids two closes). LEFT is the read-only Launch
@@ -2548,12 +2550,15 @@ function openLabSettings(){
        viewer). CENTRED dead-centre of the WHOLE footer width is the identity
        block on TWO lines: line 1 the name, line 2 the version + a subtle
        "Update?" text-link inline after a dash. The 1fr / auto / 1fr grid keeps
-       that block centred on the footer regardless of the left button width (the
-       right 1fr column is intentionally empty for balance). When a newer release
-       is RECORDED (persisted; visible even offline) a small "new version
-       available" note plus the upgrade text with the word GitHub as a BLUE
-       clickable link drops in below. The check runs on Settings OPEN, at most
-       once a day (version_info -> core.check_for_update). */
+       that block centred on the footer regardless of the left button width. The
+       RIGHT 1fr column holds the update-check RESULT as plain text (symmetric to
+       the Launch history button on the left): green "You are up to date" when
+       current, or the update-available text (with GitHub as a BLUE clickable
+       link) otherwise. It stays on the SAME single row -- the footer never grows
+       downward when the result appears. The check runs on Settings OPEN (which
+       surfaces an available update in that same right slot) and again on demand
+       from the Update? link, at most once a day
+       (version_info -> core.check_for_update). */
     '<div class="ls-foot" id="lsFoot">'+
       '<div class="ls-foot-bar">'+
         '<button class="btn ls-foot-hist" onclick="openLaunchHistory()">Launch history</button>'+
@@ -2565,14 +2570,7 @@ function openLabSettings(){
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
         '</div>'+
-        '<span class="ls-foot-spacer" aria-hidden="true"></span>'+
-      '</div>'+
-      '<div class="ls-foot-result" id="lsCheckResult" hidden></div>'+
-      '<div class="ls-foot-upd" id="lsFootUpd" hidden>'+
-        '<span class="ls-foot-badge" id="lsFootBadge">new version available</span> '+
-        '<span class="ls-foot-txt">Download the app folder from '+
-          '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub</a>'+
-          ' and replace the app folder - keep your data.</span>'+
+        '<div class="ls-foot-result" id="lsCheckResult" role="status" aria-live="polite"></div>'+
       '</div>'+
     '</div>'+
     '</div>',true);   /* close .settings-content */
@@ -2594,40 +2592,41 @@ function loadSettingsVersion(){
   API.version_info().then(function(r){
     if(!r||!r.ok)return;
     if(ver)ver.textContent="version "+(r.version||"");
-    var up=r.update||{},box=el("lsFootUpd");
-    if(box&&up.update_available){
-      var badge=el("lsFootBadge");
-      if(badge){var extra=up.remote_version?(" ("+up.remote_version+")"):"";badge.textContent=(up.label||"new version available")+extra;}
-      box.hidden=false;
-    }
+    /* surface an already-recorded update in the SAME right-column slot; when
+       current, leave the slot empty (the "up to date" line only shows on click). */
+    var up=r.update||{},res=el("lsCheckResult");
+    if(res&&up.update_available){res.className="ls-foot-result avail";res.innerHTML=updateAvailHTML(up);}
   });
+}
+/* The update-available message shown in the footer's right slot (shared by the
+   on-open surfacing and the on-demand check). Names the remote version when
+   known and points at "git pull" plus the GitHub page. */
+function updateAvailHTML(up){
+  var extra=up&&up.remote_version?(" ("+up.remote_version+")"):"";
+  return "Update available"+escapeHtml(extra)+". Run <code>git pull</code>, or open the "+
+    '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub page</a>.';
 }
 /* ON-DEMAND update check, run from the subtle "Update?" text-link in the Lab
    Settings footer. The auto-check only runs on Settings open, at most once a day;
-   this forces a live check NOW and shows the result inline. Reuses the SAME
+   this forces a live check NOW and shows the result as plain text in the footer's
+   RIGHT column (never below -- the footer stays a single row). Reuses the SAME
    Python logic (core.check_for_update) via version_info(force=true) -- no new
    endpoint, the decision/comparison stays in Python (re-skin rule). Fail-soft. */
 function checkForUpdateNow(){
   var btn=el("lsCheckBtn"),res=el("lsCheckResult");
   if(!NATIVE||!API||!API.version_info){
-    if(res){res.hidden=false;res.className="ls-foot-result";res.textContent="The update check runs in the app, not the static preview.";}
+    if(res){res.className="ls-foot-result";res.textContent="The update check runs in the app, not the static preview.";}
     return;
   }
   if(btn){btn.disabled=true;btn.textContent="Checking…";}
-  if(res){res.hidden=false;res.className="ls-foot-result";res.textContent="Checking for updates…";}
+  if(res){res.className="ls-foot-result";res.textContent="Checking for updates…";}
   API.version_info(true).then(function(r){          /* force=true => hit the network now */
     if(btn){btn.disabled=false;btn.textContent="Update?";}
     if(!r||!r.ok){if(res){res.className="ls-foot-result";res.textContent="Could not check right now. Try again later.";}return;}
-    var up=r.update||{},box=el("lsFootUpd");
+    var up=r.update||{};
     if(up.update_available){
-      var extra=up.remote_version?(" ("+up.remote_version+")"):"";
-      var badge=el("lsFootBadge");if(badge)badge.textContent=(up.label||"new version available")+extra;
-      if(box)box.hidden=false;                       /* keep the persisted nudge in sync */
-      if(res){res.className="ls-foot-result avail";
-        res.innerHTML="Update available"+escapeHtml(extra)+". Download from "+
-          '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub</a>.';}
+      if(res){res.className="ls-foot-result avail";res.innerHTML=updateAvailHTML(up);}
     }else{
-      if(box)box.hidden=true;
       if(res){res.className="ls-foot-result ok";res.textContent="You are up to date (version "+(r.version||"")+").";}
     }
   });
