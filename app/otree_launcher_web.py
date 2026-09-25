@@ -711,6 +711,10 @@ class Api(object):
             # (the lab built-in + every custom DB; SQLite excluded).
             "default_database": core.default_database_id(self.store_extra),
             "default_db_options": core.default_database_options(self.store_extra),
+            # The persisted light/dark theme (data/ui_prefs.json). In browser mode
+            # the served page already applied it pre-paint from an injected marker;
+            # this lets the native pywebview path apply it right after boot too.
+            "theme": core.load_ui_theme(),
         }
 
     @api_call
@@ -1081,20 +1085,36 @@ class Api(object):
         return {"ok": True, "version": core.APP_VERSION}
 
     @api_call
-    def version_info(self):
+    def version_info(self, force=False):
         """The build version + a quiet, fail-soft once-a-day update check (fable
-        review I). Called when Lab Settings is OPENED (not on app launch). The JS
-        only renders what this returns; the network decision and the newer-than
-        comparison stay here in Python (re-skin rule). The result is persisted in
-        data/ by core so the flag reads the stored value and stays visible even
-        offline."""
+        review I). Called when Lab Settings is OPENED (not on app launch), and with
+        ``force=True`` from the on-demand "Check for update" button (which bypasses
+        the once-a-day cache and hits the network now). The JS only renders what
+        this returns; the network decision and the newer-than comparison stay here
+        in Python (re-skin rule). The result is persisted in data/ by core so the
+        flag reads the stored value and stays visible even offline."""
         try:
-            update = core.check_for_update()
+            update = core.check_for_update(force=bool(force))
         except Exception:
             update = {"update_available": False, "current": core.APP_VERSION,
                       "remote_version": "", "label": "", "tooltip": core.UPDATE_TOOLTIP,
                       "repo_url": core.REPO_URL}
         return {"ok": True, "version": core.APP_VERSION, "update": update}
+
+    @api_call
+    def get_theme(self):
+        """The persisted light/dark theme (data/ui_prefs.json). Fail-soft: a
+        missing/broken file returns the 'dark' default."""
+        return {"ok": True, "theme": core.load_ui_theme()}
+
+    @api_call
+    def set_theme(self, theme):
+        """Persist the chosen light/dark theme to a per-user prefs file in data/
+        (ui_prefs.json), so it survives a restart. Needed because in browser mode
+        the page's localStorage is tied to the server PORT, which changes on the
+        next launch; a file in data/ is the durable store. Fail-soft (never raises;
+        the UI has already updated instantly)."""
+        return {"ok": True, "theme": core.save_ui_theme(theme)}
 
     @api_call
     def save_default_db(self, db_id):
@@ -1790,6 +1810,11 @@ class Api(object):
             issue = {"level": "warn", "title": failure.get("message", ""),
                      "hint": str(failure.get("detail", "")),
                      "fix": "", "fix_label": "", "info": "", "rooms": []}
+            # The "no settings.py / not an oTree project" check is a warning (you
+            # CAN still launch), but it is very likely a wrong-folder mistake, so
+            # flag it for RED error styling on the pre-launch screen.
+            if failure.get("kind") == "not_otree":
+                issue["danger"] = True
             # Inline action so the user can resolve it and Launch at once: the
             # page maps 'change_to_sqlite' / 'recheck' / 'pick_room' to a button
             # or (for pick_room) a "Rooms found" selector. Shared with the Tk
@@ -2287,12 +2312,18 @@ WEB_DIR = os.path.join(HERE, "web")
 BROWSER_MODE_MARKER = "<script>window.__LAUNCHER_BROWSER_MODE__=true;</script>"
 
 
-def _browser_mode_marker(token=""):
+def _browser_mode_marker(token="", theme=""):
     """The <head> script the --browser server injects: it flags the page as the
-    plain-browser launcher AND hands it the per-run CSRF-style token the page must
-    echo back on every POST /api (see the origin/token check in the handler)."""
-    return ("<script>window.__LAUNCHER_BROWSER_MODE__=true;"
-            "window.__LAUNCHER_TOKEN__=%s;</script>" % json.dumps(str(token or "")))
+    plain-browser launcher, hands it the per-run CSRF-style token the page must
+    echo back on every POST /api (see the origin/token check in the handler), and
+    hands it the persisted light/dark theme so the head script can apply it BEFORE
+    first paint (no flash; browser-mode localStorage does not survive a new port,
+    so the theme must come from the server)."""
+    parts = ("window.__LAUNCHER_BROWSER_MODE__=true;"
+             "window.__LAUNCHER_TOKEN__=%s;" % json.dumps(str(token or "")))
+    if theme:
+        parts += "window.__LAUNCHER_THEME__=%s;" % json.dumps(str(theme))
+    return "<script>%s</script>" % parts
 
 
 def _index_html_browser_mode(token=""):
@@ -2306,10 +2337,14 @@ def _index_html_browser_mode(token=""):
     """
     with open(INDEX_HTML, "r", encoding="utf-8") as fh:
         html = fh.read()
+    try:
+        theme = core.load_ui_theme()
+    except Exception:
+        theme = ""
     idx = html.find("<head>")
     if idx != -1:
         insert_at = idx + len("<head>")
-        html = html[:insert_at] + "\n" + _browser_mode_marker(token) + html[insert_at:]
+        html = html[:insert_at] + "\n" + _browser_mode_marker(token, theme) + html[insert_at:]
     return html
 
 

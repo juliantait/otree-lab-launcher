@@ -1,14 +1,14 @@
 #!/bin/bash
 # ===================================================================
-#  Create desktop shortcut.command  (macOS)
+#  Mac_Create desktop shortcut.command  (macOS)
 #
 #  Double-click this ONCE from the oTree Lab Launcher folder. It works
 #  out its own location, then creates a proper Finder ALIAS
 #
 #      Start oTree Lab Launcher
 #
-#  on your Desktop, pointing at the web launcher in THIS folder
-#      Mac_Start oTree Lab Launcher (web).command
+#  on your Desktop, pointing at the default launcher in THIS folder
+#      Mac_Start oTree Lab Launcher.command
 #
 #  This mirrors the Windows "Start oTree Lab Launcher.lnk": a real
 #  Finder alias (not an app bundle). Double-clicking it opens the
@@ -21,7 +21,7 @@
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-TARGET="$HERE/Mac_Start oTree Lab Launcher (web).command"
+TARGET="$HERE/Mac_Start oTree Lab Launcher.command"
 DESKTOP="$HOME/Desktop"
 ALIAS_NAME="Start oTree Lab Launcher"
 ALIAS_PATH="$DESKTOP/$ALIAS_NAME"
@@ -33,7 +33,7 @@ echo "  Target   : $TARGET"
 echo
 
 if [ ! -f "$TARGET" ]; then
-  echo "ERROR: cannot find the web launcher next to this file:"
+  echo "ERROR: cannot find the launcher next to this file:"
   echo "       $TARGET"
   echo "Make sure this .command is inside the oTree Lab Launcher folder."
   read -r -p "Press return to close." _
@@ -64,9 +64,9 @@ APPLESCRIPT
 # Optional branding: a Finder alias shows the target's icon (a script icon here).
 # Setting a custom icon on an alias reliably needs resource-fork tools that are
 # not guaranteed present, so we leave the default icon.
-if [ -f "$HERE/branding/logo.icns" ]; then
+if [ -f "$HERE/app/branding/logo.icns" ]; then
   echo "Note: leaving the default alias icon (a custom icon on a Finder alias is"
-  echo "      not set reliably without extra tools; branding/logo.icns unused)."
+  echo "      not set reliably without extra tools; app/branding/logo.icns unused)."
 fi
 
 echo

@@ -11,17 +11,11 @@
 
 ## Which launcher to run
 
-Two versions, same app:
+**Double-click the launcher in the folder root** - `Mac_Start oTree Lab Launcher.command` (macOS) or `Win_Start oTree Lab Launcher.vbs` (Windows). That is the one everyone should use: it opens the app in your default browser, with nothing to install.
 
-- **Simple** - Tkinter launcher.
-- **Web** - a prettier UI over the same app.
+Prefer a desktop icon? Run `Mac_Create desktop shortcut.command` / `Win_Create desktop shortcut.bat` once to drop a branded shortcut on your Desktop that points at it.
 
-Runs on macOS (the `Mac_...command` files) and Windows (the `Win_...` files). Both run the app code in `app/`; use whichever you prefer.
-
-On Windows each launcher comes in two flavors:
-
-- **`.vbs` (windowless)** - a clean, no-console start. Double-click it for normal lab use.
-- **`.bat` (visible terminal)** - the same launcher, but it opens a console window so you can watch the logs and see any crash. Use it for first-time setup or troubleshooting. The window stays open on exit so errors are readable.
+(There are a few other variants in `Alternative Launchers/` for troubleshooting or preference - see [Alternative launchers](#alternative-launchers) at the bottom. Most people never need them.)
 
 ## Quick start
 
@@ -45,13 +39,16 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
 
 ```
 <repo root>/
-  Mac_Start oTree Lab Launcher.command                  (Simple, macOS)
-  Win_Start oTree Lab Launcher.vbs                       (Simple, Windows, windowless)
-  Win_Start oTree Lab Launcher (terminal).bat           (Simple, Windows, visible terminal)
-  Mac_Start oTree Lab Launcher (web).command            (Web, macOS)
-  Win_Start oTree Lab Launcher (web).vbs                 (Web, Windows, windowless)
-  Win_Start oTree Lab Launcher (web, terminal).bat      (Web, Windows, visible terminal)
-  app/    the app code
+  Mac_Start oTree Lab Launcher.command                  (default/browser, macOS)
+  Win_Start oTree Lab Launcher.vbs                       (default/browser, Windows, windowless)
+  Mac_Create desktop shortcut.command                   (make a Desktop shortcut, macOS)
+  Win_Create desktop shortcut.bat                        (make a Desktop shortcut, Windows)
+  Alternative Launchers/
+    Mac_Start oTree Lab Launcher (simple).command       (Simple/Tk, macOS)
+    Win_Start oTree Lab Launcher (simple).vbs           (Simple/Tk, Windows, windowless)
+    Win_Start oTree Lab Launcher (simple, debug).bat    (Simple/Tk, Windows, visible console)
+    Win_Start oTree Lab Launcher (debug).bat            (default/browser, Windows, visible console)
+  app/    the app code (and app/branding/ logo files)
   data/   your config and maps (lab_info.json, presets.json, maps/, ...)
 ```
 
@@ -115,3 +112,13 @@ The launch confirmation popup warns you about this when the chosen room is not `
 ### Saving configs
 
 You can save a config per study. A saved config relaunches the study in one click in later sessions, so the common studies are always a double-click away.
+
+---
+
+## Alternative launchers
+
+For normal use, ignore this section: the default browser launcher at the folder root (`Win_Start oTree Lab Launcher.vbs` / `Mac_Start oTree Lab Launcher.command`) is the one everyone should use. The variants below live in `Alternative Launchers/` and exist only for troubleshooting or personal preference. All of them run the same app code in `app/`.
+
+- **`(simple)`** - `Mac_Start oTree Lab Launcher (simple).command` / `Win_Start oTree Lab Launcher (simple).vbs`. The standard-library **Tkinter** launcher (a native window instead of the browser). Handy if you would rather not use a browser tab.
+- **`(debug)`** - `Win_Start oTree Lab Launcher (debug).bat` (Windows). The default browser launcher, but run in a **visible console** so you can watch the server log and see any crash on screen. The window stays open on exit so errors are readable.
+- **`(simple, debug)`** - `Win_Start oTree Lab Launcher (simple, debug).bat` (Windows). The same, for the simple/Tk launcher.

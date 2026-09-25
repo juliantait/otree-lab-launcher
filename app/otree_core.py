@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.1.1"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -1608,6 +1608,66 @@ def presets_path():
     if override:
         return override
     return os.path.join(config_dir(), PRESETS_FILENAME)
+
+
+# --- Per-user UI preferences (theme) ---------------------------------------
+# A tiny, CREDENTIAL-FREE prefs file in data/, separate from presets.json (which
+# carries DB/admin passwords). It persists the light/dark theme so the choice
+# survives a restart: in browser mode the page's localStorage is tied to the
+# server PORT, which changes on the next launch, so a file on disk is the only
+# durable per-user store. Everything here is FAIL-SOFT: a missing or corrupt file
+# just yields the "dark" default and a write error is swallowed.
+UI_PREFS_FILENAME = "ui_prefs.json"
+
+
+def ui_prefs_path():
+    override = os.environ.get("OTREE_LAB_UI_PREFS")
+    if override:
+        return override
+    return os.path.join(config_dir(), UI_PREFS_FILENAME)
+
+
+def normalize_theme(theme):
+    """Coerce any input to a known theme name. 'light' only when explicitly asked;
+    everything else (incl. None/garbage) is the 'dark' default."""
+    return "light" if str(theme or "").strip().lower() == "light" else "dark"
+
+
+def load_ui_prefs(path=None):
+    """The per-user UI prefs dict, or {} when absent/corrupt (fail-soft)."""
+    path = path or ui_prefs_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_ui_theme(path=None):
+    """The saved light/dark theme, defaulting to 'dark' when nothing is stored."""
+    return normalize_theme(load_ui_prefs(path).get("theme"))
+
+
+def save_ui_theme(theme, path=None):
+    """Persist the light/dark theme into the prefs file (created if needed),
+    preserving any other keys. Returns the normalised theme actually stored. Never
+    raises: a write failure is swallowed (the UI has already updated in place)."""
+    path = path or ui_prefs_path()
+    value = normalize_theme(theme)
+    prefs = load_ui_prefs(path)
+    prefs["theme"] = value
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(prefs, handle, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # fail-soft: the on-screen theme already changed
+    return value
 
 
 # --- Per-machine lab identity (lab.local) ----------------------------------
@@ -5019,10 +5079,14 @@ def preflight_check_project(config, timeout=PREFLIGHT_ROOMS_TIMEOUT):
         out["field"] = FIELD_PROJECT_PATH
         return out
     if not os.path.isfile(settings_path_for(path)):
-        return _preflight_result(
+        out = _preflight_result(
             "project", False,
             "No settings.py found in %s. Is this an oTree project?" % path,
             settings_path_for(path))
+        # Tag it so the pre-launch screen can style this one as a RED problem (a
+        # folder that is very likely not an oTree project), not a neutral warning.
+        out["kind"] = "not_otree"
+        return out
 
     info = enumerate_project_rooms(path, timeout=timeout)
     if info["ok"]:

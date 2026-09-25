@@ -28,16 +28,24 @@
   }catch(e){}
 })();
 /* THEME: apply the saved light/dark choice BEFORE the first paint so there is
-   no flash. Same pattern as the academic site (data-theme attribute + a single
-   localStorage key). DARK is the default: we only set data-theme when the user
-   has explicitly stored "light", so with nothing stored the page stays dark.
-   The header toggle and the Lab-settings control both read/write this same key
-   (see toggleTheme / applyTheme / currentTheme in the main script). */
+   no flash. DARK is the default: we only set data-theme for an explicit "light".
+   Source of truth, in order:
+     1. window.__LAUNCHER_THEME__  -- injected by the --browser server from the
+        persisted prefs file (data/ui_prefs.json). This is what survives a restart
+        in browser mode, where localStorage is tied to the (changing) server port.
+     2. localStorage "otreeLabTheme" -- fallback within a single run/port and for
+        the static file:// preview.
+   The header toggle and the Lab-settings control both read/write these (see
+   toggleTheme / applyTheme / currentTheme in the main script), and applyTheme also
+   persists to the server file. */
 (function(){
   try{
-    if(localStorage.getItem("otreeLabTheme")==="light"){
-      document.documentElement.setAttribute("data-theme","light");
-    }
+    var t=null;
+    var inj=window.__LAUNCHER_THEME__;
+    if(inj==="light"||inj==="dark")t=inj;
+    else t=localStorage.getItem("otreeLabTheme");
+    if(t==="light")document.documentElement.setAttribute("data-theme","light");
+    else if(t==="dark")document.documentElement.removeAttribute("data-theme");
   }catch(e){}
 })();
 </script>
@@ -243,12 +251,14 @@ body{
   content:"";width:9px;height:9px;border-radius:3px;background:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft);flex:none;
 }
+/* Settings gear = the PRIMARY control: a filled, bordered button at rest that
+   reads clearly as a button, and turns MORE accented (pink) on hover. */
 .gear{
-  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid transparent;
-  background:transparent;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;
+  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid var(--line);
+  background:var(--panel-2);color:var(--text);cursor:pointer;font-size:16px;line-height:1;
   display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s,border-color .12s;
 }
-.gear:hover{background:var(--panel-2);color:var(--text-strong);border-color:var(--line)}
+.gear:hover{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
 .side-head{
   display:flex;align-items:center;gap:8px;padding:6px 18px 8px;
 }
@@ -307,13 +317,15 @@ body{
    below swaps which glyph is visible from the <html> data-theme attribute, so no
    JS has to touch the icon. Lives in the sidebar header, immediately left of the
    gear; sized (30px) to line up with it. */
+/* Theme (sun/moon) = the SECONDARY control: a bare icon at rest (no fill, no
+   border) that only highlights on hover. Subtler than the settings gear. */
 .theme-toggle{
-  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid var(--line);
-  background:var(--panel-2);color:var(--muted);cursor:pointer;
+  flex:none;width:30px;height:30px;border-radius:var(--r-sm);border:1px solid transparent;
+  background:transparent;color:var(--muted);cursor:pointer;
   display:inline-flex;align-items:center;justify-content:center;
   transition:background .14s,border-color .14s,color .14s;
 }
-.theme-toggle:hover{background:var(--panel-3);border-color:var(--line-strong);color:var(--text-strong)}
+.theme-toggle:hover{background:var(--panel-2);border-color:var(--line);color:var(--text-strong)}
 .theme-toggle svg{width:17px;height:17px;display:block}
 .theme-toggle .i-moon{display:none}
 :root[data-theme="light"] .theme-toggle .i-sun{display:none}
@@ -595,10 +607,17 @@ input::placeholder{color:var(--faint)}
   text-transform:uppercase;color:var(--muted);cursor:pointer;user-select:none}
 .map-cap .arw{font-size:10px;color:var(--faint)}
 .map-sub{font-size:11.5px;color:var(--faint);margin:2px 0 0}
-.seatmap{display:grid;gap:7px;margin-top:11px;min-width:0}
+/* HEIGHT-DRIVEN, square seat map: fitSeatMap() (JS) sizes BOTH the column tracks
+   and the row tracks to the SAME px so every cell is a perfect square. The square
+   is chosen to fit all rows in the height left down to the viewport fold (capped by
+   the card width so it never overflows), so the whole board is visible without the
+   page scrolling. The grid reserves that height and is centred both horizontally
+   and vertically inside the card, never stretched. Cell font scales with the cell
+   via --seat-font. */
+.seatmap{display:grid;gap:7px;margin-top:11px;min-width:0;justify-content:center;align-content:center}
 .seatcell{
   min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;
-  font-family:var(--mono);font-size:11px;color:var(--text);
+  font-family:var(--mono);font-size:var(--seat-font,11px);color:var(--text);
   background:linear-gradient(180deg,var(--panel-2),var(--seat-grad-b));
   border:1px solid var(--line);border-radius:var(--r-xs);box-shadow:var(--shadow-sm);
   /* Hover must never change layout/size (no transform/height/padding) or the
@@ -612,7 +631,7 @@ input::placeholder{color:var(--faint)}
 .seatcell.editable{cursor:pointer}
 .seatcell.excluded{color:var(--faint);border-style:dashed;border-color:var(--line-soft);
   text-decoration:line-through;opacity:.6}
-.seatcell.exp{color:var(--faint);background:transparent;border-style:dashed;border-color:var(--line-soft);font-size:8.5px;letter-spacing:.05em}
+.seatcell.exp{color:var(--faint);background:transparent;border-style:dashed;border-color:var(--line-soft);font-size:calc(var(--seat-font,11px) * 0.78);letter-spacing:.05em}
 .seatcell.wall{
   background:repeating-linear-gradient(45deg,var(--bg-deep),var(--bg-deep) 4px,transparent 4px,transparent 8px);
   border:1px dashed var(--line-soft);border-radius:6px;pointer-events:none;opacity:.5;
@@ -799,13 +818,27 @@ input::placeholder{color:var(--faint)}
 .ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
 /* Lab Settings page footer: version + (persisted) update nudge with a blue link. */
 .ls-foot{margin:18px 2px 2px;padding-top:14px;border-top:1px solid var(--line-soft);
-  font-size:12px;color:var(--faint);line-height:1.55}
+  font-size:12px;color:var(--faint);line-height:1.55;text-align:center}
+.ls-foot-name{color:var(--muted);font-weight:600}
 .ls-foot-ver{color:var(--muted)}
+.ls-foot-sep{color:var(--faint);margin:3px 0;user-select:none}
+.ls-foot-check{margin-top:2px}
+.ls-foot-result{margin-top:8px;font-size:12px;color:var(--muted)}
+.ls-foot-result.ok{color:var(--ok)}
+.ls-foot-result.avail{color:var(--accent);font-weight:600}
 .ls-foot-upd{margin-top:6px}
 .ls-foot-badge{color:var(--accent);font-weight:600}
 .ls-foot-txt{color:var(--muted)}
 .ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
 .ls-foot-link:hover{filter:brightness(1.12)}
+/* green success tick shown next to "Experiment launched" on the running screen */
+.ok-tick{color:var(--ok);font-weight:800;font-size:14px;margin-right:3px}
+/* Launch-history "DB reset" badge (amber = the database was wiped for that run)
+   and the subtle "kept" label when it was not. Compact, reads at a glance. */
+.hist-reset{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;
+  font-weight:700;letter-spacing:.02em;line-height:1.5;color:var(--warn);
+  border:1px solid var(--warn);white-space:nowrap}
+.hist-kept{font-size:10.5px;color:var(--faint)}
 .ls-link{display:inline-block;font-size:12px;color:var(--accent);cursor:pointer;text-decoration:none;font-weight:600}
 .ls-link:hover{text-decoration:underline}
 /* WHOLE-APP footer (Julian's final design): pinned at the BOTTOM of the left
@@ -889,13 +922,15 @@ input::placeholder{color:var(--faint)}
 .bl-ic{flex:none;width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;
   font-size:11px;font-weight:800;line-height:1;color:var(--on-bright)}
 .bl-ic.block{background:var(--err)} .bl-ic.warn{background:var(--warn)} .bl-ic.ok{background:var(--ok)}
+.bl-ic.danger{background:var(--err)}
 .bl-issue{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:11px;align-items:start;
   background:var(--warn-soft);border-left:3px solid var(--warn);border-radius:var(--r-xs);
   padding:10px 12px;margin:6px 0}
-.bl-issue.block{background:var(--err-soft);border-left-color:var(--err)}
+.bl-issue.block,.bl-issue.danger{background:var(--err-soft);border-left-color:var(--err)}
 .bl-issue .bl-ic{margin-top:1px}
 .bl-title{font-size:13px;color:var(--text-strong);line-height:1.45}
-.bl-issue.block .bl-title{font-weight:650}
+.bl-issue.block .bl-title,.bl-issue.danger .bl-title{font-weight:650}
+.bl-issue.danger .bl-title{color:var(--err)}
 .bl-hint{color:var(--muted);font-size:11.5px;margin-top:3px;line-height:1.5}
 .bl-fix{align-self:center}
 .bl-acts{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
@@ -1297,19 +1332,27 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
    ====================================================================== */
 
 /* ---------- theme (light / dark) ------------------------------------------
-   One localStorage key ("otreeLabTheme") is the single source of truth, shared
-   by the header sun/moon toggle AND the Appearance control in Lab settings, so
-   changing either keeps the other in sync. DARK is the default: light is stored
-   as "light" and applied by setting data-theme="light" on <html>; dark clears
-   the attribute (and stores "dark"). The pre-paint head script restores it. */
+   Shared by the header sun/moon toggle AND the Appearance control in Lab settings,
+   so changing either keeps the other in sync. DARK is the default: light is
+   applied by setting data-theme="light" on <html>; dark clears the attribute.
+   Persistence is TWO-fold: localStorage (instant, per-port) AND a server-side
+   file (data/ui_prefs.json via API.set_theme) so the choice survives a restart in
+   browser mode, where the port -- and thus localStorage -- changes each launch.
+   The pre-paint head script restores it from the injected value / localStorage. */
 function currentTheme(){
   return document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
 }
-function applyTheme(theme){
+/* applyTheme(theme[,persist]): update the UI INSTANTLY (as before); persist unless
+   persist===false (false is used when we are merely reflecting the value the
+   server just gave us on boot, to avoid a redundant write-back). */
+function applyTheme(theme,persist){
   var t=(theme==="light")?"light":"dark";
   if(t==="light")document.documentElement.setAttribute("data-theme","light");
   else document.documentElement.removeAttribute("data-theme");
-  try{localStorage.setItem("otreeLabTheme",t);}catch(e){}
+  try{localStorage.setItem("otreeLabTheme",t);}catch(e){}   /* instant, per-port */
+  if(persist!==false&&NATIVE&&API&&API.set_theme){          /* durable, cross-restart */
+    try{API.set_theme(t);}catch(e){}
+  }
   syncThemeControls();
 }
 function toggleTheme(){ applyTheme(currentTheme()==="light"?"dark":"light"); }
@@ -1749,13 +1792,54 @@ function updateSeats(){
   renderSeatMap(currentLab());
 }
 function toggleMap(){mapExpanded=!mapExpanded;el("mapArw").innerHTML=mapExpanded?"&#9662;":"&#9656;";
-  el("seatMap").hidden=!mapExpanded;}
+  el("seatMap").hidden=!mapExpanded;
+  /* Sizing needs the element visible (a hidden element has no width/position), so
+     re-fit when it is (re)shown. */
+  if(mapExpanded)refitSeatMap();}
 function renderSeatMap(labId){
   var lab=labById(labId),box=el("seatMap");if(!box)return;box.innerHTML="";
-  if(!lab){box.style.gridTemplateColumns="";return;}
+  if(!lab){box.style.gridTemplateColumns="";box.style.gridAutoRows="";box.style.minHeight="";box.removeAttribute("data-cols");box.removeAttribute("data-rows");return;}
   var map=lab.map;
   if(map&&map.cells&&map.cells.length)renderMappedSeats(box,map,lab.seats);else renderPlainGrid(box,lab.seats);
 }
+/* Size the seat board HEIGHT-FIRST: the space left down to the viewport fold caps
+   the board, and given that height and the row count we pick the largest SQUARE
+   cell that fits all rows (roughly availH/rows). The card width only caps the
+   square so it never overflows horizontally; it never stretches the cell wider.
+   BOTH grid tracks get that same px, so every cell is a perfect square, never a
+   rectangle. The board then reserves the full available height and centres the
+   (square) grid both ways, so a grid smaller than the card sits centred with even
+   margins rather than stretched or top-packed. The real geometry (cols/rows/walls/
+   EXP, colspans/rowspans) is unchanged, just scaled; cols/rows are stashed on the
+   element so a resize can re-fit without a rebuild. */
+function fitSeatMap(box,cols,rows){
+  if(!box||box.hidden||!cols||!rows)return;
+  box.dataset.cols=cols;box.dataset.rows=rows;
+  var gap=7;                                   /* keep in sync with .seatmap gap */
+  var availW=box.clientWidth||(box.parentNode&&box.parentNode.clientWidth)||320;
+  var top=box.getBoundingClientRect().top;     /* viewport-relative top of the board */
+  var margin=22;                               /* breathing room above the fold */
+  var availH=Math.max(120,(window.innerHeight||800)-top-margin);
+  var cellH=(availH-gap*(rows-1))/rows;        /* height drives the square */
+  var cellW=(availW-gap*(cols-1))/cols;        /* width only caps it (no overflow) */
+  var cell=Math.floor(Math.min(cellH,cellW));
+  cell=Math.max(12,Math.min(cell,46));         /* never tiny, never huge */
+  box.style.gridTemplateColumns="repeat("+cols+","+cell+"px)";
+  box.style.gridAutoRows=cell+"px";            /* SAME px on both tracks => square */
+  box.style.minHeight=availH+"px";             /* reserve height so V-centring shows */
+  box.style.setProperty("--seat-font",Math.max(7,Math.round(cell*0.34))+"px");
+}
+function refitSeatMap(){
+  var box=el("seatMap");if(!box||box.hidden)return;
+  var c=parseInt(box.dataset.cols||"0",10),r=parseInt(box.dataset.rows||"0",10);
+  if(c&&r)fitSeatMap(box,c,r);
+}
+/* Re-fit on viewport resize (debounced), so the board stays fully visible. */
+var _seatFitTimer=null;
+window.addEventListener("resize",function(){
+  if(_seatFitTimer)clearTimeout(_seatFitTimer);
+  _seatFitTimer=setTimeout(refitSeatMap,120);
+});
 /* "Edit for this run" makes each seat cell a click toggle that excludes/includes
    the seat, maintaining currentSeatExcluded (fable review item 1). Off edit mode
    the cells are inert but still show which seats a loaded (e.g. Tk-saved) config
@@ -1779,8 +1863,14 @@ function toggleSeatExclusion(label,d){
   updateDirtyState();
 }
 function renderMappedSeats(box,map,seats){
-  var maxC=0;(map.cells||[]).forEach(function(c){var cc=parseInt(c.c,10);if(!isNaN(cc)&&cc>maxC)maxC=cc;});
-  var cols=parseInt(map.cols,10)||maxC||1;box.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  var maxC=0,maxR=0;
+  (map.cells||[]).forEach(function(c){
+    var cc=parseInt(c.c,10),rr=parseInt(c.r,10);
+    if(!isNaN(cc))maxC=Math.max(maxC,cc+((parseInt(c.colspan,10)||1)-1));
+    if(!isNaN(rr))maxR=Math.max(maxR,rr+((Math.round(c.rowspan)||1)-1));
+  });
+  var cols=parseInt(map.cols,10)||maxC||1;
+  var rows=parseInt(map.rows,10)||maxR||1;
   var list=seats||[],si=0;
   (map.cells||[]).forEach(function(cell){
     var r=parseInt(cell.r,10),c=parseInt(cell.c,10);if(isNaN(r)||isNaN(c))return;
@@ -1793,11 +1883,13 @@ function renderMappedSeats(box,map,seats){
     else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;decorateSeatCell(d,lab);}
     box.appendChild(d);
   });
+  fitSeatMap(box,cols,rows);
 }
 function renderPlainGrid(box,seats){
   seats=seats||[];var cols=Math.min(Math.max(Math.ceil(Math.sqrt(seats.length||1)),1),8);
-  box.style.gridTemplateColumns="repeat("+cols+",1fr)";
+  var rows=Math.max(1,Math.ceil((seats.length||1)/cols));
   seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;decorateSeatCell(d,s);box.appendChild(d);});
+  fitSeatMap(box,cols,rows);
 }
 function setSeatFilePath(p){var b=el("seatFilePath");if(p){b.textContent=p;b.classList.remove("empty");}else{b.textContent="No file chosen yet";b.classList.add("empty");}updateDirtyState();}
 
@@ -2400,24 +2492,30 @@ function openLabSettings(){
       '<p class="d">Shown labs appear in the main lab selector. When only one lab is shown it is auto-selected. Labs are seeded from lab_info.json.</p>'+
       '<table class="presets-table"><thead><tr><th>Lab</th><th>IP</th><th class="c">Seats</th><th class="c">Shown</th><th class="c"></th></tr></thead><tbody>'+rows+'</tbody></table>'+
       '<p class="ls-tip">Tip: click a lab’s ✓ / – in the Shown column to show or hide it.</p>'+
-      '<div class="ls-status" id="lsLabStatus"></div></div>'+
+      '<div class="ls-status" id="lsLabStatus"></div>'+
+      /* Add lab lives INSIDE the presets card (bottom), so it sits WITH the
+         presets it adds to -- not stranded below Launch history. */
+      '<button class="btn" style="margin-top:10px" onclick="labPresetEdit(null)">Add lab</button></div>'+
     /* The read-only Launch history link stays at the bottom of Lab Settings
        (fable review F). */
     '<div class="ls-card"><a class="ls-link" onclick="openLaunchHistory();return false;">Launch history &rarr;</a></div>'+
-    '<div class="cta spread"><div><button class="btn" onclick="labPresetEdit(null)">Add lab</button></div>'+
-      '<button class="btn" onclick="closeModal()">Close</button></div>'+
+    '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>'+
     /* SETTINGS-PAGE footer (Julian's final design), at the very bottom: always
        the version; when a newer release is RECORDED (persisted; visible even
        offline) a small "new version available" note plus the upgrade text with
        the word GitHub as a BLUE clickable link. The check runs on Settings OPEN,
        at most once a day (version_info -> core.check_for_update). */
     '<div class="ls-foot" id="lsFoot">'+
-      '<div class="ls-foot-ver" id="lsFootVer">oTree Lab Launcher version 1.0.0</div>'+
+      '<div class="ls-foot-name">oTree Lab Launcher</div>'+
+      '<div class="ls-foot-ver" id="lsFootVer">version 1.0.0</div>'+
+      '<div class="ls-foot-sep" aria-hidden="true">-</div>'+
+      '<div class="ls-foot-check"><button class="btn tiny" id="lsCheckBtn" onclick="checkForUpdateNow()">Check for update</button></div>'+
+      '<div class="ls-foot-result" id="lsCheckResult" hidden></div>'+
       '<div class="ls-foot-upd" id="lsFootUpd" hidden>'+
         '<span class="ls-foot-badge" id="lsFootBadge">new version available</span> '+
         '<span class="ls-foot-txt">Download the app folder from '+
           '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub</a>'+
-          ' and replace the app folder — keep your data.</span>'+
+          ' and replace the app folder - keep your data.</span>'+
       '</div>'+
     '</div>',true);
   ["pgUser","pgPw","pgHost","pgPort"].forEach(function(id){var e=el(id);if(e)e.addEventListener("change",savePgAdmin);});
@@ -2433,12 +2531,42 @@ function loadSettingsVersion(){
   if(!NATIVE||!API||!API.version_info)return;   /* static preview keeps the default */
   API.version_info().then(function(r){
     if(!r||!r.ok)return;
-    if(ver)ver.textContent="oTree Lab Launcher version "+(r.version||"");
+    if(ver)ver.textContent="version "+(r.version||"");
     var up=r.update||{},box=el("lsFootUpd");
     if(box&&up.update_available){
       var badge=el("lsFootBadge");
       if(badge){var extra=up.remote_version?(" ("+up.remote_version+")"):"";badge.textContent=(up.label||"new version available")+extra;}
       box.hidden=false;
+    }
+  });
+}
+/* ON-DEMAND update check, run from the "Check for update" button in the Lab
+   Settings footer. The auto-check only runs on Settings open, at most once a day;
+   this forces a live check NOW and shows the result inline. Reuses the SAME
+   Python logic (core.check_for_update) via version_info(force=true) -- no new
+   endpoint, the decision/comparison stays in Python (re-skin rule). Fail-soft. */
+function checkForUpdateNow(){
+  var btn=el("lsCheckBtn"),res=el("lsCheckResult");
+  if(!NATIVE||!API||!API.version_info){
+    if(res){res.hidden=false;res.className="ls-foot-result";res.textContent="The update check runs in the app, not the static preview.";}
+    return;
+  }
+  if(btn){btn.disabled=true;btn.textContent="Checking…";}
+  if(res){res.hidden=false;res.className="ls-foot-result";res.textContent="Checking for updates…";}
+  API.version_info(true).then(function(r){          /* force=true => hit the network now */
+    if(btn){btn.disabled=false;btn.textContent="Check for update";}
+    if(!r||!r.ok){if(res){res.className="ls-foot-result";res.textContent="Could not check right now. Try again later.";}return;}
+    var up=r.update||{},box=el("lsFootUpd");
+    if(up.update_available){
+      var extra=up.remote_version?(" ("+up.remote_version+")"):"";
+      var badge=el("lsFootBadge");if(badge)badge.textContent=(up.label||"new version available")+extra;
+      if(box)box.hidden=false;                       /* keep the persisted nudge in sync */
+      if(res){res.className="ls-foot-result avail";
+        res.innerHTML="Update available"+escapeHtml(extra)+". Download from "+
+          '<a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" target="_blank" rel="noopener">GitHub</a>.';}
+    }else{
+      if(box)box.hidden=true;
+      if(res){res.className="ls-foot-result ok";res.textContent="You are up to date (version "+(r.version||"")+").";}
     }
   });
 }
@@ -2455,11 +2583,15 @@ function renderLaunchHistory(entries){
   if(!entries.length){body.innerHTML='<p class="d">No launches have been logged yet. Each launch adds a line here.</p>';return;}
   var rows=entries.map(function(e){
     var out=(e.outcome==="ok")?'<span style="color:var(--ok)">OK</span>':'<span style="color:var(--warn)">Failed</span>';
+    /* Surface the resetdb flag already stored per launch (build_session_entry):
+       a compact "DB reset" badge when the database was wiped, a subtle "kept"
+       otherwise, so it reads at a glance. */
+    var db=e.resetdb?'<span class="hist-reset">DB reset</span>':'<span class="hist-kept">kept</span>';
     return '<tr><td>'+escapeHtml(histTime(e.timestamp))+'</td><td>'+escapeHtml(e.config||"(unsaved)")+
       '</td><td>'+escapeHtml((e.lab||"")+" / "+(e.room||""))+'</td><td>'+escapeHtml(e.database||"")+
-      '</td><td class="c">'+escapeHtml(e.seats==null?"":e.seats)+'</td><td class="c">'+out+'</td></tr>';
+      '</td><td class="c">'+db+'</td><td class="c">'+escapeHtml(e.seats==null?"":e.seats)+'</td><td class="c">'+out+'</td></tr>';
   }).join("");
-  body.innerHTML='<table class="presets-table"><thead><tr><th>When</th><th>Config</th><th>Lab / room</th><th>Database</th><th class="c">Seats</th><th class="c">Outcome</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  body.innerHTML='<table class="presets-table"><thead><tr><th>When</th><th>Config</th><th>Lab / room</th><th>Database</th><th class="c">DB</th><th class="c">Seats</th><th class="c">Outcome</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 function histTime(stamp){
   if(!stamp)return "";
@@ -2692,11 +2824,14 @@ function labAboutText(b){
   else seats=n+" participant seats.";
   return (b.lab_label||"This lab")+". The oTree server for this session runs on the server below, and the participant computers join the room below. "+seats;
 }
-function briefingSummaryHtml(b){
+function briefingSummaryHtml(b,launched){
   var shared=(b.shared_db!==undefined)?b.shared_db:((b.caution!==undefined)?b.caution:(currentDbMode==="lab"));
   var loc="http://"+escapeHtml(b.host)+":"+escapeHtml(b.port||"8000")+"/room/"+escapeHtml(b.room);
   var hasShortcut=(b.has_participant_links!==undefined)?b.has_participant_links:b.is_study;
-  var html='<div class="bl-sumhead">What will launch</div><div class="bl-sumcard">';
+  /* launched===true => the POST-launch "Session running" recap: past-tense heading.
+     The exact per-seat link is NOT shown inline in either state; it lives one hover
+     away, inside the popup on the shortcut/room pill (see below). */
+  var html='<div class="bl-sumhead">'+(launched?'What launched':'What will launch')+'</div><div class="bl-sumcard">';
   if(shared)html+='<div class="caution-bar"><span>&#9650;</span><span>Caution: shared lab database. It may be reset between sessions. Download your data as soon as the experiment finishes.</span></div>';
   var linkRow=function(label,link){
     return '<p class="bl-linklabel">'+label+'</p><div class="bl-linkrow"><div class="mono-line" id="blLink">'+link+'</div>'+
@@ -2713,20 +2848,25 @@ function briefingSummaryHtml(b){
     '<div class="bl-labinfo" id="blLabInfo"><p>'+escapeHtml(labAboutText(b))+'</p>'+
     '<dl class="bl-kv more"><dt>Server</dt><dd class="mono">'+escapeHtml(b.host)+':'+escapeHtml(b.port||"8000")+'</dd>'+
     '<dt>Room</dt><dd class="mono">'+escapeHtml(b.room)+(b.open_room?' &nbsp;(open room, no seat list)':'')+'</dd></dl></div></details>';
-  /* 2. what to open on the participant computers */
+  /* 2. what to open on the participant computers. The rendering is the SAME
+     pre-launch and on the running screen: the study-room shortcut pill keeps the
+     exact per-seat link tucked inside its hover popup (never cluttering the card),
+     and a non-study room shows its link inline (it has no shortcut pill). */
+  var chipName=b.shortcut_label||b.shortcut_name||shortcutName(b.lab_label);
   if(hasShortcut){
-    /* Study room: the shortcut is already on the PCs, so the link is HIDDEN and
-       only appears while the chip is hovered (or keyboard-focused). */
+    /* Study room: the shortcut is already on the PCs, so the exact per-seat link is
+       HIDDEN and only appears in the hover popup on the chip (on hover or keyboard
+       focus) -- the same on the pre-launch briefing and the running screen, so the
+       full welcome_page_ok=1 link is always one hover away from the pill. */
     /* When the lab named its participant-PC desktop shortcuts (shortcut_label),
        the chip shows that exact name; otherwise the "Study Room <Lab>" default. */
-    var chipName=b.shortcut_label||b.shortcut_name||shortcutName(b.lab_label);
     html+='<div class="open-line">Open <span class="bl-chipwrap" id="blChipWrap" onmouseenter="blPlaceLinkPop()" onfocusin="blPlaceLinkPop()"><span class="room-chip" id="blRoomChip" tabindex="0">'+
       escapeHtml(chipName)+'</span>'+
       '<span class="bl-linkpop" id="blLinkPop"><span class="bl-linkpop-in" style="display:block"><strong>Open the &ldquo;'+escapeHtml(chipName)+'&rdquo; shortcut on each PC.</strong>'+
-      linkRow(linkLabel+", for reference",link)+'</span></span></span> on each participant computer.</div>';
+      linkRow(linkLabel,link)+'</span></span></span> on each participant computer.</div>';
   }else{
-    /* Non-study room: no shortcut exists, so the link IS shown. State the room,
-       give the one-per-seat link to open on each computer, and note the
+    /* Non-study room: no shortcut exists, so the link IS shown inline. State the
+       room, give the one-per-seat link to open on each computer, and note the
        study-room alternative (the link still works; do NOT say the shortcuts
        "will not match"). */
     html+='<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
@@ -2735,8 +2875,10 @@ function briefingSummaryHtml(b){
   /* The welcome_page_ok=1 explainer: THE link to document / put on the lab PCs,
      it skips oTree 6's Welcome page (zero clicks), and it just shows a
      self-advancing wait page until the room session is created. Text from core
-     (welcome_note) so both launchers match. */
-  if(b.welcome_note)html+='<p class="bl-linklabel" style="font-weight:400;color:var(--muted)">'+escapeHtml(b.welcome_note)+'</p>';
+     (welcome_note) so both launchers match. Kept on the pre-launch briefing;
+     dropped on the running screen to declutter (the link itself is still one hover
+     away on the pill). */
+  if(!launched&&b.welcome_note)html+='<p class="bl-linklabel" style="font-weight:400;color:var(--muted)">'+escapeHtml(b.welcome_note)+'</p>';
   /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
   html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
     '<div class="creds-box"><p class="intro">The dashboard should open already logged in. If the browser DOES ask, type or paste:</p>'+
@@ -2794,9 +2936,13 @@ function renderBlIssues(issues){
      warning card. idx stays the index into the ORIGINAL list so the room
      selector ids keep matching blPickRoom(idx). */
   var row=function(it,idx){
-    var block=(it.level==="block");var r='';
-    r+='<div class="bl-issue'+(block?" block":"")+'">';
-    r+='<span class="bl-ic '+(block?"block":"warn")+'">'+(block?"&#10005;":"!")+'</span>';
+    var block=(it.level==="block");
+    /* A "danger" warning (e.g. the folder is not an oTree project) keeps warning
+       semantics -- you can still launch -- but gets RED error styling so it clearly
+       reads as a problem. */
+    var danger=(!block&&it.danger);var r='';
+    r+='<div class="bl-issue'+(block?" block":(danger?" danger":""))+'">';
+    r+='<span class="bl-ic '+(block?"block":(danger?"danger":"warn"))+'">'+(block?"&#10005;":"!")+'</span>';
     r+='<div><div class="bl-title">'+escapeHtml(it.title||"")+'</div>';
     if(it.hint)r+='<div class="bl-hint">'+escapeHtml(it.hint)+'</div>';
     /* Every issue is actionable inline where a fix exists: a single fix button
@@ -3015,15 +3161,20 @@ function showHandoffSuccess(url,method){
   launchDashboardUrl=url||"";
   if(el("infoModal").hidden)return;
   el("modalTitle").textContent="Session running";
+  /* Post-launch declutter: re-render the summary in "launched" mode -- heading
+     becomes "What launched" and the per-seat link is dropped (it is preserved on
+     the pre-launch briefing). */
+  var sum=el("blSummary");if(sum&&window._blBriefing)sum.innerHTML=briefingSummaryHtml(window._blBriefing,true);
   var t=el("takeoverStatus");
   if(!t)return;
   t.className="handoff-note";
   /* Report HONESTLY which path happened: cookie = opened already logged in;
-     manual = opened at the login page, log in with the username/password above. */
+     manual = opened at the login page, log in with the username/password above.
+     A green tick marks it as a success. */
   var lead=(method==="cookie")
     ? 'Experiment launched. The dashboard opened already logged in. No dashboard? '
     : 'Experiment launched. The dashboard opened at the login page; log in with the username and password above. Not opened? ';
-  t.innerHTML=lead+'<a onclick="openDashboard()">Click here</a>';
+  t.innerHTML='<span class="ok-tick" aria-hidden="true">&#10003;</span>'+lead+'<a onclick="openDashboard()">Click here</a>';
 }
 function showHandoffFailure(msg){
   if(el("infoModal").hidden){window.pywStatus("err",msg);return;}
@@ -3358,6 +3509,11 @@ function wizSave(){
    ====================================================================== */
 function initNative(state){
   NATIVE=true;el("logBody").innerHTML="";
+  /* Reflect the persisted theme (data/ui_prefs.json). In browser mode the head
+     script already applied it pre-paint from the injected marker; this makes the
+     native pywebview path match too. persist=false: we are echoing the stored
+     value, not making a fresh choice, so do not write it back. */
+  if(state.theme==="light"||state.theme==="dark")applyTheme(state.theme,false);
   defaultAuthor=state.default_author||"";labMarker=state.lab_marker||"";
   var haveLab=(state.lab_info_present!==false);
   setLabs(haveLab?(state.labs||[]):[]);

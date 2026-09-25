@@ -1,6 +1,6 @@
 @echo off
 rem ===================================================================
-rem  Create desktop shortcut.bat
+rem  Win_Create desktop shortcut.bat
 rem
 rem  Double-click this ONCE from the oTree Lab Launcher folder. It works
 rem  out its own location, then writes a correctly-targeted shortcut
@@ -8,9 +8,9 @@ rem
 rem      Start oTree Lab Launcher.lnk
 rem
 rem  onto the current user's Desktop. The shortcut:
-rem    * runs the windowless WEB launcher in this folder
-rem        (Win_Start oTree Lab Launcher (web).vbs)
-rem    * shows the lab logo (branding\logo.ico)
+rem    * runs the windowless default launcher in this folder
+rem        (Win_Start oTree Lab Launcher.vbs)
+rem    * shows the lab logo (app\branding\logo.ico)
 rem
 rem  Nothing to edit by hand: the paths are computed from where THIS
 rem  file lives, so it stays correct no matter where the folder is.
@@ -21,15 +21,15 @@ rem --- This folder (drop the trailing backslash from %~dp0) ---
 set "HERE=%~dp0"
 if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 
-set "TARGET=%HERE%\Win_Start oTree Lab Launcher (web).vbs"
-rem Single canonical logo. To rebrand, just regenerate branding\logo.ico.
-set "ICON=%HERE%\branding\logo.ico"
+set "TARGET=%HERE%\Win_Start oTree Lab Launcher.vbs"
+rem Single canonical logo. To rebrand, just regenerate app\branding\logo.ico.
+set "ICON=%HERE%\app\branding\logo.ico"
 set "WORKDIR=%HERE%"
 set "LINKNAME=Start oTree Lab Launcher.lnk"
 
 rem --- Sanity checks: the pieces we point at must exist ---
 if not exist "%TARGET%" (
-  echo ERROR: cannot find the web launcher next to this file:
+  echo ERROR: cannot find the launcher next to this file:
   echo        "%TARGET%"
   echo Make sure this .bat is inside the oTree Lab Launcher folder.
   pause
@@ -49,7 +49,7 @@ set "MK=%TEMP%\_otree_make_shortcut_%RANDOM%.vbs"
 >>"%MK%" echo lnk.TargetPath = "%TARGET%"
 >>"%MK%" echo lnk.WorkingDirectory = "%WORKDIR%"
 >>"%MK%" echo lnk.IconLocation = "%ICON%, 0"
->>"%MK%" echo lnk.Description = "Start the oTree Lab Launcher (web)"
+>>"%MK%" echo lnk.Description = "Start the oTree Lab Launcher"
 >>"%MK%" echo lnk.WindowStyle = 1
 >>"%MK%" echo lnk.Save
 

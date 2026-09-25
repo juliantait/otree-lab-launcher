@@ -6,11 +6,12 @@ powers (full filesystem, real subprocesses).
 
 ## Run it
 
-**Easiest:** at the repo root, double-click `Mac_Start oTree Lab Launcher (web).command`
-(Mac) or `Win_Start oTree Lab Launcher (web).vbs` (Windows). On first run they build a
-private virtualenv in your home folder (`~/.otree-lab-launcher-venv`) and
-install pywebview into it, then launch. Nothing touches the system Python. (The
-old `.bat` launchers were removed; the `.vbs` is the windowless Windows entry.)
+**Easiest:** at the repo root, double-click `Mac_Start oTree Lab Launcher.command`
+(Mac) or `Win_Start oTree Lab Launcher.vbs` (Windows) - the default launcher is this
+web front end. On first run they build a private virtualenv in your home folder
+(`~/.otree-lab-launcher-venv`) and install pywebview into it, then launch. Nothing
+touches the system Python. (The `.vbs` is the windowless Windows entry; the visible-
+console `(debug).bat` variant lives in `Alternative Launchers/`.)
 
 **Manual:** don't `pip install` into a Homebrew/system Python: modern Pythons
 refuse it (PEP 668, "externally-managed-environment"). Use a venv (run from the
