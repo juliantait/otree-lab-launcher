@@ -2,6 +2,8 @@
 
 **Make any working oTree project run in your lab with one click.** Point it at your project and it wires up Postgres, per-seat participant links, and the experiment room, then starts the server ready for participants.
 
+See [docs/user_guide.md](docs/user_guide.md) for the full user guide (lab manager setup and experimenter usage).
+
 ## Install
 
 **Clone the repo (recommended on both macOS and Windows):**
@@ -80,74 +82,6 @@ git pull
 That fetches the latest version and leaves your own `data/` config untouched: your `lab_info.json`, `presets.json`, saved shortcuts, the database registry and this machine's identity all carry over.
 
 If you did not clone, you can instead download the repo and drop the `app/` folder over your existing one. But cloning once and using `git pull` is the recommended and easiest way to stay up to date.
-
----
-
-## Appendix: lab manager guide
-
-The detailed setup guide. This is a one-time job for whoever looks after the lab machines. Individual researchers do not do any of it: they open the launcher, point it at their oTree project, pick the room, and hit **Launch session**.
-
-### One-time setup in the wizard
-
-1. Install the launcher: copy the whole folder onto the machine that will run sessions.
-2. Run it. On the first launch, with no `data/lab_info.json` yet, the **setup wizard** opens on its own.
-3. In the wizard, set the **Postgres admin password**.
-4. Create the default shared **"easy-use" database** that every researcher can then use in one click.
-5. Add your lab(s): name, host, and seat list.
-
-From then on, researchers pick the shared default database and launch. They can also create their own database at any time from the in-app buttons, so you do not have to make one per study.
-
-### lab_info.json
-
-Your hosts, seat lists, and room-map references live in `data/lab_info.json` (see `data/lab_info.example.json` for the shape). Hosts and passwords are also editable from inside the app (gear -> Lab Settings), so you rarely need to hand-edit the file.
-
-Room layouts (the top-down seat maps the launcher draws) live in `data/maps/`. Each lab points at a map by name. The schema and how to add your own room are in `data/maps/README.md`.
-
-### The per-seat links (the important part)
-
-Each lab PC opens its own fixed link:
-
-```
-http://HOST:8000/room/study?participant_label=SEAT&welcome_page_ok=1
-```
-
-- `HOST` is the machine that launches the session (the one running the launcher).
-- `study` is the room.
-- `SEAT` is that computer's seat label.
-- `welcome_page_ok=1` skips oTree 6's Welcome/Start page, so the seat auto-admits with no click.
-
-**This exact URL (with `welcome_page_ok=1`) is the link to put in all lab documentation and on the lab computers.** Without the flag, oTree 6 first shows a Welcome/Start page that needs a click; with it, opening the link drops the participant straight into the experiment.
-
-Each link is always active. Put the correct link on each desktop once: set it as the browser homepage, or save it as a bookmark, one seat per machine. Do this once per lab and you never touch it again.
-
-One caveat: the room session must be created first. Before it exists the link shows a wait page, which advances on its own the moment the session opens — no need to re-click or refresh.
-
-When a participant opens their machine's link, that seat flips from grey to green on the experimenter's monitor. That is how the consistent links track who's who in practice: one machine, one seat, always the same person's spot.
-
-### Room warning
-
-The desktop shortcuts point at the `study` room. If a study uses a different room, the links must point at that room instead:
-
-```
-http://HOST:8000/room/THEIRROOM?participant_label=SEAT&welcome_page_ok=1
-```
-
-The launch confirmation popup warns you about this when the chosen room is not `study`, and shows the correct link to use.
-
-### Saving configs
-
-You can save a config per study. A saved config relaunches the study in one click in later sessions, so the common studies are always a double-click away.
-
-### GitHub Organisation Sync (opt-in, off by default)
-
-An optional convenience that lets a researcher clone and update an experiment repo straight from your lab's GitHub organisation without opening a terminal. It is **off by default** and lives in **gear -> Lab Settings -> GitHub Organisation Sync**: a single tick box shows or hides two buttons, and a field sets the organisation name (so the clone target is `<org>/<repo>` and is not hardcoded). Both the tick box and the organisation name are saved on this computer.
-
-When it is on:
-
-- **GitHub Org.** (next to Browse) asks for a repository name and a destination folder, then clones `https://github.com/<org>/<repo>` in the background and auto-selects the cloned folder as the study folder.
-- **Git update** (per config) runs `git pull` in the selected study folder (never the launcher's own folder) and reports one of three outcomes: this folder is not a git repo, Updated, or No updates available on git. A real pull error (auth, network, merge conflict) is shown as text.
-
-**Prerequisite (lab manager job):** this only works if you have already set up git on the lab experimenter PC and signed that PC in read-only to your GitHub organisation (a read-only organisation credential stored once per PC). The launcher never stores or handles any token itself; it relies entirely on the machine credential already on the PC. If that is not set up, leave the feature off.
 
 ---
 

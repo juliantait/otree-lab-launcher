@@ -370,12 +370,12 @@ body{
 /* Browser mode (see the head <script>): the PROJECT-FOLDER Browse button stays
    visible -- in browser mode it asks the LOCAL server to pop a native folder
    dialog on this machine (POST /api/browse_folder) and fills the field with the
-   chosen path. The paste-the-path field stays available too, so the hint is
-   shown. The participant-FILE Browse has no server-side equivalent yet, so it is
-   still hidden in browser mode (paste that path instead). */
-.pathhint{display:none;margin:8px 0 0;font-size:11.5px;color:var(--faint);line-height:1.5}
+   chosen path. The paste-the-path field stays available too. The old loose
+   .pathhint helper line was folded into the status box's empty-state "ways to
+   add a project" list (see #projWays), which serves both native and browser
+   modes. The participant-FILE Browse has no server-side equivalent yet, so it
+   is still hidden in browser mode (paste that path instead). */
 html[data-webmode="browser"] #browseFileBtn{display:none!important}
-html[data-webmode="browser"] .pathhint{display:block}
 
 /* validation status line */
 .statusline{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;margin-top:11px;line-height:1.5}
@@ -399,12 +399,17 @@ html[data-webmode="browser"] .pathhint{display:block}
   border-radius:var(--r-sm);padding:7px 10px;
   display:flex;align-items:flex-start;gap:10px;
 }
-/* The always-present project STATUS CARD (v1.4.0): a small Git Pull button on the
-   LEFT (only when Org Sync is on and a folder is selected) and the status text /
-   detected apps / empty-state or problem message to its right. */
-.study-card .sc-gitpull{flex:none;margin-top:1px}
+/* The always-present project STATUS CARD (v1.4.0): a small Git Pull button
+   anchored at the BOTTOM-LEFT (only when Org Sync is on and a folder is
+   selected) and the status text / detected apps / empty-state or problem
+   message to its right. align-self:flex-end drops the button to the bottom of
+   the row while the card container keeps its top-aligned default. */
+.study-card .sc-gitpull{flex:none;align-self:flex-end}
 .study-card .sc-body{flex:1;min-width:0}
-.study-card .sc-empty{font-size:11.5px;color:var(--muted);line-height:1.5;margin:0}
+/* Empty-state "ways to add a project" list: quiet grey guidance, distinct from
+   the green detected-app bullets above. */
+.study-card .ways{margin:6px 0 0;padding-left:16px;list-style:disc}
+.study-card .ways li{font-size:11.5px;color:var(--muted);line-height:1.5;margin:2px 0}
 .study-card .statusline{margin-top:0;font-size:11.5px;color:var(--muted);line-height:1.4}
 .study-card .statusline.ok{color:var(--ok)}   /* green confirmation, matching the app-name bullets below */
 .study-card .statusline .dot{display:none}
@@ -1139,7 +1144,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.0.0</div>
+      <div class="af-ver" id="footVersion">version 1.4.1</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1163,17 +1168,17 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
         <section class="card">
           <h2 class="card-num"><span class="n">1</span> oTree project</h2>
 
-          <!-- Line 1: the GitHub org button (left of Browse; shown only when Org
-               Sync is on) + the folder path field + Browse. The org button carries
-               the GitHub logo + organisation name (filled by updateGithubOrgBtn). -->
+          <!-- Line 1: the folder path field + the GitHub org button (between the
+               field and Browse; shown only when Org Sync is on) + Browse. The org
+               button carries the GitHub logo + organisation name (filled by
+               updateGithubOrgBtn). -->
           <div class="pathrow">
-            <button class="btn btn-gh" id="githubOrgBtn" hidden onclick="onGithubOrgClone()"
-              title="Clone a study from your lab GitHub organisation">GitHub</button>
             <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
               placeholder="Click Browse to choose your oTree project folder">
+            <button class="btn btn-gh" id="githubOrgBtn" hidden onclick="onGithubOrgClone()"
+              title="Clone a study from your lab GitHub organisation">GitHub</button>
             <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
           </div>
-          <p class="pathhint" id="projPathHint">Click Browse to pick your oTree project folder with a native dialog, or paste the full path here and press Enter.</p>
           <script>
           /* In browser mode Browse pops a native folder dialog on the local
              server machine (POST /api/browse_folder); pasting a path also works.
@@ -1187,16 +1192,17 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 
           <!-- Line 2: ONE always-present STATUS CARD. It absorbs the old loose grey
                helper lines and the not-an-oTree warning. Contents are rendered by
-               applyProject by state: empty prompt / green valid project (+ a small
-               Git Pull button on the LEFT when Org Sync is on) / red problem. -->
+               applyProject by state: empty prompt (the "ways to add a project"
+               list) / green valid project / red problem. A small Git Pull button
+               sits at the BOTTOM-LEFT when Org Sync is on and a folder is chosen. -->
           <div class="study-card" id="projDetect">
             <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
               onclick="onGitUpdateStudy()"
               title="Run git pull in the study folder to fetch the latest version">Git Pull</button>
             <div class="sc-body">
-              <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
+              <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet.</span></div>
               <ul class="bullets" id="appBullets" hidden></ul>
-              <p class="sc-empty" id="projEmptyExtra" hidden></p>
+              <ul class="ways" id="projWays" hidden></ul>
             </div>
           </div>
 
@@ -1745,19 +1751,14 @@ function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")|
 var lastProject=null;
 function applyProject(p){
   lastProject=p=p||{};
-  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets"),extra=el("projEmptyExtra");
+  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets");
   var lvl=p.level||"muted";
   var empty=!hasProjectFolder()&&!p.message;
   if(empty){
     lvl="muted";
-    msg.textContent="No project folder chosen yet. Click Browse to pick one.";
-    if(extra){
-      if(GITHUB_SYNC_ENABLED){extra.textContent="or use the GitHub org button to clone from an organisation repository.";extra.hidden=false;}
-      else extra.hidden=true;
-    }
+    msg.textContent="No project folder chosen yet.";
   }else{
-    msg.textContent=p.message||"No project folder chosen yet. Click Browse to pick one.";
-    if(extra)extra.hidden=true;
+    msg.textContent=p.message||"No project folder chosen yet.";
   }
   line.className="statusline "+lvl;
   line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
@@ -1766,15 +1767,30 @@ function applyProject(p){
   else bul.hidden=true;
   updateProjectGitPull();
 }
+/* Render the empty-state "ways to add a project" list, shown ONLY when no folder
+   is chosen and there is no problem message. It folds in the old loose helper
+   line and serves both native and browser modes. Bullet 3 (the GitHub
+   organisation) appears only when the GitHub org button is itself visible. */
+function renderProjectEmptyWays(){
+  var ways=el("projWays");if(!ways)return;
+  var empty=!hasProjectFolder()&&!(lastProject&&lastProject.message);
+  if(!empty){ways.hidden=true;ways.innerHTML="";return;}
+  var items=[
+    'Just click "Browse" to pick your oTree project folder with a native dialog.',
+    "Paste the full path into the box above."
+  ];
+  var gh=el("githubOrgBtn");
+  if(gh&&!gh.hidden)items.push("Use your lab's GitHub organisation by clicking the GitHub button.");
+  ways.innerHTML="";
+  items.forEach(function(t){var li=document.createElement("li");li.textContent=t;ways.appendChild(li);});
+  ways.hidden=false;
+}
 /* Show the small Git Pull button inside the status card only when Org Sync is on
-   AND a project folder is selected (item 7). Also re-run when Org Sync toggles. */
+   AND a project folder is selected (item 7). Also refresh the empty-state ways
+   list so bullet 3 tracks the Org Sync toggle. */
 function updateProjectGitPull(){
   var b=el("gitPullBtn");if(b)b.hidden=!(GITHUB_SYNC_ENABLED&&hasProjectFolder());
-  var extra=el("projEmptyExtra");
-  /* keep the empty-state second line in step with the Org Sync toggle */
-  if(extra&&!extra.hidden&&!GITHUB_SYNC_ENABLED)extra.hidden=true;
-  else if(extra&&!hasProjectFolder()&&(lastProject&&!lastProject.message)&&GITHUB_SYNC_ENABLED){
-    extra.textContent="or use the GitHub org button to clone from an organisation repository.";extra.hidden=false;}
+  renderProjectEmptyWays();
 }
 function titlecase(s){return String(s).replace(/[_-]+/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});}
 /* The pen beside "oTree admin" opens a popover holding the admin username +
@@ -2851,7 +2867,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.3.0</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.1</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -4071,7 +4087,7 @@ function initNative(state){
 /* Fill the sidebar footer's version line. IDENTITY ONLY -- no update check here
    (the update check runs only when Lab Settings is opened). The version number
    comes from Python (app_version); this only renders it. Fail-soft: any error
-   leaves the default "version 1.0.0" text untouched. */
+   leaves the placeholder version text untouched. */
 function loadFooterVersion(){
   var v=el("footVersion");if(!v)return;
   if(!NATIVE||!API||!API.app_version)return;   /* keep the static default text */
@@ -4171,9 +4187,11 @@ function hideBrowseButtons(){
      native folder dialog via /api/browse_folder), so it stays visible. Only the
      participant-FILE Browse has no server-side equivalent yet, so it is hidden
      and that path is pasted instead. The head <script> already set
-     data-webmode="browser" before first paint (CSS hides just the file Browse
-     and shows the paste hint with no flicker); this re-asserts the mode and the
-     placeholder belt-and-suspenders. The paste field stays visible and editable. */
+     data-webmode="browser" before first paint (CSS hides just the file Browse,
+     with no flicker); this re-asserts the mode and the placeholder
+     belt-and-suspenders. The paste field stays visible and editable, and the
+     status box's empty-state "ways to add a project" list guides browser mode
+     too. */
   document.documentElement.setAttribute("data-webmode","browser");
   var b1=el("browseProjBtn");if(b1)b1.hidden=false;   /* project Browse works in browser mode */
   var b2=el("browseFileBtn");if(b2)b2.hidden=true;
