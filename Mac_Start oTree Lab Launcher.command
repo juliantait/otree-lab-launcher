@@ -8,7 +8,9 @@
 #
 # It still uses a private virtualenv in your home folder (outside iCloud) so it
 # never touches the Homebrew/system Python (which blocks system-wide pip
-# installs). The venv needs no third-party packages for browser mode.
+# installs). Browser mode needs only one small third-party package, certifi (a
+# CA bundle so the in-app update check can verify GitHub's HTTPS certificate on
+# the python.org Python, which ships no system CA bundle).
 #
 # This script sits at the repo root; the app code lives in app/ and your config
 # and maps live in data/ at the repo root.
@@ -21,9 +23,12 @@ if [ ! -x "$VENV/bin/python" ]; then
   echo "First run: creating a private Python environment with $PYBIN (one-time)..."
   "$PYBIN" -m venv "$VENV" || { echo "Could not create the venv."; read -r _; exit 1; }
 fi
-# Browser mode needs only the standard library, so this installs nothing heavy
-# (requirements-web.txt lists no required packages). It stays here so any future
-# lightweight dependency flows through, and it never tries to compile pyobjc.
+# Re-sync requirements on EVERY launch (not just first venv creation) so a
+# newly-added dependency lands in the existing venv the next time you launch
+# after a git pull -- this is what carries certifi into an already-created venv.
+# certifi is pure Python (no compile), so this stays fast and never builds
+# pyobjc. Fail-soft: if the install cannot run (offline, etc.) the app falls
+# back to Python's default trust store and simply launches.
 "$VENV/bin/python" -m pip install -q -r app/requirements-web.txt >/dev/null 2>&1 || true
 # --browser forces the stdlib HTTP + default-browser mode (it is also the
 # default now; passed explicitly so an older build still starts in browser mode).

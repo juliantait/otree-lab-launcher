@@ -3,10 +3,18 @@
 # As of v1.1.0 the launcher runs in BROWSER MODE by default on every platform:
 # it serves its UI over a tiny standard-library HTTP server and opens it in the
 # operator's DEFAULT BROWSER. That path needs NOTHING beyond the Python standard
-# library (plus the bundled otree_core), so this file installs no third-party
-# packages -- and on macOS the launcher starts WITHOUT trying to compile pyobjc.
+# library (plus the bundled otree_core) to render its UI, and on macOS the
+# launcher starts WITHOUT trying to compile pyobjc.
 #
-# There are therefore deliberately no required dependencies here.
+# The ONE required dependency is certifi: a bundled set of CA root certificates
+# so the in-app update check's HTTPS request to the GitHub API can verify the
+# certificate. The python.org macOS framework build ships NO system CA bundle,
+# so without certifi that request fails with CERTIFICATE_VERIFY_FAILED on every
+# lab Mac. certifi is pure Python (no build step), safe on any Python version,
+# and a no-op improvement on Windows/Linux where the system store already works.
+# It is a floor, not an exact pin, on purpose: a CA bundle should stay current
+# so newly-rotated roots keep verifying.
+certifi>=2024.7.4
 #
 # ---------------------------------------------------------------------------
 # OPTIONAL: the native desktop window (pywebview)

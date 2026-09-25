@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -2390,16 +2390,46 @@ def version_is_newer(remote, current):
     return remote_v > current_v
 
 
+def _https_ssl_context():
+    """An SSL context whose trust store is certifi's bundled CA set.
+
+    This exists because the python.org macOS FRAMEWORK build ships with NO
+    system CA bundle (``ssl.get_default_verify_paths().cafile`` is None), so
+    Python's default context cannot verify GitHub's certificate and every
+    HTTPS request raises CERTIFICATE_VERIFY_FAILED -- which the update check
+    then swallows and reports as "Could not reach GitHub". Pointing the context
+    at ``certifi.where()`` gives Python a real CA bundle on every platform.
+
+    Used on ALL platforms (not gated to macOS): certifi ships the standard CA
+    roots that GitHub chains to, so it is a no-op improvement on Windows/Linux
+    where the system store already worked. If certifi cannot be imported for any
+    reason we return None so the caller falls back to Python's default context
+    (which keeps working where the system trust store is present). Never raises.
+    """
+    try:
+        import ssl
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 def _fetch_release_payload(timeout=4.0):
     """GET the latest-release JSON from GitHub (raw bytes). Short timeout so a
     stalled network never hangs the check; the caller swallows any error
-    (including the 404 GitHub returns when there are no releases yet)."""
+    (including the 404 GitHub returns when there are no releases yet).
+
+    The HTTPS request verifies GitHub's certificate against certifi's bundled
+    CA set (see :func:`_https_ssl_context`); passing ``context=None`` when
+    certifi is unavailable is equivalent to using Python's default context."""
     import urllib.request
     request = urllib.request.Request(
         GITHUB_RELEASES_URL,
         headers={"Accept": "application/vnd.github+json",
                  "User-Agent": "otree-lab-launcher"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    context = _https_ssl_context()
+    with urllib.request.urlopen(
+            request, timeout=timeout, context=context) as response:
         return response.read()
 
 
