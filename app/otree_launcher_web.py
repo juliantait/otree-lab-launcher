@@ -1160,7 +1160,11 @@ class Api(object):
                       "remote_version": "", "checked": False, "check_failed": True,
                       "label": "", "tooltip": core.UPDATE_TOOLTIP,
                       "repo_url": core.REPO_URL}
-        return {"ok": True, "version": core.APP_VERSION, "update": update}
+        # Resolve the install type UP FRONT so the page can render the Update
+        # control's FINAL action in one click (git pull for a git working tree, the
+        # GitHub download link otherwise). is_git_install never raises.
+        return {"ok": True, "version": core.APP_VERSION, "update": update,
+                "is_git_repo": core.is_git_install()}
 
     @api_call
     def git_repo_status(self):
@@ -1183,24 +1187,37 @@ class Api(object):
         result = core.git_pull()
         result.setdefault("ok", False)
         if result.get("ok"):
+            browser_mode = bool(getattr(self, "browser_mode", False))
             relaunching = self._relaunch_after_update()
             result["relaunching"] = relaunching
             if relaunching:
-                result["message"] = ("Updated, restarting the launcher (a fresh "
-                                      "window/tab opens on the new version).")
+                # In browser mode the new instance comes up on the SAME port with
+                # the browser auto-open suppressed; the page reloads THIS tab onto
+                # it (one tab). A native window just closes and reopens native, so
+                # there is no tab to reload.
+                result["browser_reload"] = browser_mode
+                result["message"] = ("Updated, restarting the launcher (it reopens "
+                                      "on the new version).")
         return result
 
     def _relaunch_after_update(self):
-        """Spawn a fresh detached launcher, then (after a short delay so the HTTP
-        response reaches the page) cleanly shut THIS server down via the existing
-        request_shutdown path. Returns True when the fresh instance was spawned.
+        """Spawn a fresh detached launcher IN THE SAME MODE, then (after a short
+        delay so the HTTP response reaches the page) cleanly shut THIS server down
+        via the existing request_shutdown path. Returns True when the fresh
+        instance was spawned.
+
+        Browser mode relaunches on the CURRENT port with the browser auto-open
+        suppressed (so the one open tab can reload onto it, no orphan); a native
+        window relaunches as a native window (no silent native->browser downgrade).
 
         Fail-soft: if the spawn fails we log it and do NOT shut down, so the
         current launcher stays usable (the operator can restart by hand). Only the
         launcher is ever restarted/stopped here; no experiment process is touched.
         """
+        browser_mode = bool(getattr(self, "browser_mode", False))
+        port = int(getattr(self, "current_port", 0) or 0)
         try:
-            spawn_new_launcher()
+            spawn_new_launcher(browser_mode=browser_mode, port=port)
         except Exception:
             LOG.exception("relaunch: could not spawn a fresh launcher")
             return False
@@ -2924,31 +2941,42 @@ def _detached_popen_kwargs():
     return {"start_new_session": True, "close_fds": True}
 
 
-def spawn_new_launcher():
-    """Start a FRESH, DETACHED launcher instance via the platform's normal entry
-    point, so an in-place update comes back running the just-pulled code.
+def build_relaunch_command(browser_mode, port=0, python=None, script=None):
+    """Build the argv that re-execs THIS launcher for an in-place relaunch.
 
-    Prefers the same double-click entry the operator uses: the Windows ``.vbs``
-    (via ``wscript``) or the macOS ``.command`` (via ``open``); otherwise it
-    re-execs the web launcher with the current Python (``--browser``). Returns the
-    spawned Popen. Raises on failure (the caller logs and skips the shutdown so the
-    current launcher stays up). This ONLY ever starts another launcher; it never
-    touches any oTree/experiment process.
+    Re-execs the CURRENT Python directly rather than the platform double-click
+    script, because those scripts hardcode browser mode + a random free port,
+    which would (a) orphan the open browser tab on a dead port and (b) silently
+    downgrade a native-window session to a browser tab. Instead:
+
+      * browser mode  -> ``--browser --port <current> --no-open``: come back on the
+        SAME port with NO new tab, so the one open tab can reload onto it;
+      * native window -> ``--window``: come back as a native window.
+
+    The running process is already the launcher's own (venv) Python, so
+    ``sys.executable`` is the right interpreter to re-exec.
     """
-    root = core.repo_root()
+    python = python or sys.executable
+    script = script or os.path.join(core.app_dir(), "otree_launcher_web.py")
+    if browser_mode:
+        return [python, script, "--browser", "--port", str(int(port)), "--no-open"]
+    return [python, script, "--window"]
+
+
+def spawn_new_launcher(browser_mode=True, port=0):
+    """Start a FRESH, DETACHED launcher instance re-execing THIS launcher with the
+    current Python, so an in-place update comes back running the just-pulled code
+    IN THE SAME MODE the operator was using (browser tab reused on the same port,
+    or a native window stays native). See :func:`build_relaunch_command`.
+
+    Returns the spawned Popen. Raises on failure (the caller logs and skips the
+    shutdown so the current launcher stays up). This ONLY ever starts another
+    launcher; it never touches any oTree/experiment process.
+    """
     kwargs = _detached_popen_kwargs()
-    if sys.platform.startswith("win"):
-        vbs = os.path.join(root, "Win_Start oTree Lab Launcher.vbs")
-        if os.path.isfile(vbs):
-            return subprocess.Popen(["wscript", vbs], **kwargs)
-    elif sys.platform == "darwin":
-        command = os.path.join(root, "Mac_Start oTree Lab Launcher.command")
-        if os.path.isfile(command):
-            return subprocess.Popen(["open", command], **kwargs)
-    # Fallback (Linux, or the platform script is missing): re-exec THIS launcher.
-    return subprocess.Popen(
-        [sys.executable, os.path.join(core.app_dir(), "otree_launcher_web.py"),
-         "--browser"], **kwargs)
+    argv = build_relaunch_command(browser_mode, port)
+    LOG.info("relaunch: spawning %s", argv)
+    return subprocess.Popen(argv, **kwargs)
 
 
 def run_browser(host="127.0.0.1", port=0, open_browser=True):
@@ -2996,6 +3024,9 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         LOG.warning("requested port %s stayed busy; taking an OS-chosen free port", port)
         httpd = _Server((host, 0), handler)
     actual_port = httpd.server_address[1]
+    # The self-update relaunch re-execs on THIS port (browser tab reuse), so the
+    # Api needs to know it. (browser_mode was set above.)
+    api.current_port = actual_port
     for origin_host in (host, "127.0.0.1", "localhost"):
         allowed_origins.add("http://%s:%d" % (origin_host, actual_port))
     # Closing the browser tab must actually END this Python process. A clean close

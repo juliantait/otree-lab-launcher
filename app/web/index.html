@@ -1145,7 +1145,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.4</div>
+      <div class="af-ver" id="footVersion">version 1.4.5</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1472,6 +1472,11 @@ function syncThemeControls(){
 }
 
 var NATIVE=false, API=null, booted=false, BROWSER=false;
+/* Whether THIS launcher copy is a git working tree. Resolved once up front by
+   version_info (Python: core.is_git_install) so the Update control renders its
+   FINAL action in ONE click: a git install pulls+relaunches directly; a plain
+   (zip) install shows the GitHub download link. */
+var IS_GIT_INSTALL=false;
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
 var lastSettings=null, defaultAuthor="", pendingDelete=null;
 /* The most-recently-rendered config rows, so selectConfig can show the config's
@@ -2870,7 +2875,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.4</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.5</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -2954,6 +2959,7 @@ function loadSettingsVersion(){
   API.version_info().then(function(r){
     if(!r||!r.ok)return;
     if(ver)ver.textContent="version "+(r.version||"");
+    IS_GIT_INSTALL=!!r.is_git_repo;   /* resolve the install type UP FRONT */
     /* surface an already-recorded update in the SAME right-column slot; when
        current, leave the slot empty (the "up to date" line only shows on click). */
     var up=r.update||{},res=el("lsCheckResult");
@@ -2961,50 +2967,36 @@ function loadSettingsVersion(){
   });
 }
 /* The update-available message shown in the footer's right slot (shared by the
-   on-open surfacing and the on-demand check). Names the remote version when
-   known and offers an Update button; pressing it decides the update path (git
-   pull vs GitHub download) based on how this copy was installed. */
+   on-open surfacing and the on-demand check). Renders the FINAL update control in
+   ONE click, deciding up front from IS_GIT_INSTALL (resolved by version_info):
+     git install  -> a single "Update" button that pulls + relaunches directly
+                     (runGitPull), NO intermediate "Run" step and NO confirm;
+     not a git repo -> the blue GitHub download link (that path needs the link). */
 function updateAvailHTML(up){
   var extra=up&&up.remote_version?(" ("+escapeHtml(up.remote_version)+")"):"";
-  return "Update available"+extra+". "+
-    '<button class="ls-foot-update" id="lsUpdateBtn" onclick="startUpdate()">Update</button>';
+  if(IS_GIT_INSTALL){
+    /* one click: Update == git pull + relaunch. Tooltip text is EXACT. No link. */
+    return "Update available"+extra+". "+
+      '<button class="ls-foot-update" id="lsUpdateBtn" '+
+      'title="This will run git pull to update the launcher, then restart it." '+
+      'onclick="runGitPull()">Update</button>';
+  }
+  /* not a git install: point straight at the GitHub download page. No pull path. */
+  return "Update available"+extra+". "+githubLinkHTML();
 }
 /* The public repo download link (blue), shown only for a NON-git install. */
 function githubLinkHTML(){
   return 'See <a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" '+
     'target="_blank" rel="noopener">GitHub</a>.';
 }
-/* Pressing Update: check whether THIS install is a git working tree, then branch.
-   git install  -> reveal a "Run" pill (git pull) with the exact hover tooltip,
-                   and show NO GitHub link.
-   not a git repo -> show "Update available. See GitHub" with the repo URL as a
-                   blue link, and NO Run pill. */
-function startUpdate(){
-  var res=el("lsCheckResult");if(!res)return;
-  if(!NATIVE||!API||!API.git_repo_status){
-    res.className="ls-foot-result avail";res.innerHTML="Update available. "+githubLinkHTML();
-    return;
-  }
-  var btn=el("lsUpdateBtn");if(btn){btn.disabled=true;btn.textContent="Checking…";}
-  API.git_repo_status().then(function(r){
-    res.className="ls-foot-result avail";
-    if(r&&r.is_git_repo){
-      /* git install: one-click Run (git pull). Tooltip text is EXACT. No GitHub link. */
-      res.innerHTML='Update available. '+
-        '<button class="ls-foot-run" id="lsRunBtn" title="This will run git pull to update the project." '+
-        'onclick="runGitPull()">Run</button>';
-    }else{
-      /* not a git install: point at the GitHub download page. No Run pill. */
-      res.innerHTML="Update available. "+githubLinkHTML();
-    }
-  });
-}
-/* Clicking Run: execute git pull on the install, show the captured output, then a
-   confirmation popup ("Update installed. Restart the launcher to apply."). */
+/* Clicking Update (git install only): execute git pull on the install; on success
+   the server relaunches itself on the SAME port with the browser auto-open
+   suppressed, and this tab reloads itself onto the new server (exactly one tab).
+   A native-window session comes back as a native window instead. */
 function runGitPull(){
-  var res=el("lsCheckResult"),btn=el("lsRunBtn");
+  var res=el("lsCheckResult"),btn=el("lsUpdateBtn");
   if(!NATIVE||!API||!API.run_git_pull)return;
-  if(btn){btn.disabled=true;btn.textContent="Running…";}
+  if(btn){btn.disabled=true;btn.textContent="Updating…";}
   API.run_git_pull().then(function(r){
     r=r||{};
     if(res){
@@ -3013,10 +3005,21 @@ function runGitPull(){
     }
     var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
     if(r.ok){
-      /* On success the server relaunches itself and shuts down; a fresh window/tab
-         opens on the new version, so there is no manual restart. */
+      if(r.relaunching&&r.browser_reload){
+        /* Browser mode: the new server is coming up on the SAME port with the
+           browser auto-open suppressed. Do NOT expect a new tab -- wait for THIS
+           server to go down and the new one to answer, then reload this very tab
+           onto it (one tab, no orphan). A full reload re-fetches the page and
+           picks up the new per-run security token cleanly. */
+        openModal("Updating",
+          '<p class="modal-desc">Updated. Reloading this tab onto the new version…</p>'+out,true);
+        reloadOntoRelaunchedServer();
+        return;
+      }
+      /* Native window (or no relaunch): the old window closes and reopens as a
+         native window, so there is no tab to reload. */
       var line=r.relaunching
-        ?"Updated, restarting the launcher (a fresh window/tab opens on the new version)."
+        ?"Updated, restarting the launcher (it reopens on the new version)."
         :"Update installed. Restart the launcher to apply.";
       openModal("Update installed",
         '<p class="modal-desc">'+escapeHtml(line)+'</p>'+out+
@@ -3027,6 +3030,26 @@ function runGitPull(){
         '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
     }
   });
+}
+/* Reuse THIS browser tab after a same-port relaunch. The current server stays up
+   for a brief moment (RELAUNCH_SHUTDOWN_DELAY) while the new one waits to bind the
+   SAME port; they cannot both hold the port, so the reliable signal that the NEW
+   server is answering is: first see this server go DOWN, then see it come back UP.
+   Only then reload. A cache-busting GET / probes liveness without the API token. */
+function reloadOntoRelaunchedServer(){
+  var probe=location.pathname+"?relaunch_probe=";
+  var sawDown=false, start=Date.now();
+  function tick(){
+    if(Date.now()-start>60000){location.reload();return;}   /* give up: reload anyway */
+    fetch(probe+Date.now(),{method:"GET",cache:"no-store"}).then(function(){
+      if(sawDown){location.reload();return;}                 /* new server is up */
+      setTimeout(tick,400);                                  /* old still up; keep waiting */
+    }).catch(function(){
+      sawDown=true;                                          /* old server gone */
+      setTimeout(tick,400);                                  /* now wait for the new one */
+    });
+  }
+  tick();
 }
 /* Explicit clean shutdown of the launcher's OWN web-UI server (the Quit button).
    Stops ONLY the launcher process; a running study keeps running untouched (the
