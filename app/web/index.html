@@ -816,17 +816,25 @@ input::placeholder{color:var(--faint)}
 .shown-toggle{cursor:pointer;color:var(--ok);font-weight:700;display:inline-block;box-sizing:border-box;min-width:52px;padding:8px 14px;margin:-8px 0;border-radius:4px;text-align:center;line-height:1}
 .shown-toggle.off{color:var(--faint)}
 .ls-tip{font-size:11.5px;color:var(--faint);margin:10px 0 0}
-/* Lab Settings page footer: version + (persisted) update nudge with a blue link. */
-.ls-foot{margin:18px 2px 2px;padding-top:14px;border-top:1px solid var(--line-soft);
-  font-size:12px;color:var(--faint);line-height:1.55;text-align:center}
+/* Lab Settings page footer bar: the panel Close button on the left and the
+   identity + a subtle "Update?" text-link on ONE row on the right; the update
+   RESULT / nudge lines drop in below only when the check runs. */
+.ls-foot{margin:16px 2px 2px;padding-top:13px;border-top:1px solid var(--line-soft);
+  font-size:12px;color:var(--faint);line-height:1.55}
+.ls-foot-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.ls-foot-id{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;justify-content:flex-end}
 .ls-foot-name{color:var(--muted);font-weight:600}
 .ls-foot-ver{color:var(--muted)}
-.ls-foot-sep{color:var(--faint);margin:3px 0;user-select:none}
-.ls-foot-check{margin-top:2px}
-.ls-foot-result{margin-top:8px;font-size:12px;color:var(--muted)}
+/* the check-for-update action, restyled as a low-emphasis text link (it used to
+   be a filled .btn.tiny); same #lsCheckBtn / checkForUpdateNow() action. */
+.ls-foot-check{background:none;border:0;padding:0;margin:0;font:inherit;font-size:11.5px;
+  color:var(--faint);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.ls-foot-check:hover{color:var(--muted)}
+.ls-foot-check:disabled{cursor:default;text-decoration:none;color:var(--faint);opacity:.7}
+.ls-foot-result{margin-top:9px;font-size:12px;color:var(--muted);text-align:right}
 .ls-foot-result.ok{color:var(--ok)}
 .ls-foot-result.avail{color:var(--accent);font-weight:600}
-.ls-foot-upd{margin-top:6px}
+.ls-foot-upd{margin-top:7px;text-align:right}
 .ls-foot-badge{color:var(--accent);font-weight:600}
 .ls-foot-txt{color:var(--muted)}
 .ls-foot-link{color:#3b82f6;text-decoration:underline;font-weight:600}
@@ -2499,17 +2507,22 @@ function openLabSettings(){
     /* The read-only Launch history link stays at the bottom of Lab Settings
        (fable review F). */
     '<div class="ls-card"><a class="ls-link" onclick="openLaunchHistory();return false;">Launch history &rarr;</a></div>'+
-    '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>'+
-    /* SETTINGS-PAGE footer (Julian's final design), at the very bottom: always
-       the version; when a newer release is RECORDED (persisted; visible even
-       offline) a small "new version available" note plus the upgrade text with
-       the word GitHub as a BLUE clickable link. The check runs on Settings OPEN,
-       at most once a day (version_info -> core.check_for_update). */
+    /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom: the
+       panel Close button on the left, and on the right the identity + version +
+       a subtle "Update?" text-link ON ONE ROW. When a newer release is RECORDED
+       (persisted; visible even offline) a small "new version available" note
+       plus the upgrade text with the word GitHub as a BLUE clickable link drops
+       in below. The check runs on Settings OPEN, at most once a day
+       (version_info -> core.check_for_update). */
     '<div class="ls-foot" id="lsFoot">'+
-      '<div class="ls-foot-name">oTree Lab Launcher</div>'+
-      '<div class="ls-foot-ver" id="lsFootVer">version 1.0.0</div>'+
-      '<div class="ls-foot-sep" aria-hidden="true">-</div>'+
-      '<div class="ls-foot-check"><button class="btn tiny" id="lsCheckBtn" onclick="checkForUpdateNow()">Check for update</button></div>'+
+      '<div class="ls-foot-bar">'+
+        '<button class="btn" onclick="closeModal()">Close</button>'+
+        '<div class="ls-foot-id">'+
+          '<span class="ls-foot-name">oTree Lab Launcher</span>'+
+          '<span class="ls-foot-ver" id="lsFootVer">version 1.1.1</span>'+
+          '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
+        '</div>'+
+      '</div>'+
       '<div class="ls-foot-result" id="lsCheckResult" hidden></div>'+
       '<div class="ls-foot-upd" id="lsFootUpd" hidden>'+
         '<span class="ls-foot-badge" id="lsFootBadge">new version available</span> '+
@@ -2540,7 +2553,7 @@ function loadSettingsVersion(){
     }
   });
 }
-/* ON-DEMAND update check, run from the "Check for update" button in the Lab
+/* ON-DEMAND update check, run from the subtle "Update?" text-link in the Lab
    Settings footer. The auto-check only runs on Settings open, at most once a day;
    this forces a live check NOW and shows the result inline. Reuses the SAME
    Python logic (core.check_for_update) via version_info(force=true) -- no new
@@ -2554,7 +2567,7 @@ function checkForUpdateNow(){
   if(btn){btn.disabled=true;btn.textContent="Checking…";}
   if(res){res.hidden=false;res.className="ls-foot-result";res.textContent="Checking for updates…";}
   API.version_info(true).then(function(r){          /* force=true => hit the network now */
-    if(btn){btn.disabled=false;btn.textContent="Check for update";}
+    if(btn){btn.disabled=false;btn.textContent="Update?";}
     if(!r||!r.ok){if(res){res.className="ls-foot-result";res.textContent="Could not check right now. Try again later.";}return;}
     var up=r.update||{},box=el("lsFootUpd");
     if(up.update_available){
