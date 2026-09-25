@@ -1,24 +1,27 @@
-# oTree Lab Launcher (web / pywebview): pinned dependencies.
+# oTree Lab Launcher (web): dependencies.
 #
-# These pins exist to dodge the Windows WebView2 / pythonnet crash that froze
-# the launcher on Browse: a UI-Automation / accessibility client probing
-# window.native triggered infinite attribute recursion in pywebview's pythonnet
-# proxy inside a COM callback (RecursionError -> E_NOINTERFACE / 0x80004002).
-# Full write-up and the version matrix: _ai/WEB_FREEZE_DIAGNOSIS.md
+# As of v1.1.0 the launcher runs in BROWSER MODE by default on every platform:
+# it serves its UI over a tiny standard-library HTTP server and opens it in the
+# operator's DEFAULT BROWSER. That path needs NOTHING beyond the Python standard
+# library (plus the bundled otree_core), so this file installs no third-party
+# packages -- and on macOS the launcher starts WITHOUT trying to compile pyobjc.
 #
-# ALSO REQUIRED on Windows (cannot be pinned here, set up on the machine):
-#   * Python 3.11 or 3.12, NOT 3.13/3.14 (pythonnet crashes on 3.13+).
-#   * Edge WebView2 Evergreen runtime updated to the latest, then REBOOT.
-#   * Retest with any screen-reader / UIA tool (Narrator, NVDA, JAWS) and any
-#     RMM/AV/remote-desktop/screen-recording overlay temporarily disabled,
-#     that is the fastest way to confirm the accessibility trigger.
-
-pywebview==5.4
-
-# Windows GUI bridge. NEVER pythonnet 3.0.0 or 3.0.0.post1 (known-bad).
-# If 3.0.5 misbehaves, try 3.0.3.
-pythonnet==3.0.5 ; sys_platform == "win32"
-
-# macOS uses the Cocoa/WebKit bridge instead of pythonnet:
-pyobjc-framework-Cocoa ; sys_platform == "darwin"
-pyobjc-framework-WebKit ; sys_platform == "darwin"
+# There are therefore deliberately no required dependencies here.
+#
+# ---------------------------------------------------------------------------
+# OPTIONAL: the native desktop window (pywebview)
+# ---------------------------------------------------------------------------
+# A native pywebview window is an OPTIONAL opt-in (run the launcher with
+# --window / --pywebview). It is NEVER needed for the normal browser-mode path.
+# If you want it, install the pinned deps below by hand, e.g.:
+#
+#     pip install -r app/requirements-web-optional.txt
+#
+# and see _ai/WEB_FREEZE_DIAGNOSIS.md for the Windows WebView2 / pythonnet
+# version matrix. These lines are commented out on purpose so the default
+# install never pulls the heavy, fragile native GUI wheels:
+#
+#   pywebview==5.4
+#   pythonnet==3.0.5 ; sys_platform == "win32"        # NEVER 3.0.0 / 3.0.0.post1
+#   pyobjc-framework-Cocoa ; sys_platform == "darwin"
+#   pyobjc-framework-WebKit ; sys_platform == "darwin"

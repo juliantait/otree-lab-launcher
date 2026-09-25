@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""oTree Lab Launcher: web-tech front end (pywebview host).
+"""oTree Lab Launcher: web-tech front end.
 
-This is the re-skin of ``otree_lab_launcher.py``. The window and every button
-are HTML/CSS/JS (``web/index.html``), but the real work (picking folders,
-validating the project, saving configs, resetting the database and starting
-``otree prodserver``) is done here in Python, so the app keeps the full
-filesystem and process powers a browser tab can never have.
+This is the re-skin of ``otree_lab_launcher.py``. Every button is HTML/CSS/JS
+(``web/index.html``), but the real work (picking folders, validating the project,
+saving configs, resetting the database and starting ``otree prodserver``) is done
+here in Python, so the app keeps the full filesystem and process powers a browser
+tab can never have.
 
     Web tech for the looks, a native Python process for the powers.
 
-On Windows 10/11 pywebview renders through the built-in Edge WebView2 runtime,
-so there is no Chromium bundle and no Node build. Run it with::
+BROWSER MODE IS THE DEFAULT on every platform (v1.1.0): the UI is served over a
+tiny standard-library HTTP server and opened in the operator's DEFAULT BROWSER.
+That path uses ONLY the Python standard library (plus ``otree_core``) -- no
+pywebview, no pythonnet, no pyobjc -- so it runs on any Python and never has to
+build the heavy, fragile native GUI wheels that fail on macOS Python 3.12. Run
+it with just::
 
-    pip install pywebview
     python otree_launcher_web.py
+
+A native desktop window (pywebview) is an OPTIONAL opt-in via ``--window`` (or
+``--pywebview``); it is never required, and if pywebview is not installed the
+launcher falls back to browser mode automatically.
 
 The pure logic (config model, DATABASE_URL, seat files, resetdb/prodserver
 commands, the settings.py block, presets storage) is imported unchanged from
@@ -271,31 +278,59 @@ def preset_row(preset):
 # empty path, so the UI just keeps the paste-the-path field.
 # ---------------------------------------------------------------------------
 
-# The helper program source, run as ``python -c``. stdlib ONLY (tkinter + sys):
-# it never imports otree_core or any third-party module, so it runs on the barest
-# Python. It withdraws the root, lifts it -topmost so the dialog is frontmost,
-# runs askdirectory(), then writes the chosen path (empty string on cancel) to
-# stdout as its sole output and exits.
+# Shared helper-source fragments so every dialog (folder / custom-folder / save)
+# comes to the FOREGROUND the same way. The dialog runs in a subprocess whose
+# Tk window does NOT steal focus by default -- on aqua especially it opens
+# BEHIND the browser -- so before showing the dialog we lift the hidden root
+# -topmost, update/lift/focus_force it, and on macOS also activate THIS process
+# to the front via osascript (Tk from a subprocess cannot do that itself; we use
+# osascript, never pyobjc). The osascript call is wrapped so a failure never
+# blocks the dialog. Afterwards we drop -topmost and destroy the root.
+_DIALOG_RAISE_FRONT = (
+    "try:\n"
+    "    root.attributes('-topmost', True)\n"
+    "    root.update()\n"
+    "    root.lift()\n"
+    "    root.focus_force()\n"
+    "except Exception:\n"
+    "    pass\n"
+    "if sys.platform == 'darwin':\n"
+    "    try:\n"
+    "        import os as _os, subprocess as _sp\n"
+    "        _sp.run(['osascript', '-e',\n"
+    "            'tell application \"System Events\" to set frontmost of "
+    "(first process whose unix id is %d) to true' % _os.getpid()],\n"
+    "            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=5)\n"
+    "    except Exception:\n"
+    "        pass\n"
+)
+
+_DIALOG_DROP_FRONT = (
+    "try:\n"
+    "    root.attributes('-topmost', False)\n"
+    "except Exception:\n"
+    "    pass\n"
+    "try:\n"
+    "    root.destroy()\n"
+    "except Exception:\n"
+    "    pass\n"
+)
+
+# The helper program source, run as ``python -c``. stdlib ONLY (tkinter + sys,
+# plus os/subprocess for the macOS activation): it never imports otree_core or
+# any third-party module, so it runs on the barest Python. It withdraws the
+# root, raises it to the FOREGROUND (see :data:`_DIALOG_RAISE_FRONT`), runs
+# askdirectory(), then writes the chosen path (empty string on cancel) to stdout
+# as its sole output and exits.
 _FOLDER_DIALOG_HELPER = (
     "import sys\n"
     "import tkinter\n"
     "from tkinter import filedialog\n"
     "root = tkinter.Tk()\n"
     "root.withdraw()\n"
-    "try:\n"
-    "    root.attributes('-topmost', True)\n"
-    "except Exception:\n"
-    "    pass\n"
-    "root.lift()\n"
-    "try:\n"
-    "    root.update()\n"
-    "except Exception:\n"
-    "    pass\n"
+    + _DIALOG_RAISE_FRONT +
     "path = filedialog.askdirectory(title='Choose your oTree project folder')\n"
-    "try:\n"
-    "    root.destroy()\n"
-    "except Exception:\n"
-    "    pass\n"
+    + _DIALOG_DROP_FRONT +
     "sys.stdout.write(path or '')\n"
     "sys.stdout.flush()\n"
 )
@@ -313,20 +348,9 @@ def _build_folder_dialog_helper(title):
         "from tkinter import filedialog\n"
         "root = tkinter.Tk()\n"
         "root.withdraw()\n"
-        "try:\n"
-        "    root.attributes('-topmost', True)\n"
-        "except Exception:\n"
-        "    pass\n"
-        "root.lift()\n"
-        "try:\n"
-        "    root.update()\n"
-        "except Exception:\n"
-        "    pass\n"
+        + _DIALOG_RAISE_FRONT +
         "path = filedialog.askdirectory(title=%s)\n" % title_lit +
-        "try:\n"
-        "    root.destroy()\n"
-        "except Exception:\n"
-        "    pass\n"
+        _DIALOG_DROP_FRONT +
         "sys.stdout.write(path or '')\n"
         "sys.stdout.flush()\n"
     )
@@ -403,23 +427,12 @@ def _build_save_dialog_helper(default_name, ext):
         "from tkinter import filedialog\n"
         "root = tkinter.Tk()\n"
         "root.withdraw()\n"
-        "try:\n"
-        "    root.attributes('-topmost', True)\n"
-        "except Exception:\n"
-        "    pass\n"
-        "root.lift()\n"
-        "try:\n"
-        "    root.update()\n"
-        "except Exception:\n"
-        "    pass\n"
+        + _DIALOG_RAISE_FRONT +
         "ext = %s\n" % ext_lit +
         "ftypes = [(%s, ('*' + ext) if ext else '*.*'), ('All files', '*.*')]\n" % label_lit +
         "path = filedialog.asksaveasfilename(title='Save the one-click shortcut',\n"
         "    initialfile=%s, defaultextension=ext, filetypes=ftypes)\n" % name_lit +
-        "try:\n"
-        "    root.destroy()\n"
-        "except Exception:\n"
-        "    pass\n"
+        _DIALOG_DROP_FRONT +
         "sys.stdout.write(path or '')\n"
         "sys.stdout.flush()\n"
     )
@@ -2623,11 +2636,25 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    # --browser  : force the stdlib HTTP + default-browser mode (no pywebview).
-    # --port N   : bind the browser-mode server to a fixed port (0 = free port).
-    # --no-open  : do not auto-open the browser (used by the headless self-test).
-    browser_mode = "--browser" in argv
+    # BROWSER MODE IS THE DEFAULT ON EVERY PLATFORM (v1.1.0). The launcher serves
+    # its UI over a tiny stdlib HTTP server and opens it in the operator's DEFAULT
+    # BROWSER, so it runs on ANY Python with ZERO third-party dependencies -- no
+    # pywebview, no pythonnet, no pyobjc (the heavy, fragile deps that fail to
+    # build on macOS Python 3.12). Flags:
+    #   --window / --pywebview : OPT IN to the native pywebview desktop window
+    #                            instead (only if pywebview is installed; it is
+    #                            NOT needed for the normal path and the launcher
+    #                            falls back to browser mode if it is missing).
+    #   --browser              : force browser mode. Now the default, so this is
+    #                            redundant; kept so existing shortcuts/scripts
+    #                            (e.g. the Windows .vbs) that pass it still work.
+    #   --port N               : bind the browser-mode server to a fixed port
+    #                            (0 = free port).
+    #   --no-open              : do not auto-open the browser (headless self-test).
+    want_window = ("--window" in argv) or ("--pywebview" in argv)
     no_open = "--no-open" in argv
+    # Browser mode unless the operator explicitly opts into the pywebview window.
+    browser_mode = not want_window
     port = 0
     if "--port" in argv:
         try:
@@ -2641,13 +2668,13 @@ def main(argv=None):
     LOG.info("log file: %s", LOG_PATH)
     core.reload_lab_info()
 
-    if not browser_mode:
+    if want_window:
         try:
-            import webview
+            import webview  # noqa: F401
         except ImportError:
-            # No pywebview (e.g. Python 3.13/3.14 on Windows, where pythonnet has
-            # no wheel) -> fall back to browser mode automatically instead of
-            # failing. Browser mode needs NOTHING beyond the standard library.
+            # Opted into the window but pywebview is not installed -> fall back to
+            # browser mode instead of failing. Browser mode needs NOTHING beyond
+            # the standard library.
             LOG.warning("pywebview not importable; falling back to browser mode")
             sys.stderr.write(
                 "pywebview is not available, so starting in BROWSER mode "
@@ -2657,7 +2684,10 @@ def main(argv=None):
     if browser_mode:
         return run_browser(port=port, open_browser=not no_open)
 
-    import webview  # already importable (checked above)
+    # Opt-in pywebview window path: reached only when --window/--pywebview was
+    # passed AND the import above succeeded (otherwise browser_mode is True and we
+    # returned via run_browser).
+    import webview
     LOG.info("pywebview %s", getattr(webview, "__version__", "?"))
 
     if not os.path.isfile(INDEX_HTML):

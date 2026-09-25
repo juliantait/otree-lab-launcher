@@ -3,33 +3,33 @@
 #  Create desktop shortcut.command  (macOS)
 #
 #  Double-click this ONCE from the oTree Lab Launcher folder. It works
-#  out its own location, then builds a small app bundle
+#  out its own location, then creates a proper Finder ALIAS
 #
-#      Start oTree Lab Launcher.app
+#      Start oTree Lab Launcher
 #
-#  on your Desktop. That app:
-#    * runs the web launcher in THIS folder
-#        (Mac_Start oTree Lab Launcher (web).command)
-#    * shows the lab logo (from branding/logo.icns)
+#  on your Desktop, pointing at the web launcher in THIS folder
+#      Mac_Start oTree Lab Launcher (web).command
 #
-#  A Desktop copy is no longer next to the folder, so the path to the
-#  launcher is baked in as an absolute path computed from where THIS
-#  file lives. Nothing to edit by hand.
+#  This mirrors the Windows "Start oTree Lab Launcher.lnk": a real
+#  Finder alias (not an app bundle). Double-clicking it opens the
+#  .command in Terminal with your full login environment, which starts
+#  the launcher in your default browser.
+#
+#  Nothing to edit by hand: the target is an absolute path computed
+#  from where THIS file lives.
 # ===================================================================
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TARGET="$HERE/Mac_Start oTree Lab Launcher (web).command"
-# Single canonical logo. To rebrand, just regenerate branding/logo.icns.
-ICON="$HERE/branding/logo.icns"
 DESKTOP="$HOME/Desktop"
-APP="$DESKTOP/Start oTree Lab Launcher.app"
+ALIAS_NAME="Start oTree Lab Launcher"
+ALIAS_PATH="$DESKTOP/$ALIAS_NAME"
 
 echo
-echo "Creating desktop shortcut..."
-echo "  Shortcut : $APP"
+echo "Creating desktop shortcut (Finder alias)..."
+echo "  Shortcut : $ALIAS_PATH"
 echo "  Target   : $TARGET"
-echo "  Icon     : $ICON"
 echo
 
 if [ ! -f "$TARGET" ]; then
@@ -40,54 +40,37 @@ if [ ! -f "$TARGET" ]; then
   exit 1
 fi
 
-# Fresh bundle (remove any previous one so we do not merge stale files).
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Make sure the launcher itself is executable so the alias runs it in Terminal.
+chmod +x "$TARGET" 2>/dev/null || true
 
-# Icon
-if [ -f "$ICON" ]; then
-  cp "$ICON" "$APP/Contents/Resources/icon.icns"
-else
-  echo "WARNING: icon not found ($ICON); the app will use a generic icon."
+# Remove any previous alias we made (Finder refuses to make a second alias to the
+# same target, and we want a clean, correctly-named one).
+rm -f "$ALIAS_PATH" 2>/dev/null || true
+
+# Ask Finder to make the alias, then rename it to the friendly name. Using
+# POSIX file <path> keeps spaces in the path safe. osascript returns non-zero and
+# prints the AppleScript error if anything fails, which "set -e" will surface.
+osascript - "$TARGET" "$ALIAS_NAME" <<'APPLESCRIPT'
+on run argv
+    set targetPOSIX to item 1 of argv
+    set aliasName to item 2 of argv
+    tell application "Finder"
+        set newAlias to make alias file to POSIX file targetPOSIX at (path to desktop folder)
+        set name of newAlias to aliasName
+    end tell
+end run
+APPLESCRIPT
+
+# Optional branding: a Finder alias shows the target's icon (a script icon here).
+# Setting a custom icon on an alias reliably needs resource-fork tools that are
+# not guaranteed present, so we leave the default icon.
+if [ -f "$HERE/branding/logo.icns" ]; then
+  echo "Note: leaving the default alias icon (a custom icon on a Finder alias is"
+  echo "      not set reliably without extra tools; branding/logo.icns unused)."
 fi
 
-# PkgInfo
-printf 'APPL????' > "$APP/Contents/PkgInfo"
-
-# Info.plist
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>Start oTree Lab Launcher</string>
-  <key>CFBundleDisplayName</key><string>Start oTree Lab Launcher</string>
-  <key>CFBundleIdentifier</key><string>eu.juliantait.otree-lab-launcher</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleSignature</key><string>????</string>
-  <key>CFBundleExecutable</key><string>start</string>
-  <key>CFBundleIconFile</key><string>icon</string>
-  <key>LSMinimumSystemVersion</key><string>10.13</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-
-# Start stub with the absolute target baked in.
-{
-  printf '#!/bin/bash\n'
-  printf 'exec "%s"\n' "$TARGET"
-} > "$APP/Contents/MacOS/start"
-chmod +x "$APP/Contents/MacOS/start"
-
-# Nudge Finder to pick up the new icon.
-touch "$APP" 2>/dev/null || true
-
-echo "Done. Look on your Desktop for \"Start oTree Lab Launcher\"."
-echo "(If macOS blocks it the first time, right-click the app and choose Open.)"
+echo
+echo "Done. Look on your Desktop for \"$ALIAS_NAME\"."
+echo "(If macOS blocks it the first time, right-click the alias and choose Open.)"
 echo
 read -r -p "Press return to close." _
