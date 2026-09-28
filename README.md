@@ -4,6 +4,16 @@
 
 See [docs/user_guide.md](docs/user_guide.md) for the full user guide (lab manager setup and experimenter usage).
 
+## What it does
+
+- **Lab defaults, set up once.** A lab manager enters the lab's hosts, seats, room and database one time. After that, any working oTree project is lab-ready in one click.
+- **Consistent per-seat links.** Each lab PC opens the same link every session, so you always know who sits where.
+- **One button to launch.** Pick your project, hit **Launch**, and the server starts ready for participants.
+- **Saved configs.** Save a study's setup and relaunch it quickly in follow-up sessions.
+- **Select your database.** Postgres, wired for you: the launcher builds the `DATABASE_URL` and hands it to oTree.
+
+![The oTree Lab Launcher main page](docs/screenshots/main_page.png)
+
 ## Install
 
 **Clone the repo (recommended on both macOS and Windows):**
@@ -18,13 +28,6 @@ Then double-click the launcher in the folder: `Mac_Start oTree Lab Launcher.comm
 **Please clone rather than downloading the ZIP.** A downloaded ZIP is marked as quarantined by the operating system, and that causes launch problems: on macOS Gatekeeper prompts ("Apple could not verify...") on every launch, and on Windows it can trip Microsoft Defender SmartScreen. A `git clone` is not quarantined, so it launches cleanly on both. (No git yet? Install it from [git-scm.com](https://git-scm.com/downloads), or on macOS run `xcode-select --install`.)
 
 Once cloned, updating is super easy: just run `git pull` in the folder to get the latest version. See [Updating](#updating) below.
-
-## What it does
-
-- **Select your database once.** Postgres, wired for you: the launcher builds the `DATABASE_URL` and hands it to oTree.
-- **Consistent per-seat links.** Each lab PC opens the same link every session, so you always know who's who.
-- **One button to launch.** Save experimental configs to relaunch them quickly in follow-up sessions.
-- **Lab defaults.** Once the launcher is set up, any oTree project is lab-ready in one click.
 
 ## Which launcher to run
 
