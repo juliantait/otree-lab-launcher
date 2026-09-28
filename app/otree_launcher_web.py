@@ -1250,15 +1250,37 @@ class Api(object):
         return core.git_update_study(project_path or "")
 
     @api_call
-    def clone_org_repo(self, repo):
-        """GitHub Organisation Sync: clone ``<org>/<repo>`` in the BACKGROUND.
+    def pick_clone_folder(self, repo=""):
+        """GitHub Organisation Sync, step 1 of 2: open ONLY the destination-parent
+        folder picker (no clone) and return the chosen parent path, so the page can
+        show it and gate a separate Clone button.
 
-        The org comes from the saved prefs (set in Settings). A native folder dialog
-        picks the destination, then the clone runs on a worker thread (so the WebView
-        thread never blocks) using the machine's read-only git credential. Progress
-        goes to the page status/log; the final result (with the cloned folder + its
-        project/settings summaries for auto-select) is pushed via pywOnCloneDone.
-        Returns immediately with ``pending`` True, or an error when the org is unset.
+        Splits the folder choice out of the clone so the dialog can require BOTH a
+        repository name and a parent folder (in either order) before cloning. Reuses
+        :meth:`_pick_folder_for_clone` so it opens on the right thread and keeps the
+        repo-named dialog title. Returns ``{"ok": True, "path": <parent>,
+        "cancelled": False}`` on a pick, or ``{"ok": False, "cancelled": True,
+        "path": ""}`` when the picker is cancelled (the page then leaves the folder
+        unset and keeps its dialog open).
+        """
+        path = self._pick_folder_for_clone(repo)
+        if not path:
+            return {"ok": False, "cancelled": True, "path": ""}
+        return {"ok": True, "cancelled": False, "path": path}
+
+    @api_call
+    def clone_org_repo(self, repo, dest_parent=""):
+        """GitHub Organisation Sync, step 2 of 2: clone ``<org>/<repo>`` into the
+        ALREADY-chosen ``dest_parent`` in the BACKGROUND.
+
+        The org comes from the saved prefs (set in Settings). The parent folder is
+        picked separately (``pick_clone_folder``) and passed in here, then the clone
+        runs on a worker thread (so the WebView thread never blocks) using the
+        machine's read-only git credential. Progress goes to the page status/log;
+        the final result (with the cloned folder + its project/settings summaries for
+        auto-select) is pushed via pywOnCloneDone. Returns immediately with ``pending``
+        True, or an error when the org is unset, the repo is blank, or no destination
+        parent was supplied.
         """
         org = core.load_github_org()
         if not org:
@@ -1268,17 +1290,23 @@ class Api(object):
         repo = (repo or "").strip()
         if not repo:
             return {"ok": False, "message": "Enter the experiment repository name."}
-        self._spawn(lambda: self._do_clone_org_repo(org, repo), "git-clone")
+        dest_parent = (dest_parent or "").strip()
+        if not dest_parent:
+            return {"ok": False,
+                    "message": "Choose a parent folder for the clone first."}
+        self._spawn(lambda: self._do_clone_org_repo(org, repo, dest_parent),
+                    "git-clone")
         return {"ok": True, "pending": True}
 
-    def _do_clone_org_repo(self, org, repo):
-        """Worker: pick the destination folder, clone, and push pywOnCloneDone.
+    def _do_clone_org_repo(self, org, repo, dest_parent):
+        """Worker: clone into the ALREADY-chosen ``dest_parent`` and push
+        pywOnCloneDone.
 
-        Browser mode uses the short-lived stdlib-tkinter folder dialog subprocess;
-        the native pywebview path uses create_file_dialog. On cancel it reports a
-        cancelled result. On success it also builds the project + settings summaries
-        so the page can auto-select the cloned folder exactly like a Browse pick."""
-        dest = self._pick_folder_for_clone(repo)
+        The destination parent is picked earlier by ``pick_clone_folder`` and passed
+        through, so this worker only clones. On success it also builds the project +
+        settings summaries so the page can auto-select the cloned folder exactly like
+        a Browse pick."""
+        dest = (dest_parent or "").strip()
         if not dest:
             self._callback("pywOnCloneDone", {"ok": False, "cancelled": True,
                                               "message": "GitHub clone cancelled."})

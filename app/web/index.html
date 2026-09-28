@@ -798,6 +798,27 @@ input::placeholder{color:var(--faint)}
 .cta{margin-top:16px;display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap}
 .cta.spread{justify-content:space-between}
 .modal-err{display:none;margin-top:8px;font-size:12px;color:var(--err)}
+/* ---- "Update downloaded" screen (git-pull success): a calm, prominent card that
+   makes clear the update is fetched but NOT yet active. Uses the grey surfaces plus
+   a single subtle green check (--ok, already used elsewhere) — no jarring colour. */
+.upd-done{text-align:center;padding:2px 2px 0}
+.upd-badge{width:52px;height:52px;margin:2px auto 15px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--ok-soft);border:1px solid rgba(78,201,138,.35);color:var(--ok);font-size:25px;line-height:1}
+.upd-head{margin:0 0 6px;font-size:21px;font-weight:700;color:var(--text-strong);line-height:1.3}
+.upd-sub{margin:0 0 18px;font-size:13px;color:var(--muted);line-height:1.5}
+.upd-cta{margin:0 auto;max-width:430px;padding:14px 16px;border-radius:var(--r-md);
+  background:var(--panel-2);border:1px solid var(--line)}
+.upd-cta-title{margin:0 0 5px;font-size:15px;font-weight:700;color:var(--text-strong)}
+.upd-cta-note{margin:0;font-size:12.5px;color:var(--muted);line-height:1.5}
+.upd-log{margin:16px 0 2px;text-align:left}
+.upd-log>summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);
+  list-style:none;user-select:none;padding:4px 0}
+.upd-log>summary:hover{color:var(--text-strong)}
+.upd-log>summary::-webkit-details-marker{display:none}
+.upd-log>summary::before{content:"\25B8  ";color:var(--faint)}
+.upd-log[open]>summary::before{content:"\25BE  "}
+.upd-log .mono-line{max-height:220px;overflow:auto;white-space:pre;margin:6px 0 0}
 /* "get ready for the lab" popup: a larger, more substantial modal. A clean,
    readable lead line ("One click gives you:") introduces a short bulleted list
    of what getting the project lab-ready sets up. "What this changes" is a bordered
@@ -1145,7 +1166,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.10</div>
+      <div class="af-ver" id="footVersion">version 1.4.11</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1478,6 +1499,10 @@ var NATIVE=false, API=null, booted=false, BROWSER=false;
    FINAL action in ONE click: a git install pulls+relaunches directly; a plain
    (zip) install shows the GitHub download link. */
 var IS_GIT_INSTALL=false;
+/* The remote release tag the update check found (e.g. "v1.4.11"), captured when the
+   Update control renders so runGitPull's success screen can name the target version.
+   "" when unknown. */
+var UPDATE_REMOTE_VERSION="";
 var currentProjectPath="", currentSeatFile="", currentConfigName="", currentDbMode="lab";
 var lastSettings=null, defaultAuthor="", pendingDelete=null;
 /* The most-recently-rendered config rows, so selectConfig can show the config's
@@ -2278,38 +2303,83 @@ function onBrowseFile(){
   if(BROWSER){window.pywStatus("","Type or paste the participant file path in the box (native file pickers need the desktop app).");return;}
   if(NATIVE&&API)API.pick_participant_file();}
 /* GitHub Organisation Sync: clone an experiment repo from the configured org.
-   Ask for the repo name in a small modal; the destination folder is chosen with a
-   native dialog on the Python side, then the clone runs in the BACKGROUND with
-   progress and finishes via window.pywOnCloneDone (auto-selects the folder). */
+   The dialog now has THREE independent parts, in either order, both required before
+   cloning: a repository-name field, a "Choose parent folder" button (native picker,
+   re-selectable, cancelling leaves the folder unset and keeps the dialog open), and
+   a Clone button that stays DISABLED until BOTH a folder and a non-empty repo name
+   are present. The clone then runs in the BACKGROUND and finishes via
+   window.pywOnCloneDone (auto-selects the folder). */
+var ghClonePath="";   /* the parent folder chosen in the clone dialog ("" = unset) */
 function onGithubOrgClone(){
   if(!GITHUB_ORG){window.pywStatus("err","Set the GitHub organisation name in Settings > GitHub Organisation Sync first.");openLabSettings();return;}
+  ghClonePath="";   /* fresh dialog: no folder chosen yet */
   openModal("Clone from GitHub organisation",
     '<p class="modal-desc">Clones <code>https://github.com/'+escapeHtml(GITHUB_ORG)+'/&lt;repo&gt;</code> using this PC’s read-only organisation credential.</p>'+
-    '<p class="modal-desc">You will pick a <b>parent</b> folder next. The repo is cloned into a new folder inside it (<code id="ghDestPreview">parent/&lt;repo&gt;</code>) and selected as your study folder.</p>'+
-    '<div class="mfield"><label>Repository name</label><input id="ghRepo" type="text" placeholder="experiment-repo" autocomplete="off" oninput="onGhRepoInput()"></div>'+
+    '<p class="modal-desc">Enter the repository name <b>and</b> choose a <b>parent</b> folder (either order). The repo is cloned into a new folder inside it and selected as your study folder.</p>'+
+    '<div class="mfield"><label>Repository name</label><input id="ghRepo" type="text" placeholder="experiment-repo" autocomplete="off" oninput="onGhCloneInput()"></div>'+
+    '<div class="mfield"><label>Parent folder</label>'+
+      '<div><button class="btn" type="button" onclick="onGhPickFolder()">Choose parent folder…</button>'+
+      '<div class="mono-line" id="ghFolderPath" style="margin-top:8px">No folder chosen yet.</div></div></div>'+
+    '<p class="modal-desc" style="margin-top:12px">Target folder: <code id="ghDestPreview">parent/&lt;repo&gt;</code></p>'+
     '<div class="modal-err" id="ghRepoErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
-    '<button class="btn accent" id="ghCloneGo" onclick="doGithubOrgClone()">Choose folder &amp; clone</button></div>');
+    '<button class="btn accent" id="ghCloneGo" onclick="doGithubOrgClone()" disabled>Clone</button></div>');
+  updateGhClonePreview();updateGhCloneState();
+  var r=el("ghRepo");if(r)r.focus();
 }
-/* Live-update the destination preview so the user sees the CONCRETE subfolder
-   (parent/<repo>) that will be created. Mirrors core.github_clone_url: a trailing
-   .git and any slashes are stripped so the preview matches the real folder name. */
-function onGhRepoInput(){
-  var p=el("ghDestPreview");if(!p)return;
+/* The bare repo folder name from the typed field. Mirrors core.github_clone_url:
+   a trailing .git and any slashes are stripped so it matches the real folder. */
+function ghCloneRepoName(){
   var v=(val("ghRepo")||"").trim().replace(/\/+$/,"").replace(/\.git$/i,"");
-  var name=v.split("/").pop();
-  p.innerHTML="parent/"+(name?escapeHtml(name):"&lt;repo&gt;");
+  return v.split("/").pop();
+}
+/* Live-update the CONCRETE target preview (chosenParent/<repo>) so the user sees
+   exactly the folder that will be created. */
+function updateGhClonePreview(){
+  var p=el("ghDestPreview");if(!p)return;
+  var name=ghCloneRepoName();
+  var parent=ghClonePath?ghClonePath.replace(/[\\/]+$/,""):"parent";
+  p.textContent=parent+"/"+(name||"<repo>");
+}
+/* Enable Clone only once BOTH a parent folder and a non-empty repo name exist. */
+function updateGhCloneState(){
+  var go=el("ghCloneGo");if(!go)return;
+  var repo=(val("ghRepo")||"").trim();
+  go.disabled=!(ghClonePath&&repo);
+}
+/* Repo field input: refresh preview + Clone-enabled state (either order allowed). */
+function onGhCloneInput(){updateGhClonePreview();updateGhCloneState();}
+/* Choose parent folder button: open ONLY the native folder picker (no clone) and
+   store the chosen path. Re-selectable; cancelling leaves the folder unset (keeps
+   any previously chosen one) and does NOT close the dialog. */
+function onGhPickFolder(){
+  if(!NATIVE||!API||!API.pick_clone_folder){window.pywStatus("","Choosing a folder works in the app, not the static preview.");return;}
+  window.pywStatus("","Choose a parent folder for the clone… (look for the dialog window).");
+  API.pick_clone_folder(ghCloneRepoName()).then(function(r){
+    r=r||{};
+    if(r.ok&&r.path){
+      ghClonePath=r.path;
+      var fp=el("ghFolderPath");if(fp)fp.textContent=r.path;
+      window.pywStatus("","Parent folder chosen: "+r.path);
+    }else{
+      /* Cancelled/no pick: keep the dialog open and any earlier choice intact. */
+      window.pywStatus("","No folder chosen. Choose one anytime before cloning.");
+    }
+    updateGhClonePreview();updateGhCloneState();
+  });
 }
 function doGithubOrgClone(){
   var repo=(val("ghRepo")||"").trim(),e=el("ghRepoErr");
   if(!repo){if(e){e.style.display="block";e.textContent="Enter the experiment repository name.";}return;}
+  if(!ghClonePath){if(e){e.style.display="block";e.textContent="Choose a parent folder for the clone.";}return;}
   if(!NATIVE||!API||!API.clone_org_repo){closeModal();window.pywStatus("","Cloning works in the app, not the static preview.");return;}
+  var dest=ghClonePath;
   closeModal();
   /* Keep the GitHub logo while cloning; only swap the label (innerHTML, not
      textContent, so the SVG mark stays). pywOnCloneDone restores the org name. */
   var g=el("githubOrgBtn");if(g){g.disabled=true;g.innerHTML=GH_LOGO_SVG+'<span>Cloning…</span>';}
-  window.pywStatus("","Choose a destination folder for the clone…");
-  API.clone_org_repo(repo).then(function(r){
+  window.pywStatus("","Cloning "+repo+" into "+dest+"…");
+  API.clone_org_repo(repo,dest).then(function(r){
     /* Native pushes the real result via pywOnCloneDone; this promise only carries
        the "pending" ack (or an immediate error). */
     if(r&&r.ok&&r.pending)return;
@@ -2364,10 +2434,74 @@ function openModal(title,html,wide){
   wireHoldDeletes(el("modalBody"));   /* activate any hold-to-delete buttons in this modal */
 }
 function closeModal(){el("infoModal").hidden=true;}
+
+/* ----------------------------------------------------------------------
+   CENTRAL keyboard conventions for EVERY modal (one global handler, wired
+   ONCE at parse time so it can never stack across openModal calls):
+     * ESCAPE  closes/cancels the top-most open modal (never fires when no
+               modal is open; the first-run wizard is deliberately excluded
+               -- it has no close X and no backdrop dismiss).
+     * ENTER   activates the modal's PRIMARY action button, so a dialog can
+               be confirmed from the keyboard the same way everywhere.
+   Enter's primary is resolved DETERMINISTICALLY (never guessed):
+     1. an explicit [data-modal-primary] button (used where the primary is
+        not a .cta .accent, e.g. the room picker's big "use lab default"),
+     2. else the single usable .accent button in the modal's .cta row,
+     3. else, for the first-run wizard, its Next/Save button.
+   A modal that carries [data-modal-no-enter] opts OUT (genuinely ambiguous
+   primary, e.g. the block viewer's Copy / Add / Close). Disabled primaries
+   do nothing (the Clone button stays disabled until both fields are set),
+   and nothing destructive is ever auto-activated (Delete is .danger, never
+   .accent, so it is never an Enter target). */
+function _btnUsable(b){
+  if(!b||b.disabled)return false;
+  if(b.getAttribute&&b.getAttribute("aria-disabled")==="true")return false;
+  if(b.offsetParent===null&&(!b.getClientRects||b.getClientRects().length===0))return false;
+  return true;
+}
+function _singleCtaAccent(root){
+  var list=root.querySelectorAll(".cta .accent"),out=[];
+  for(var i=0;i<list.length;i++)if(_btnUsable(list[i]))out.push(list[i]);
+  return out.length===1?out[0]:null;   /* 0 or >1 => ambiguous => no Enter target */
+}
+function _topModal(){
+  if(!el("infoModal").hidden)return {root:el("infoModal"),kind:"info"};
+  if(!el("logModal").hidden)return {root:el("logModal"),kind:"log"};
+  var w=el("wizModal");if(w&&!w.hidden)return {root:w,kind:"wiz"};
+  return null;
+}
+function _modalPrimary(m){
+  if(m.root.querySelector("[data-modal-no-enter]"))return null;   /* explicit opt-out */
+  var mk=m.root.querySelector("[data-modal-primary]");
+  if(mk)return _btnUsable(mk)?mk:null;   /* marked but disabled => do nothing */
+  var acc=_singleCtaAccent(m.root);
+  if(acc)return acc;
+  if(m.kind==="wiz"){var n=el("wizNext");return (n&&_btnUsable(n))?n:null;}
+  return null;
+}
 document.addEventListener("keydown",function(e){
-  if(e.key!=="Escape")return;
-  if(!el("logModal").hidden){closeLogModal();return;}
-  if(!el("infoModal").hidden)closeModal();
+  if(e.isComposing||e.defaultPrevented)return;   /* let IME / already-handled keys pass */
+  if(e.key==="Escape"){
+    if(!el("logModal").hidden){closeLogModal();return;}
+    if(!el("infoModal").hidden){closeModal();return;}
+    /* wizModal: intentionally NOT closable by Escape (no close X / backdrop). */
+    return;
+  }
+  if(e.key!=="Enter")return;
+  var m=_topModal();if(!m)return;
+  var t=e.target,tag=(t&&t.tagName)?t.tagName.toUpperCase():"";
+  /* Enter must stay native where it already means something: newlines in a
+     textarea, option-commit in a select, and activating a focused button/link
+     (so a focused Cancel closes rather than submitting the primary). Single-line
+     text inputs SHOULD submit, so they fall through to the primary. */
+  if(tag==="TEXTAREA"||tag==="SELECT"||tag==="BUTTON"||tag==="A")return;
+  if(t&&t.isContentEditable)return;
+  if(tag==="INPUT"){
+    var ty=((t.getAttribute&&t.getAttribute("type"))||"text").toLowerCase();
+    if(ty==="button"||ty==="submit"||ty==="reset"||ty==="checkbox"||ty==="radio")return;
+  }
+  var btn=_modalPrimary(m);
+  if(btn){e.preventDefault();btn.click();}
 });
 
 /* ---------------------------- Save as ---------------------------- */
@@ -2395,8 +2529,9 @@ function renderSaveAs(roster,suggestedAuthor){
     '<div class="modal-err" id="saveAsErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
     '<button class="btn accent" onclick="doSaveAs()">Save</button></div>');
-  setTimeout(function(){var i=el("saveAsName");if(i){i.focus();i.select();
-    i.addEventListener("keydown",function(e){if(e.key==="Enter")doSaveAs();});}},30);
+  /* Focus + select the name for a fast rename; Enter-to-save is handled by the
+     central modal keydown handler (no per-dialog listener, so no double submit). */
+  setTimeout(function(){var i=el("saveAsName");if(i){i.focus();i.select();}},30);
 }
 function doSaveAs(){
   var name=(val("saveAsName")||"").trim();if(!name)return;var author=(val("saveAsAuthor")||"").trim();
@@ -2594,7 +2729,7 @@ function renderRoomPicker(rooms,loading,note){
       '<code>http://HOST:8000/room/'+escapeHtml(labDefault)+'?participant_label=B3&welcome_page_ok=1</code>, so every computer is a known fixed seat with a presence board. '+
       'Only change the room if the computers will open a different room’s link.</div>'+
     '<p class="modal-desc">The '+escapeHtml(labDefault)+' room is the lab default: the lab computers’ desktop shortcuts open its participant PC links. Only change it if the computers will open a different room’s link.</p>'+
-    '<button class="btn-launch room-primary" onclick="useStudyRoom()">Use '+escapeHtml(labDefault)+' (lab default) with participant PC links</button>'+
+    '<button class="btn-launch room-primary" data-modal-primary onclick="useStudyRoom()">Use '+escapeHtml(labDefault)+' (lab default) with participant PC links</button>'+
     '<p class="room-note">'+(loading?"Reading this project’s rooms…":(note?escapeHtml(note):"Rooms defined in this project’s settings.py:"))+'</p>'+
     '<div class="roomlist" id="roomList">'+items+'</div>'+
     '<button class="btn" style="width:100%;margin-top:10px" onclick="useSelectedRoom()">Use the selected room</button>'+
@@ -2944,7 +3079,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.10</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.11</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -3046,6 +3181,7 @@ function loadSettingsVersion(){
                      _ai/auto_update.md);
      not a git repo -> the blue GitHub download link (that path needs the link). */
 function updateAvailHTML(up){
+  UPDATE_REMOTE_VERSION=(up&&up.remote_version)?String(up.remote_version):"";   /* remember for runGitPull's success screen */
   var extra=up&&up.remote_version?(" ("+escapeHtml(up.remote_version)+")"):"";
   if(IS_GIT_INSTALL){
     /* one click: Update == git pull, then a quit-and-relaunch message. No link. */
@@ -3078,17 +3214,16 @@ function runGitPull(){
       res.className="ls-foot-result"+(r.ok?" ok":"");
       res.textContent=r.message||(r.ok?"Done.":"git pull failed.");
     }
-    var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
     if(r.ok){
       /* Notify-only: the working tree is updated, but THIS running instance still
-         has the old code. Tell the operator to quit and reopen to finish. Leave the
-         Update button disabled (the pull already succeeded; a second pull is a
-         no-op) so the message stands. */
-      openModal("Update installed",
-        '<p class="modal-desc">'+escapeHtml(r.message||"Updated. Please quit this window and reopen the launcher to finish updating.")+'</p>'+out+
-        '<div class="cta"><button class="btn accent" onclick="closeModal()">OK</button></div>',true);
+         has the OLD code loaded. Show a prominent screen that makes clear the update
+         is DOWNLOADED but not yet ACTIVE, with a bold "restart to activate" call to
+         action. Leave the Update button disabled (the pull already succeeded; a
+         second pull is a no-op) so the message stands. */
+      openModal("Update downloaded",updateDoneHTML(r.output),true);
     }else{
       /* Keep the app usable and allow a retry. */
+      var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
       if(btn){btn.disabled=false;btn.textContent="Update";}
       openModal("Update did not complete",
         '<p class="modal-desc">'+escapeHtml(r.message||"git pull failed.")+'</p>'+out+
@@ -3098,6 +3233,37 @@ function runGitPull(){
     if(btn){btn.disabled=false;btn.textContent="Update";}
     if(res){res.className="ls-foot-result";res.textContent="Update failed. Please try again.";}
   });
+}
+/* Build the body of the "Update downloaded" success screen. Makes it obvious the
+   update is fetched but NOT yet active (the running instance still has the old code
+   — notify-only, see _ai/auto_update.md), with a bold "restart to activate" CTA and
+   the raw `git pull` text tucked into a collapsed "Update log". Names the target
+   version when the update check found one (UPDATE_REMOTE_VERSION, already 'v'-prefixed
+   e.g. "v1.4.11"). A "Quit the launcher" button is shown only when the safe quit
+   endpoint exists (API.quit → clean shutdown of the launcher's OWN server, never any
+   study); otherwise just the bold instruction stands. */
+function updateDoneHTML(output){
+  var ver=UPDATE_REMOTE_VERSION?(" "+escapeHtml(UPDATE_REMOTE_VERSION)):"";
+  var head=UPDATE_REMOTE_VERSION?("Update to"+ver+" downloaded"):"Update downloaded";
+  var canQuit=!!(NATIVE&&API&&API.quit);
+  var log=output?('<details class="upd-log"><summary>Update log</summary>'+
+        '<div class="mono-line">'+escapeHtml(output)+'</div></details>'):"";
+  /* Quit the launcher is the PRIMARY action here (restart activates the update),
+     so it is the accent-pink button; the OK/close button below is the non-accent
+     secondary whenever Quit is shown. When Quit is unavailable (no API.quit) the
+     lone OK takes the accent so the modal still has one primary button. */
+  var quitBtn=canQuit?'<button class="btn accent" onclick="quitLauncher()">Quit the launcher</button>':"";
+  return '<div class="upd-done">'+
+    '<div class="upd-badge" aria-hidden="true">✓</div>'+
+    '<h3 class="upd-head">'+head+'</h3>'+
+    '<p class="upd-sub">The new version has been downloaded, but it is <strong>not active yet</strong> — this window is still running the old version.</p>'+
+    '<div class="upd-cta">'+
+      '<p class="upd-cta-title">Restart to activate the update</p>'+
+      '<p class="upd-cta-note">Quit this window and reopen the launcher from the usual shortcut. It will start up on the new version.</p>'+
+    '</div>'+
+    log+
+  '</div>'+
+  '<div class="cta">'+quitBtn+'<button class="btn'+(canQuit?"":" accent")+'" onclick="closeModal()">OK</button></div>';
 }
 /* Explicit clean shutdown of the launcher's OWN web-UI server (the Quit button).
    Stops ONLY the launcher process; a running study keeps running untouched (the
@@ -3829,7 +3995,10 @@ function showBlock(text){
   openModal("oTree lab support block",
     '<p class="modal-desc">Paste this at the END of settings.py. With none of the launcher’s variables set, this block does nothing, so it is safe to leave in the project permanently.</p>'+
     '<div class="mono-line" style="white-space:pre;max-height:300px;overflow:auto">'+escapeHtml(text)+'</div>'+
-    '<div class="cta"><button class="btn" onclick="copyBlockText()">Copy</button>'+
+    /* data-modal-no-enter: this is a VIEWER with three co-equal actions (Copy /
+       Add / Close), so there is no single Enter primary -- and appending to
+       settings.py must stay an explicit click, never an accidental Enter. */
+    '<div class="cta" data-modal-no-enter><button class="btn" onclick="copyBlockText()">Copy</button>'+
     '<button class="btn accent" onclick="onAppendBlock()">Add to settings.py</button>'+
     '<button class="btn ghost" onclick="closeModal()">Close</button></div>',true);
   window._blockText=text;
