@@ -3453,9 +3453,12 @@ class LauncherApp(object):
         if not repo or not repo.strip():
             return
         repo = repo.strip()
+        # The repo is cloned into a NEW <repo> subfolder inside the folder chosen
+        # here (the PARENT), so name that folder in the title to make the choice
+        # self-explanatory.
         dest = filedialog.askdirectory(
             parent=self.root,
-            title="Choose a destination folder for the clone")
+            title="Choose where to create the '%s' folder" % repo)
         if not dest:
             return
         self.github_org_btn.config(state="disabled", text="Cloning...")

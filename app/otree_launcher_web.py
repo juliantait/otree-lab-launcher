@@ -1278,7 +1278,7 @@ class Api(object):
         the native pywebview path uses create_file_dialog. On cancel it reports a
         cancelled result. On success it also builds the project + settings summaries
         so the page can auto-select the cloned folder exactly like a Browse pick."""
-        dest = self._pick_folder_for_clone()
+        dest = self._pick_folder_for_clone(repo)
         if not dest:
             self._callback("pywOnCloneDone", {"ok": False, "cancelled": True,
                                               "message": "GitHub clone cancelled."})
@@ -1291,12 +1291,23 @@ class Api(object):
             result["settings"] = core.inspect_settings(path, self._lab_room_for())
         self._callback("pywOnCloneDone", result)
 
-    def _pick_folder_for_clone(self):
-        """Return the chosen destination folder path (or "" on cancel), using the
-        right picker for the current mode. Browser mode runs the local subprocess
-        dialog; native pywebview uses create_file_dialog on this worker thread."""
+    def _pick_folder_for_clone(self, repo=""):
+        """Return the chosen destination PARENT folder path (or "" on cancel), using
+        the right picker for the current mode. The repo is cloned into a NEW
+        ``<repo>`` subfolder inside whatever the user picks, so the dialog title
+        names that folder ("Choose where to create the '<repo>' folder") to make
+        the moment of selection self-explanatory.
+
+        Browser mode runs the local stdlib-tkinter subprocess dialog, whose
+        ``askdirectory`` supports a title. Native pywebview uses create_file_dialog
+        on this worker thread; pywebview's FOLDER_DIALOG has no title parameter, so
+        the OS default folder prompt is shown there."""
+        repo = (repo or "").strip()
+        title = ("Choose where to create the '%s' folder" % repo if repo
+                 else "Choose where to create the cloned study folder")
         if getattr(self, "browser_mode", False):
-            return _native_folder_dialog_subprocess()
+            return _native_folder_dialog_subprocess(
+                helper=_build_folder_dialog_helper(title))
         try:
             import webview
             result = self.window.create_file_dialog(webview.FOLDER_DIALOG)

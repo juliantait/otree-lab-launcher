@@ -1145,7 +1145,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.9</div>
+      <div class="af-ver" id="footVersion">version 1.4.10</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1673,8 +1673,18 @@ window.pywOnShortcutsResult=function(r){pcShortcutsResult(r);};
    working state; on failure/cancel show the message and re-enable the button. */
 window.pywOnCloneDone=function(r){
   r=r||{};
-  var g=el("githubOrgBtn");if(g){g.disabled=false;g.textContent="GitHub Org...";}
-  if(r.cancelled){window.pywStatus("","GitHub clone cancelled.");return;}
+  /* Re-enable AND re-render the button through updateGithubOrgBtn so it keeps its
+     GitHub logo. Setting g.textContent (the old code) replaced the SVG logo with a
+     bare text node, so the button lost its icon after a clone/cancel. */
+  var g=el("githubOrgBtn");if(g){g.disabled=false;updateGithubOrgBtn();}
+  if(r.cancelled){
+    /* Cancelling is not an error: show a neutral status and drop any leftover
+       "Folder not found"-style error from the aborted attempt (when no project is
+       actually selected) so cancelling returns a clean state. */
+    window.pywStatus("","GitHub clone cancelled.");
+    if(!currentProjectPath)applyProject({});
+    return;
+  }
   if(r.ok&&r.path){
     window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
     window.pywStatus("ok",r.message||("Cloned into "+r.path+" and selected it as the study folder."));
@@ -2274,18 +2284,30 @@ function onBrowseFile(){
 function onGithubOrgClone(){
   if(!GITHUB_ORG){window.pywStatus("err","Set the GitHub organisation name in Settings > GitHub Organisation Sync first.");openLabSettings();return;}
   openModal("Clone from GitHub organisation",
-    '<p class="modal-desc">Clones <code>https://github.com/'+escapeHtml(GITHUB_ORG)+'/&lt;repo&gt;</code> using this PC’s read-only organisation credential. You will pick a destination folder next; the cloned folder is auto-selected as the study folder.</p>'+
-    '<div class="mfield"><label>Repository name</label><input id="ghRepo" type="text" placeholder="experiment-repo" autocomplete="off"></div>'+
+    '<p class="modal-desc">Clones <code>https://github.com/'+escapeHtml(GITHUB_ORG)+'/&lt;repo&gt;</code> using this PC’s read-only organisation credential.</p>'+
+    '<p class="modal-desc">You will pick a <b>parent</b> folder next. The repo is cloned into a new folder inside it (<code id="ghDestPreview">parent/&lt;repo&gt;</code>) and selected as your study folder.</p>'+
+    '<div class="mfield"><label>Repository name</label><input id="ghRepo" type="text" placeholder="experiment-repo" autocomplete="off" oninput="onGhRepoInput()"></div>'+
     '<div class="modal-err" id="ghRepoErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
     '<button class="btn accent" id="ghCloneGo" onclick="doGithubOrgClone()">Choose folder &amp; clone</button></div>');
+}
+/* Live-update the destination preview so the user sees the CONCRETE subfolder
+   (parent/<repo>) that will be created. Mirrors core.github_clone_url: a trailing
+   .git and any slashes are stripped so the preview matches the real folder name. */
+function onGhRepoInput(){
+  var p=el("ghDestPreview");if(!p)return;
+  var v=(val("ghRepo")||"").trim().replace(/\/+$/,"").replace(/\.git$/i,"");
+  var name=v.split("/").pop();
+  p.innerHTML="parent/"+(name?escapeHtml(name):"&lt;repo&gt;");
 }
 function doGithubOrgClone(){
   var repo=(val("ghRepo")||"").trim(),e=el("ghRepoErr");
   if(!repo){if(e){e.style.display="block";e.textContent="Enter the experiment repository name.";}return;}
   if(!NATIVE||!API||!API.clone_org_repo){closeModal();window.pywStatus("","Cloning works in the app, not the static preview.");return;}
   closeModal();
-  var g=el("githubOrgBtn");if(g){g.disabled=true;g.textContent="Cloning…";}
+  /* Keep the GitHub logo while cloning; only swap the label (innerHTML, not
+     textContent, so the SVG mark stays). pywOnCloneDone restores the org name. */
+  var g=el("githubOrgBtn");if(g){g.disabled=true;g.innerHTML=GH_LOGO_SVG+'<span>Cloning…</span>';}
   window.pywStatus("","Choose a destination folder for the clone…");
   API.clone_org_repo(repo).then(function(r){
     /* Native pushes the real result via pywOnCloneDone; this promise only carries
@@ -2922,7 +2944,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.9</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.10</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
