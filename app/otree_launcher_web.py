@@ -61,25 +61,12 @@ INDEX_HTML = os.path.join(HERE, "web", "index.html")
 HEARTBEAT_INTERVAL_MS = 1500
 HEARTBEAT_TIMEOUT = 60.0
 HEARTBEAT_CHECK_INTERVAL = 1.5
-# After a successful in-place update the server relaunches a fresh instance and
-# then shuts itself down; this short delay lets the run_git_pull HTTP response
-# reach the page (so it can show the "restarting" confirmation) before we stop.
-# Used by the NATIVE-window hand-off (there is no port to health-check there).
-RELAUNCH_SHUTDOWN_DELAY = 1.5
-
-# Browser-mode self-update hand-off (redesigned in 1.4.7). The OLD server picks a
-# NEW FREE port, spawns the new instance on it, and health-checks that new server
-# before doing anything destructive. These bound that hand-off:
-#   * how long the old server waits for the new one to answer before giving up and
-#     staying up (never leaving a dead app);
-#   * how often it polls the new server;
-#   * how long it keeps serving the "ready" status after the new server answers,
-#     so the open tab can poll it and navigate to the new URL before the old
-#     server shuts down. Navigating targets the NEW (confirmed-up) server, so the
-#     old server going away right after does not strand the tab.
-RELAUNCH_HEALTHCHECK_TIMEOUT = 30.0
-RELAUNCH_POLL_INTERVAL = 0.3
-RELAUNCH_HANDOFF_GRACE = 4.0
+# NOTE: the in-app updater is NOTIFY-ONLY (git pull, then ask the operator to quit
+# and reopen). It does NOT self-relaunch: a self-spawned child is not attached to
+# the macOS GUI (Aqua/WindowServer) session, so the reopened instance is half-dead
+# (native Browse dialog will not open, cannot launch a study). See run_git_pull and
+# _ai/auto_update.md. The old self-relaunch machinery (RELAUNCH_* constants,
+# spawn_new_launcher, the hand-off watcher) was removed with that decision.
 
 # WebView devtools are a security exposure (they run JS against the privileged
 # js_api), so they are OFF unless this env var is explicitly set to a truthy
@@ -588,12 +575,6 @@ class Api(object):
             except OSError:
                 pass
         self.window = None  # set by main() once the window exists
-        # In-progress self-update hand-off state (browser mode). None until an
-        # update relaunch starts; then a dict {"state", "url", "port"} the open tab
-        # polls via relaunch_status. Guarded by its own lock because the hand-off
-        # watcher thread writes it while the tab's poll (a request thread) reads it.
-        self._relaunch = None
-        self._relaunch_lock = threading.Lock()
 
     # -- helpers -----------------------------------------------------------
 
@@ -1200,151 +1181,34 @@ class Api(object):
     @api_call
     def run_git_pull(self):
         """Run ``git pull`` on the launcher's OWN install directory (core.git_pull,
-        fail-soft), and on SUCCESS auto-restart onto the just-pulled code via the
-        SAFE hand-off in :meth:`_relaunch_after_update` (browser mode spawns the new
-        version on a fresh free port and only hands the tab over once it answers;
-        this server never shuts down before then). This updates and restarts ONLY
-        the launcher; it never touches any oTree/experiment process. Returns the
-        captured output plus ``relaunching`` (and, in browser mode, ``browser_reload``
-        and the ``new_url`` the tab moves to) so the page can drive the hand-off."""
+        fail-soft). On success this is NOTIFY-ONLY: it updates the working tree in
+        place and then asks the operator to quit and reopen the launcher -- it does
+        NOT self-relaunch or spawn a new server.
+
+        Why notify-only: a self-spawned child is not attached to the macOS GUI
+        (Aqua/WindowServer) session, so a self-relaunched instance is half-dead --
+        the native Browse dialog will not open and a study cannot be launched. A
+        clean, fully-working instance only comes from a normal (double-click /
+        ``open`` script) launch. Rather than leave a half-broken or dead app, we
+        pull and tell the operator to relaunch by hand. Full history and rationale
+        are in _ai/auto_update.md.
+
+        This updates ONLY the launcher; it never touches any oTree/experiment
+        process. On failure the result carries ``ok`` False plus the git output/
+        message and NOTHING is relaunched, so the running app stays usable and the
+        operator can retry."""
         result = core.git_pull()
         result.setdefault("ok", False)
         if result.get("ok"):
-            browser_mode = bool(getattr(self, "browser_mode", False))
-            relaunching = self._relaunch_after_update()
-            result["relaunching"] = relaunching
-            if relaunching:
-                # Browser mode: the NEW instance is coming up on a FRESH FREE port
-                # (never this one), and THIS server stays up until the new one is
-                # confirmed answering. The open tab polls relaunch_status and, once
-                # the new server is ready, navigates itself to the new URL (one tab,
-                # no orphan, no port contention). A native window just closes and
-                # reopens native, so there is no tab to reload.
-                result["browser_reload"] = browser_mode
-                if browser_mode:
-                    with self._relaunch_lock:
-                        if self._relaunch:
-                            result["new_url"] = self._relaunch.get("url", "")
-                    result["message"] = ("Updated. Starting the new version, then "
-                                          "moving this tab to it.")
-                else:
-                    result["message"] = ("Updated, restarting the launcher (it "
-                                          "reopens on the new version).")
+            # Notify-only: the checkout is now on the new version, but THIS running
+            # instance still has the OLD code loaded. Do not self-relaunch (see the
+            # docstring / _ai/auto_update.md) -- just tell the operator to quit and
+            # reopen to finish. ``relaunching`` stays False so the page shows the
+            # quit-and-relaunch banner rather than any hand-off UI.
+            result["relaunching"] = False
+            result["message"] = ("Updated. Please quit this window and reopen the "
+                                 "launcher to finish updating.")
         return result
-
-    def _relaunch_after_update(self):
-        """Relaunch the launcher onto the just-pulled code, safely.
-
-        Native window: spawn a fresh native window, then (after a short delay so
-        the HTTP response reaches the page) close THIS one. A native window binds
-        no HTTP server, so there is no port to health-check.
-
-        Browser mode (redesigned 1.4.7 to be race-free and fail-safe): pick a NEW
-        FREE port (never this server's own), spawn the new instance bound to that
-        port with the browser auto-open suppressed, and DO NOT shut this server
-        down yet. A background watcher (:meth:`_await_new_server`) health-checks the
-        new server; only once it ANSWERS is the hand-off marked ready (the open tab
-        polls :meth:`relaunch_status`, learns the new URL and navigates), and only
-        THEN does this old server shut down. If the new server never answers we
-        leave THIS one up and mark the hand-off failed, so the operator is never
-        left with a dead app.
-
-        Fail-soft: if the spawn fails we log it and do NOT shut down. Returns True
-        when the fresh instance was spawned. Only the launcher is ever
-        restarted/stopped here; no experiment process is touched.
-        """
-        browser_mode = bool(getattr(self, "browser_mode", False))
-        if not browser_mode:
-            try:
-                spawn_new_launcher(browser_mode=False)
-            except Exception:
-                LOG.exception("relaunch: could not spawn a fresh native launcher")
-                return False
-            shutdown = getattr(self.window, "request_shutdown", None)
-            if callable(shutdown):
-                timer = threading.Timer(RELAUNCH_SHUTDOWN_DELAY, shutdown)
-            else:
-                # pywebview window path: close it (ends the process) after the delay.
-                timer = threading.Timer(
-                    RELAUNCH_SHUTDOWN_DELAY,
-                    lambda: self._spawn(self._do_close, "relaunch-close"))
-            timer.daemon = True
-            timer.start()
-            return True
-
-        # Browser-mode SAFE hand-off.
-        old_port = int(getattr(self, "current_port", 0) or 0)
-        try:
-            new_port = _pick_free_port()
-        except Exception:
-            LOG.exception("relaunch: could not find a free port for the new server")
-            return False
-        try:
-            spawn_new_launcher(browser_mode=True, port=new_port)
-        except Exception:
-            LOG.exception("relaunch: could not spawn a fresh launcher")
-            return False
-        new_url = "http://127.0.0.1:%d/" % new_port
-        with self._relaunch_lock:
-            self._relaunch = {"state": "starting", "url": new_url, "port": new_port}
-        LOG.info("relaunch: old port %s handing off to a NEW free port %s",
-                 old_port, new_port)
-        threading.Thread(target=self._await_new_server, args=(new_port,),
-                         name="relaunch-handoff", daemon=True).start()
-        return True
-
-    def _await_new_server(self, new_port):
-        """Watch the freshly-spawned new server until it ANSWERS, then hand the open
-        tab over and shut THIS (old) server down. If it never answers within
-        RELAUNCH_HEALTHCHECK_TIMEOUT, mark the hand-off failed and leave this server
-        up, so the operator always keeps a working app. Runs on its own thread."""
-        deadline = time.monotonic() + RELAUNCH_HEALTHCHECK_TIMEOUT
-        while time.monotonic() < deadline:
-            if _server_answers(new_port):
-                with self._relaunch_lock:
-                    if self._relaunch:
-                        self._relaunch["state"] = "ready"
-                LOG.info("relaunch: new server on %d is answering; handing over the tab",
-                         new_port)
-                # Keep serving the "ready" status for a short grace so the open tab
-                # can poll it and navigate to the new URL, THEN shut down. The tab
-                # navigates to the NEW (confirmed-up) server, so this one going away
-                # right after does not strand it.
-                time.sleep(RELAUNCH_HANDOFF_GRACE)
-                shutdown = getattr(self.window, "request_shutdown", None)
-                if callable(shutdown):
-                    shutdown()
-                else:
-                    self._spawn(self._do_close, "relaunch-close")
-                return
-            time.sleep(RELAUNCH_POLL_INTERVAL)
-        LOG.warning("relaunch: new server on %d did not answer within %.0fs; "
-                    "keeping THIS launcher up (no dead app)",
-                    new_port, RELAUNCH_HEALTHCHECK_TIMEOUT)
-        with self._relaunch_lock:
-            if self._relaunch:
-                self._relaunch["state"] = "failed"
-
-    @api_call
-    def relaunch_status(self):
-        """Poll target for the open tab during a self-update hand-off (browser
-        mode). Reports whether the freshly-spawned new server is up yet:
-
-          * ``starting`` -> keep waiting;
-          * ``ready``    -> the new server ANSWERED; navigate this tab to ``url``;
-          * ``failed``   -> the new server did not come up; THIS (old) server stays
-                            up, so show a 'quit and relaunch' message (never a dead
-                            app);
-          * ``none``     -> no hand-off in progress.
-
-        This is served by the OLD server, which chose the new port, so the tab
-        learns the new URL from here."""
-        with self._relaunch_lock:
-            state = dict(self._relaunch) if self._relaunch else None
-        if not state:
-            return {"ok": True, "state": "none", "url": ""}
-        return {"ok": True, "state": state.get("state", "starting"),
-                "url": state.get("url", "")}
 
     @api_call
     def get_theme(self):
@@ -1526,7 +1390,30 @@ class Api(object):
             return {"ok": False,
                     "message": "Could not register the database: %s"
                                % result["register_error"]}
+        self._advise_remote_connection(fields, result)
         return result
+
+    def _advise_remote_connection(self, fields, result):
+        """Non-blocking connect check for a REMOTE registered database. On a local
+        host it does nothing. On a remote host it tries a short connect and either
+        notes it reachable or adds an ADVISORY -- registration is never undone."""
+        host = fields.get("db_host", "")
+        if core.is_local_host(host):
+            return
+        check = core.test_database_connection(
+            fields.get("db_name", ""), fields.get("db_user", ""),
+            fields.get("db_password", ""), host, fields.get("db_port", ""))
+        result["connect_test"] = check
+        if check.get("ok"):
+            result["reachable"] = True
+            result["advisory"] = ("Connected to %s successfully; the database is reachable."
+                                   % host)
+        else:
+            result["reachable"] = False
+            result["advisory"] = (
+                "Could not connect to %s. The database has been registered anyway. "
+                "Before using it, verify the database exists on that machine set up this "
+                "way, and that the host is switched on and reachable." % host)
 
     @api_call
     def edit_database(self, db_id, fields):
@@ -1591,6 +1478,20 @@ class Api(object):
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "pg_admin": core.pg_admin_from_store(self.store_extra)}
 
+    @api_call
+    def test_database_connection(self, fields):
+        """Advisory, non-blocking connect check for an existing database (Feature
+        1). Never raises; the caller uses it only to warn. Delegates entirely to
+        core.test_database_connection with a short timeout."""
+        fields = fields or {}
+        check = core.test_database_connection(
+            str(fields.get("db_name", "") or "").strip(),
+            str(fields.get("db_user", "") or "").strip(),
+            str(fields.get("db_password", "") or ""),
+            str(fields.get("db_host", "") or "").strip(),
+            str(fields.get("db_port", "") or "").strip())
+        return {"ok": True, "check": check}
+
     # -- first-run setup wizard -------------------------------------------
 
     def _register_conn(self, fields, researcher, result):
@@ -1642,6 +1543,7 @@ class Api(object):
                       "message": "Using the existing database %r." % fields["db_name"]}
             if register:
                 self._register_conn(fields, researcher, result)
+                self._advise_remote_connection(fields, result)
             return result
 
         # Create-new: persist the admin creds, then create the database.
@@ -3040,24 +2942,11 @@ def _make_browser_handler(api, bridge, token="", allowed_origins=()):
     return Handler
 
 
-def _detached_popen_kwargs():
-    """Popen kwargs that fully DETACH a child so it outlives this process.
-
-    On Windows: DETACHED_PROCESS + a new process group (no shared console). On
-    POSIX: a new session (start_new_session). Used only to relaunch the LAUNCHER
-    itself after an update; never for an oTree/experiment process."""
-    if sys.platform.startswith("win"):
-        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        return {"creationflags": flags, "close_fds": True}
-    return {"start_new_session": True, "close_fds": True}
-
-
 def _pick_free_port(host="127.0.0.1"):
     """Return a currently-free TCP port on ``host`` by binding an ephemeral socket
-    and releasing it. Used to hand the self-update relaunch a NEW free port that is
-    guaranteed different from this server's own (which is bound), so the new
-    instance never races the old one for a port ("Address already in use")."""
+    and releasing it. A generic utility (kept available for callers that need a
+    known-free port); the in-app updater is notify-only and no longer self-spawns a
+    new server. See run_git_pull / _ai/auto_update.md."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind((host, 0))
@@ -3068,12 +2957,13 @@ def _pick_free_port(host="127.0.0.1"):
 
 def _server_answers(port, host="127.0.0.1", timeout=0.75):
     """True if a launcher HTTP server is listening AND answering on ``port``. A GET
-    of ``/`` (no API token needed) confirms the new server is really serving its UI,
-    not merely holding the socket. Any HTTP status counts as answering; a refused
-    connection / timeout / error is False."""
+    of ``/`` (no API token needed) confirms a server is really serving its UI, not
+    merely holding the socket. Any HTTP status counts as answering; a refused
+    connection / timeout / error is False. Generic utility; the in-app updater is
+    notify-only and no longer health-checks a self-spawned server."""
     import urllib.error
     import urllib.request
-    url = "http://%s:%d/?relaunch_probe=%d" % (host, port, int(time.time() * 1000))
+    url = "http://%s:%d/?probe=%d" % (host, port, int(time.time() * 1000))
     try:
         with urllib.request.urlopen(url, timeout=timeout):
             return True
@@ -3081,51 +2971,6 @@ def _server_answers(port, host="127.0.0.1", timeout=0.75):
         return True          # answered with an HTTP error status = it IS serving
     except Exception:
         return False
-
-
-def build_relaunch_command(browser_mode, port=0, python=None, script=None):
-    """Build the argv that re-execs THIS launcher for an in-place relaunch.
-
-    Re-execs the CURRENT Python directly rather than the platform double-click
-    script, because those scripts would (a) open a SECOND browser tab and (b)
-    silently downgrade a native-window session to a browser tab. Instead:
-
-      * browser mode  -> ``--browser --port <newfreeport> --no-open``: come up on a
-        FRESH FREE port the old server chose (never the old port, so no "Address
-        already in use" race) with NO new tab, so the one open tab can navigate
-        onto it;
-      * native window -> ``--window``: come back as a native window.
-
-    The running process is already the launcher's own (venv) Python, so
-    ``sys.executable`` is the right interpreter to re-exec.
-    """
-    python = python or sys.executable
-    script = script or os.path.join(core.app_dir(), "otree_launcher_web.py")
-    if browser_mode:
-        return [python, script, "--browser", "--port", str(int(port)), "--no-open"]
-    return [python, script, "--window"]
-
-
-def spawn_new_launcher(browser_mode=True, port=0):
-    """Start a FRESH, DETACHED launcher instance re-execing THIS launcher with the
-    current Python, so an in-place update comes back running the just-pulled code
-    IN THE SAME MODE the operator was using (browser mode on a fresh free port, or
-    a native window stays native). See :func:`build_relaunch_command`.
-
-    The child's stdout/stderr are sent to DEVNULL so its "serving at ..." /
-    bind-retry lines never bleed into the operator's Terminal (which stays attached
-    to the OLD process), which previously looked like a fresh manual launch failing
-    on a fixed port. The child logs to its own data/ log file regardless.
-
-    Returns the spawned Popen. Raises on failure (the caller logs and skips the
-    shutdown so the current launcher stays up). This ONLY ever starts another
-    launcher; it never touches any oTree/experiment process.
-    """
-    kwargs = _detached_popen_kwargs()
-    argv = build_relaunch_command(browser_mode, port)
-    LOG.info("relaunch: spawning %s", argv)
-    return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, **kwargs)
 
 
 def run_browser(host="127.0.0.1", port=0, open_browser=True):
@@ -3158,12 +3003,9 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         allow_reuse_address = True
 
     # A fresh manual launch ALWAYS passes port=0 (an OS-chosen free port) so it can
-    # never collide. A self-update relaunch passes a --port the OLD server just
-    # probed FREE (see _pick_free_port), so attempt 1 normally binds. The retry +
-    # free-port fallback below is a last-ditch guard only: if a fixed port is
+    # never collide. An explicit --port (e.g. a test harness) binds attempt 1. The
+    # retry + free-port fallback below is a last-ditch guard only: if a fixed port is
     # somehow taken it retries briefly, then takes any free port rather than dying.
-    # (When that happens on a relaunch the old server's health-check will not see
-    # the new one on the expected port and simply stays up -- no dead app.)
     handler = _make_browser_handler(api, bridge, token, allowed_origins)
     httpd = None
     for attempt in range(6):
@@ -3177,8 +3019,8 @@ def run_browser(host="127.0.0.1", port=0, open_browser=True):
         LOG.warning("requested port %s stayed busy; taking an OS-chosen free port", port)
         httpd = _Server((host, 0), handler)
     actual_port = httpd.server_address[1]
-    # The self-update relaunch re-execs on THIS port (browser tab reuse), so the
-    # Api needs to know it. (browser_mode was set above.)
+    # Record the bound port on the Api (browser_mode was set above). Harmless and
+    # informational now that the updater is notify-only (no self-relaunch).
     api.current_port = actual_port
     for origin_host in (host, "127.0.0.1", "localhost"):
         allowed_origins.add("http://%s:%d" % (origin_host, actual_port))

@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.8"
+APP_VERSION = "1.4.9"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -3654,6 +3654,23 @@ def soft_delete_lab_preset(lab_presets, lab_id, selected_lab=None):
 
 PG_ADMIN_KEYS = ("admin_username", "admin_password", "admin_host", "admin_port")
 
+# Hosts we treat as "this machine". Creating a database (CREATE ROLE / CREATE
+# DATABASE) is only supported against a local Postgres for now; a remote host may
+# be USED (registered) but not created on. See is_local_host below.
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def is_local_host(host):
+    """True when ``host`` names this machine's Postgres (localhost/127.0.0.1/::1).
+
+    Trimmed and lowercased before comparison; a blank host counts as local
+    (the launcher defaults an empty host to localhost). Anything else is remote.
+    """
+    h = str(host or "").strip().lower()
+    if not h:
+        return True
+    return h in LOCAL_HOSTS
+
 
 def pg_admin_from_store(extra):
     """The Postgres admin config for this store, with sane host/port defaults."""
@@ -5895,6 +5912,15 @@ def create_database(admin, new_db, new_user="", new_password=""):
     a_host = str(admin.get("admin_host", "")).strip()
     a_port = str(admin.get("admin_port", "")).strip()
 
+    # Creating a database (CREATE ROLE / CREATE DATABASE) is only supported on a
+    # local Postgres for now. A remote admin host is refused here, so the block
+    # holds for the Tk UI and for any stale preset that slips past the UI guard.
+    if not is_local_host(a_host):
+        result["reason"] = "remote_host"
+        result["message"] = ("Creating a database on a remote host (%s) is not supported yet. "
+                             "Register the existing database instead." % a_host)
+        return result
+
     try:
         import psycopg2
         from psycopg2 import sql
@@ -6038,6 +6064,36 @@ def create_database(admin, new_db, new_user="", new_password=""):
     else:
         who = "owned by the admin role %r" % a_user
     result["message"] = "Created database %r, %s. Connection verified." % (new_db, who)
+    return result
+
+
+def test_database_connection(dbname, user, password, host, port, timeout=5):
+    """Advisory, NEVER-raising psycopg2 connect check for an existing database.
+
+    Used when registering a remote existing database: it tries a short-timeout
+    connect and reports the result, but is purely informational -- registration
+    goes ahead whatever this returns. Returns a dict:
+      ``ok``      True on a successful connect,
+      ``error``   a short one-line reason when it could not connect (else ""),
+      ``skipped`` True when psycopg2 is not installed (nothing was tried).
+    """
+    result = {"ok": False, "error": "", "skipped": False}
+    try:
+        import psycopg2
+    except ImportError:
+        result["skipped"] = True
+        result["error"] = "psycopg2 is not installed, so the connection was not tested."
+        return result
+    try:
+        conn = psycopg2.connect(
+            dbname=dbname, user=user, password=password,
+            host=str(host or "").strip() or "localhost",
+            port=str(port or "").strip() or "5432",
+            connect_timeout=timeout)
+        conn.close()
+        result["ok"] = True
+    except Exception as error:   # never raise: this is advisory only
+        result["error"] = _pg_error(error)
     return result
 
 

@@ -4143,7 +4143,39 @@ class LauncherApp(object):
         except Exception as error:
             result["ok"] = False
             result["message"] = "Could not register the database: %s" % error
+        else:
+            # Feature 1: non-blocking test-connect for a REMOTE registered
+            # database (parity with the web _advise_remote_connection). Local host:
+            # nothing to check. Remote: try a short connect, but NEVER undo the
+            # registration -- on a failure just append an advisory to the message.
+            # Safe to run here: this method is already on a worker thread.
+            self._advise_remote_connection(fields, result)
         self._on_main(lambda: on_done(result))
+
+    def _advise_remote_connection(self, fields, result):
+        """Non-blocking connect check for a REMOTE registered database. On a local
+        host it does nothing. On a remote host it tries a short connect and either
+        notes it reachable or appends an ADVISORY -- registration is never undone.
+        Mirror of otree_launcher_web.py's Api._advise_remote_connection."""
+        host = fields.get("db_host", "")
+        if core.is_local_host(host):
+            return
+        check = core.test_database_connection(
+            fields.get("db_name", ""), fields.get("db_user", ""),
+            fields.get("db_password", ""), host, fields.get("db_port", ""))
+        result["connect_test"] = check
+        if check.get("ok"):
+            result["reachable"] = True
+            result["message"] = (result.get("message", "").rstrip()
+                                  + " Connected to %s successfully; the database is reachable."
+                                  % host)
+        else:
+            result["reachable"] = False
+            result["message"] = (result.get("message", "").rstrip()
+                                  + " Could not connect to %s. The database has been "
+                                    "registered anyway. Before using it, verify the database "
+                                    "exists on that machine set up this way, and that the host "
+                                    "is switched on and reachable." % host)
 
     def apply_created_database(self, fields):
         """Auto-fill the Custom database config from a confirmed create, and save
@@ -6604,14 +6636,22 @@ class CreateDatabaseDialog(object):
         self.already_exists = tk.BooleanVar(top, value=False)
         exists_row = tk.Frame(body, bg=COLORS["card"])
         exists_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        tk.Checkbutton(
+        self.exists_check = tk.Checkbutton(
             exists_row,
             text="Database already exists in Postgres (register without creating)",
             variable=self.already_exists, command=self._on_exists_toggle,
             bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["card"],
             activeforeground=COLORS["text"], selectcolor=COLORS["accent"],
             font=fonts.small, anchor="w", bd=0, highlightthickness=0, padx=0,
-            cursor="hand2", wraplength=420, justify="left").pack(side="left")
+            cursor="hand2", wraplength=420, justify="left")
+        self.exists_check.pack(side="left")
+
+        # Feature 1: creating a database is local-only for now. When the Postgres
+        # admin host (Lab Settings) is remote, force register-only -- tick + lock
+        # the "already exists" box so the action stays Register and CREATE never
+        # runs (the backend also refuses, but the UI makes the reason plain).
+        admin = core.pg_admin_from_store(self.app.store_extra)
+        self._remote_admin = not core.is_local_host(admin.get("admin_host", ""))
 
         self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
                                font=fonts.small, anchor="w", justify="left", wraplength=420)
@@ -6635,6 +6675,17 @@ class CreateDatabaseDialog(object):
             bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
             activeforeground="#ffffff", relief="flat", padx=14, pady=6, cursor="hand2")
         self.create_button.grid(row=0, column=1, sticky="e")
+
+        if self._remote_admin:
+            self.already_exists.set(True)
+            self.exists_check.configure(state="disabled")
+            self.create_button.configure(text="Register")
+            self._set_status(
+                "Creating a database is local-only for now (admin host %s is remote), so "
+                "this registers the existing database. It must already exist on that host, "
+                "set up exactly this way, and no other launcher may use it at the same time."
+                % admin.get("admin_host", ""),
+                COLORS["warn"])
 
         _center_on(parent, top)
         try:
@@ -6686,9 +6737,14 @@ class CreateDatabaseDialog(object):
         if result.get("ok"):
             self._created = True
             self.cancel_button.configure(text="Close")
-            self._set_status(result.get("message", "Created."), COLORS["ok"])
+            # A remote register that could not connect is a success WITH an
+            # advisory: show it in the warn colour, not the ok green.
+            unreachable = (result.get("reachable") is False)
+            self._set_status(result.get("message", "Created."),
+                             COLORS["warn"] if unreachable else COLORS["ok"])
             self.app.apply_created_database(result.get("fields", {}))
-            self.app.log(result.get("message", "Database created."), "ok")
+            self.app.log(result.get("message", "Database created."),
+                         "warn" if unreachable else "ok")
             self.top.after(500, self._close_and_offer)
         else:
             self._set_status(result.get("message", "Could not create the database."),

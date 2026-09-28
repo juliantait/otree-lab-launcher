@@ -1145,7 +1145,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.8</div>
+      <div class="af-ver" id="footVersion">version 1.4.9</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1289,6 +1289,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
                 <div class="k">DATABASE_URL</div>
                 <div class="v" id="dbUrl">postgres://otree:••••••••@localhost:5432/otree</div>
               </div>
+              <div class="db-mode-note" id="dbHostWarn" style="display:none"></div>
             </div>
           </div>
         </section>
@@ -1936,10 +1937,38 @@ function applyDbDetailsView(){
   t.innerHTML=dbDetailsShown?"Details &#9662;":"Details &#9656;";
 }
 function setDbVals(n,u,p,h,pt){el("db_name").value=n;el("db_user").value=u;el("db_pw").value=p;el("db_host").value=h;el("db_port").value=pt;}
+/* Feature 1: a host is "local" (creating a database is allowed) only when it is
+   localhost / 127.0.0.1 / ::1. Mirror of core.is_local_host. A blank host counts
+   as local (the launcher defaults an empty host to localhost). */
+function isLocalHost(host){
+  var h=String(host==null?"":host).trim().toLowerCase();
+  if(!h)return true;
+  return h==="localhost"||h==="127.0.0.1"||h==="::1";
+}
+/* Feature 1: the plain-language warning shown wherever a REMOTE per-database host
+   is in play. Creating is local-only, so a remote database must already exist,
+   set up exactly this way, and must not be shared by two launchers at once. */
+function remoteHostWarning(host){
+  var h=escapeHtml(String(host||"").trim());
+  return "This database must already exist on "+h+", set up exactly this way: same "+
+    "database name, same user and password, with oTree tables initialised. The launcher "+
+    "will not create it on a remote host. "+
+    "Make sure no one else runs against this database at the same time: two launchers "+
+    "sharing one database will collide, sharing sessions and rooms.";
+}
 function refreshUrl(){
   var e=el("dbUrl");if(!e)return;
-  if(currentDbMode==="none"){e.textContent="not set — oTree falls back to its own default database (SQLite)";return;}
+  if(currentDbMode==="none"){e.textContent="not set — oTree falls back to its own default database (SQLite)";refreshDbHostWarning();return;}
   e.textContent="postgres://"+val("db_user")+":••••••••@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");
+  refreshDbHostWarning();
+}
+/* Live remote-host warning near the main-config DATABASE_URL preview. */
+function refreshDbHostWarning(){
+  var w=el("dbHostWarn");if(!w)return;
+  var host=(val("db_host")||"").trim();
+  if(currentDbMode==="custom"&&!isLocalHost(host)){
+    w.style.display="block";w.innerHTML=remoteHostWarning(host);
+  }else{w.style.display="none";w.innerHTML="";}
 }
 ["db_name","db_user","db_host","db_port"].forEach(function(f){document.addEventListener("DOMContentLoaded",function(){
   var e=el(f);if(e)e.addEventListener("input",function(){if(currentDbMode==="custom")refreshUrl();refreshDbSummary();});});});
@@ -2593,6 +2622,11 @@ function renderCreateDb(roster,suggestedResearcher){
      to a valid Postgres identifier. The user can still edit it. */
   var suggested=slugifyPgDbname(raw);
   var opts=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+  /* Feature 1: creating a database is local-only for now. When the Postgres admin
+     host (Lab Settings) is remote, force register-only: the "already exists" tick
+     is checked + disabled, so the action stays Register and CREATE never runs. */
+  var adminHost=(PG_ADMIN.admin_host||"").trim();
+  var remoteAdmin=!isLocalHost(adminHost);
   openModal("Create a new Postgres database",
     '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
     '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
@@ -2605,10 +2639,11 @@ function renderCreateDb(roster,suggestedResearcher){
     '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
     /* Feature 4: register an existing database WITHOUT running CREATE DATABASE.
        The entry is identical either way, so it is selectable/editable afterward. */
-    '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" onchange="onCdbExistsToggle()"> Database already exists in Postgres (register without creating)</label>'+
+    '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" '+(remoteAdmin?'checked disabled ':'')+'onchange="onCdbExistsToggle()"> Database already exists in Postgres (register without creating)</label>'+
+    (remoteAdmin?'<div class="db-mode-note" style="display:block">Creating a database is local-only for now (admin host '+escapeHtml(adminHost)+' is remote), so this registers the existing database. '+remoteHostWarning(adminHost)+'</div>':'')+
     '<div class="modal-err" id="cdbErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
-    '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">Create</button></div>');
+    '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">'+(remoteAdmin?'Register':'Create')+'</button></div>');
 }
 function onCdbExistsToggle(){
   var b=el("cdbCreate");if(b)b.textContent=(el("cdbExists")&&el("cdbExists").checked)?"Register":"Create";
@@ -2628,7 +2663,9 @@ function doCreateDb(){
       /* keep the local registry + roster in sync with what the backend saved */
       if(r.databases)DATABASES=r.databases;if(r.researchers)RESEARCHERS=r.researchers;
       applyDbFields(r.fields||{db_mode:"custom"});
-      window.pywStatus("ok",r.message||(exists?"Database registered.":"Database created."));}
+      var msg=r.message||(exists?"Database registered.":"Database created.");
+      if(r.advisory)msg+=" "+r.advisory;
+      window.pywStatus(r.reachable===false?"warn":"ok",msg);}
     else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent=exists?"Register":"Create";}
   });
 }
@@ -2681,12 +2718,22 @@ function openEditDb(id){
   body+='<div class="mfield"><label>Database name</label><input id="edbName" type="text" value="'+escapeHtml(entry.db_name||"")+'"></div>'+
     '<div class="mfield"><label>User</label><input id="edbUser" type="text" value="'+escapeHtml(entry.db_user||"")+'"></div>'+
     '<div class="mfield"><label>Password</label><div class="pwrap"><input id="edbPw" type="password" value="'+escapeHtml(entry.db_password||"")+'"><button type="button" class="pw-toggle" data-target="edbPw" onclick="togglePw(this)">Show</button></div></div>'+
-    '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'"></div>'+
+    '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'" oninput="refreshEdbWarn()"></div>'+
     '<div class="mfield"><label>Port</label><input id="edbPort" type="text" value="'+escapeHtml(entry.db_port||"")+'"></div>'+
+    /* Feature 1: live remote-host warning, same copy as the main config. */
+    '<div class="db-mode-note" id="edbHostWarn" style="display:none"></div>'+
     '<div class="modal-err" id="edbErr"></div>'+
     '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button>'+
     '<button class="btn accent" id="edbSave" onclick="doEditDb(\''+escapeHtml(id)+'\','+(isLab?"true":"false")+')">Save</button></div>';
   openModal(isLab?"Edit the lab shared database":("Edit “"+(entry.title||"database")+"”"),body,true);
+  refreshEdbWarn();
+}
+/* Live remote-host warning in the edit-DB dialog. */
+function refreshEdbWarn(){
+  var w=el("edbHostWarn");if(!w)return;
+  var host=(val("edbHost")||"").trim();
+  if(!isLocalHost(host)){w.style.display="block";w.innerHTML=remoteHostWarning(host);}
+  else{w.style.display="none";w.innerHTML="";}
 }
 function doEditDb(id,isLab){
   var name=(val("edbName")||"").trim();
@@ -2875,7 +2922,7 @@ function openLabSettings(){
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
           '<span class="ls-foot-verline">'+
-            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.8</span>'+
+            '<span class="ls-foot-ver" id="lsFootVer">version 1.4.9</span>'+
             '<span class="ls-foot-dash"> - </span>'+
             '<button class="ls-foot-check" id="lsCheckBtn" onclick="checkForUpdateNow()">Update?</button>'+
           '</span>'+
@@ -2969,16 +3016,20 @@ function loadSettingsVersion(){
 /* The update-available message shown in the footer's right slot (shared by the
    on-open surfacing and the on-demand check). Renders the FINAL update control in
    ONE click, deciding up front from IS_GIT_INSTALL (resolved by version_info):
-     git install  -> a single "Update" button that pulls + relaunches directly
-                     (runGitPull), NO intermediate "Run" step and NO confirm;
+     git install  -> a single "Update" button that runs git pull (runGitPull), NO
+                     intermediate "Run" step and NO confirm. The update is
+                     NOTIFY-ONLY: after the pull we ask the operator to quit and
+                     reopen; the launcher does NOT self-relaunch (a self-spawned
+                     child is not GUI-session-attached on macOS -- see
+                     _ai/auto_update.md);
      not a git repo -> the blue GitHub download link (that path needs the link). */
 function updateAvailHTML(up){
   var extra=up&&up.remote_version?(" ("+escapeHtml(up.remote_version)+")"):"";
   if(IS_GIT_INSTALL){
-    /* one click: Update == git pull + relaunch. Tooltip text is EXACT. No link. */
+    /* one click: Update == git pull, then a quit-and-relaunch message. No link. */
     return "Update available"+extra+". "+
       '<button class="ls-foot-update" id="lsUpdateBtn" '+
-      'title="This will run git pull to update the launcher, then restart it." '+
+      'title="This will run git pull to update the launcher. Quit and reopen it to finish." '+
       'onclick="runGitPull()">Update</button>';
   }
   /* not a git install: point straight at the GitHub download page. No pull path. */
@@ -2989,11 +3040,12 @@ function githubLinkHTML(){
   return 'See <a class="ls-foot-link" href="https://github.com/juliantait/otree-lab-launcher" '+
     'target="_blank" rel="noopener">GitHub</a>.';
 }
-/* Clicking Update (git install only): execute git pull on the install; on success
-   the server relaunches the new version on a FRESH FREE port with the browser
-   auto-open suppressed, keeps THIS server up until the new one is confirmed
-   answering, then this tab navigates itself onto the new server (exactly one tab,
-   no port contention). A native-window session comes back as a native window. */
+/* Clicking Update (git install only): run git pull on the install. This is
+   NOTIFY-ONLY -- on success we show a clear "quit and reopen to finish" banner and
+   do NOT relaunch or navigate. The launcher cannot cleanly self-relaunch on macOS
+   (a self-spawned child is not attached to the GUI session, so Browse/study launch
+   break); see _ai/auto_update.md. On failure the error is shown and the app stays
+   usable (the button is re-enabled so the operator can retry). */
 function runGitPull(){
   var res=el("lsCheckResult"),btn=el("lsUpdateBtn");
   if(!NATIVE||!API||!API.run_git_pull)return;
@@ -3006,66 +3058,24 @@ function runGitPull(){
     }
     var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
     if(r.ok){
-      if(r.relaunching&&r.browser_reload){
-        /* Browser mode: the new server is coming up on a FRESH FREE port with the
-           browser auto-open suppressed, while THIS server stays up. Poll the old
-           server's relaunch_status; once it says the new server is ready, navigate
-           this very tab onto the new URL (one tab, no orphan, no port race). */
-        openModal("Updating",
-          '<p class="modal-desc">Updated. Starting the new version, then moving this tab to it…</p>'+out,true);
-        pollRelaunchThenNavigate(r.new_url||"");
-        return;
-      }
-      /* Native window (or no relaunch): the old window closes and reopens as a
-         native window, so there is no tab to reload. */
-      var line=r.relaunching
-        ?"Updated, restarting the launcher (it reopens on the new version)."
-        :"Update installed. Restart the launcher to apply.";
+      /* Notify-only: the working tree is updated, but THIS running instance still
+         has the old code. Tell the operator to quit and reopen to finish. Leave the
+         Update button disabled (the pull already succeeded; a second pull is a
+         no-op) so the message stands. */
       openModal("Update installed",
-        '<p class="modal-desc">'+escapeHtml(line)+'</p>'+out+
+        '<p class="modal-desc">'+escapeHtml(r.message||"Updated. Please quit this window and reopen the launcher to finish updating.")+'</p>'+out+
         '<div class="cta"><button class="btn accent" onclick="closeModal()">OK</button></div>',true);
     }else{
+      /* Keep the app usable and allow a retry. */
+      if(btn){btn.disabled=false;btn.textContent="Update";}
       openModal("Update did not complete",
         '<p class="modal-desc">'+escapeHtml(r.message||"git pull failed.")+'</p>'+out+
         '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
     }
+  }).catch(function(){
+    if(btn){btn.disabled=false;btn.textContent="Update";}
+    if(res){res.className="ls-foot-result";res.textContent="Update failed. Please try again.";}
   });
-}
-/* SAFE self-update hand-off (browser mode). The OLD server (still up) has spawned
-   the new version on a NEW FREE port and is health-checking it. We poll the OLD
-   server's relaunch_status:
-     "ready"  -> the new server is answering; navigate THIS tab to its URL (same
-                 tab, now the new version). The old server shuts itself down a
-                 moment later, once we have had the chance to move.
-     "failed" -> the new server did not come up; the OLD server stays up, so tell
-                 the operator to Quit and relaunch by hand. Never a dead app.
-   newUrl is the new server URL the old server reported up front; we prefer the URL
-   the poll returns but fall back to it. */
-function relaunchUpdateFailed(){
-  openModal("Update downloaded",
-    '<p class="modal-desc">The update was downloaded, but the new version did not '+
-    'start. This launcher is still running, so nothing is lost. Please Quit and '+
-    'relaunch to finish updating.</p>'+
-    '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
-}
-function pollRelaunchThenNavigate(newUrl){
-  var start=Date.now();
-  function tick(){
-    if(Date.now()-start>90000){relaunchUpdateFailed();return;} /* overall safety net */
-    if(!API||!API.relaunch_status){if(newUrl){location.href=newUrl;}return;}
-    API.relaunch_status().then(function(r){
-      r=r||{};
-      if(r.state==="ready"){location.href=(r.url||newUrl);return;}
-      if(r.state==="failed"){relaunchUpdateFailed();return;}
-      setTimeout(tick,500);                                  /* still starting */
-    }).catch(function(){
-      /* The old server may have shut down right after telling us "ready" (we would
-         already be navigating). Otherwise keep polling until it answers or we hit
-         the overall timeout. */
-      setTimeout(tick,500);
-    });
-  }
-  tick();
 }
 /* Explicit clean shutdown of the launcher's OWN web-UI server (the Quit button).
    Stops ONLY the launcher process; a running study keeps running untouched (the
@@ -3889,8 +3899,17 @@ function wizConnFields(p,o){
     '<div class="mfield"><label>User</label><input type="text" id="'+p+'User" value="'+escapeHtml(o.db_user)+'"></div>'+
     '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="'+p+'Pw" value="'+escapeHtml(o.db_password)+'">'+
       '<button type="button" class="pw-toggle" onclick="togglePw2(\''+p+'Pw\',this)">Show</button></div></div>'+
-    '<div class="mfield"><label>Host</label><input type="text" id="'+p+'Host" value="'+escapeHtml(o.db_host)+'"></div>'+
-    '<div class="mfield"><label>Port</label><input type="text" id="'+p+'Port" value="'+escapeHtml(o.db_port)+'"></div>';
+    '<div class="mfield"><label>Host</label><input type="text" id="'+p+'Host" value="'+escapeHtml(o.db_host)+'" oninput="wizHostChanged(\''+p+'\')"></div>'+
+    '<div class="mfield"><label>Port</label><input type="text" id="'+p+'Port" value="'+escapeHtml(o.db_port)+'"></div>'+
+    /* Feature 1: live remote-host warning for this database card. */
+    '<p class="db-mode-note" id="'+p+'HostWarn" style="display:'+(isLocalHost(o.db_host)?'none':'block')+'">'+(isLocalHost(o.db_host)?'':remoteHostWarning(o.db_host))+'</p>';
+}
+/* Live-toggle a wizard card's remote-host warning as its Host field is edited. */
+function wizHostChanged(p){
+  var w=el(p+"HostWarn");if(!w)return;
+  var host=(val(p+"Host")||"").trim();
+  if(!isLocalHost(host)){w.style.display="block";w.innerHTML=remoteHostWarning(host);}
+  else{w.style.display="none";w.innerHTML="";}
 }
 /* The ONE shared Postgres admin section (top of the Databases step). Optional:
    filled = create-new becomes available on every database card; blank = those
@@ -3903,7 +3922,9 @@ function wizAdminCard(){
     '<div class="mfield"><label>Admin password</label><div class="pwrap"><input type="password" id="admP" value="'+escapeHtml(a.admin_password)+'" oninput="wizAdminChanged()">'+
       '<button type="button" class="pw-toggle" onclick="togglePw2(\'admP\',this)">Show</button></div></div>'+
     '<div class="mfield"><label>Admin host</label><input type="text" id="admH" value="'+escapeHtml(a.admin_host)+'" oninput="wizAdminChanged()"></div>'+
-    '<div class="mfield"><label>Admin port</label><input type="text" id="admPort" value="'+escapeHtml(a.admin_port)+'" oninput="wizAdminChanged()"></div></div>';
+    '<div class="mfield"><label>Admin port</label><input type="text" id="admPort" value="'+escapeHtml(a.admin_port)+'" oninput="wizAdminChanged()"></div>'+
+    /* Feature 1: creating is local-only for now; note it when the admin host is remote. */
+    '<p class="db-mode-note" id="admHostNote" style="display:'+(isLocalHost(a.admin_host)?'none':'block')+'">'+(isLocalHost(a.admin_host)?'':'Creating a database is local-only for now (this admin host is remote), so databases below can only be linked to ones that already exist.')+'</p></div>';
 }
 function wizReadAdmin(){
   WIZ.admin={admin_username:(val("admU")||"").trim(),admin_password:val("admP")||"",
@@ -3912,15 +3933,32 @@ function wizReadAdmin(){
 /* Create-new is available once admin user + password are present (host/port
    default). Matches core.pg_admin_ready's minimum without a live connection. */
 function wizAdminReady(){return !!(WIZ.admin.admin_username && WIZ.admin.admin_password);}
+/* Feature 1: creating a database is local-only for now. Create-new is offered
+   only when the admin creds are present AND the admin host is local; a remote
+   admin host forces link/register mode. */
+function wizCreateAllowed(){return wizAdminReady() && isLocalHost(WIZ.admin.admin_host);}
+/* The hint shown under a disabled create toggle: either fill in admin, or the
+   local-only note when the admin host is remote. */
+function wizCreateHint(){
+  if(wizAdminReady() && !isLocalHost(WIZ.admin.admin_host))
+    return 'Creating a database is local-only for now (admin host '+escapeHtml(WIZ.admin.admin_host)+' is remote). Link the existing database instead.';
+  return 'Fill in Postgres admin above to create a new database.';
+}
 /* Live-toggle each visible create checkbox as the admin section is edited, with
    no full re-render (which would drop focus). */
 function wizAdminChanged(){
   wizReadAdmin();
-  var ready=wizAdminReady();
+  var ready=wizCreateAllowed();
+  var an=el("admHostNote");
+  if(an){
+    if(!isLocalHost(WIZ.admin.admin_host)){an.style.display="block";
+      an.innerHTML="Creating a database is local-only for now (this admin host is remote), so databases below can only be linked to ones that already exist.";}
+    else{an.style.display="none";an.innerHTML="";}
+  }
   ["wd"].concat(WIZ.extraOpen?["ex"]:[]).forEach(function(p){
     var c=el(p+"Create");if(!c)return;
     c.disabled=!ready;
-    var hint=el(p+"Hint");if(hint)hint.hidden=ready;
+    var hint=el(p+"Hint");if(hint){hint.hidden=ready;hint.innerHTML=wizCreateHint();}
     if(!ready&&c.checked)c.checked=false;
     var eff=c.checked&&ready;
     var n=el(p+"Note");if(n){n.className="db-mode-note"+(eff?" create":"");n.innerHTML=wizModeNote(eff);}
@@ -3933,13 +3971,14 @@ function wizModeNote(create){
 }
 function wizDbControl(p,o){
   // The create toggle relies on the ONE shared admin section above: disabled
-  // (with a hint) until admin user + password are filled.
-  var ready=wizAdminReady();
+  // (with a hint) until admin user + password are filled AND the admin host is
+  // local (creating is local-only for now).
+  var ready=wizCreateAllowed();
   var eff=o.create&&ready;
   return wizConnFields(p,o)+
     '<label class="chk" style="margin:12px 0 2px"><input type="checkbox" id="'+p+'Create"'+(eff?" checked":"")+(ready?"":" disabled")+' onchange="wizToggleCreate(\''+p+'\')"> Create this database in Postgres for me</label>'+
     '<p class="db-mode-note'+(eff?' create':'')+'" id="'+p+'Note">'+wizModeNote(eff)+'</p>'+
-    '<p class="db-create-hint" id="'+p+'Hint"'+(ready?' hidden':'')+'>Fill in Postgres admin above to create a new database.</p>';
+    '<p class="db-create-hint" id="'+p+'Hint"'+(ready?' hidden':'')+'>'+wizCreateHint()+'</p>';
 }
 function wizToggleCreate(p){
   var c=el(p+"Create");if(!c||c.disabled)return;
