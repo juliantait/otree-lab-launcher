@@ -286,8 +286,9 @@ def project_status(path):
 
 
 def _db_row(entry):
-    """One database for a picker / Lab Settings list, with its grey host note,
-    grey "created on" line, warn-coloured location warning and default tag."""
+    """One database for a picker / Lab Settings list, with its grey host note
+    ("" for localhost), warn-coloured location warning and default tag. The
+    "created on" line rides along only for the Edit dialog; lists never show it."""
     return dict(entry, host_note=core.database_host_note(entry),
                 created_on_line=core.database_created_on_line(entry),
                 location_warning=core.database_location_warning(entry),
@@ -851,14 +852,13 @@ class Api(object):
 
     def _db_card(self, fields):
         """The Database card extras for a config, computed by core: the one-line
-        label, the grey host note, the grey "created on" line of the database it
-        resolves to, the warn-coloured location warning and the note when its
-        database is not on this PC."""
+        label, the grey host note ("" for localhost), the warn-coloured location
+        warning of the database it resolves to and the note when its database is
+        not on this PC. No "created on" line: that is in the Edit view only."""
         cfg = fields_to_config(fields or {})
         entry = core.find_database(self.store_extra, core.current_database_id(cfg))
         return {"db_label": core.database_summary_label(cfg),
                 "db_host_note": core.database_host_note(cfg),
-                "db_created_on": core.database_created_on_line(entry) if entry else "",
                 "db_warning": core.database_location_warning(entry) if entry else "",
                 "db_note": core.config_database_note(cfg)}
 

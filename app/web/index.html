@@ -1382,10 +1382,9 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
             </span>
             <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
           </div>
-          <!-- 1.5.0: where the database was created (grey), a warning when a
-               localhost database was created on another computer, and a note when
-               this config's database is not on this computer (core decides). -->
-          <div class="db-created" id="dbCreatedOn" hidden></div>
+          <!-- A warning when a localhost database was created on another
+               computer, and a note when this config's database is not on this
+               computer (core decides). Where it was created: Edit view only. -->
           <div class="db-warn" id="dbWarn" hidden></div>
           <div class="db-warn" id="dbNote" hidden></div>
           <!-- Feature 3: the selected database shows only the summary above; this
@@ -2125,17 +2124,16 @@ function renderDbPicker(list,currentId){
     var sel=(e.id===currentId);
     var grey=e.researcher?'<span class="db-pick-by">created by '+escapeHtml(e.researcher)+'</span>':'';
     /* Another computer's database: say where (core.database_host_note). */
-    var note=(e.host_note!==undefined)?e.host_note:dbHostNote(e);
+    var note=dbRowHostNote(e);
     var on=note?'<span class="db-pick-by db-host-note">'+escapeHtml(note)+'</span>':'';
     var tag=e.is_default?'<span class="db-default-tag">(default)</span>':'';
-    var made=e.created_on_line?'<span class="db-created">'+escapeHtml(e.created_on_line)+'</span>':'';
     var warn=e.location_warning?'<span class="db-warn">'+escapeHtml(e.location_warning)+'</span>':'';
     return '<button class="db-pick-row'+(sel?" sel":"")+'" onclick="pickDatabase(\''+escapeHtml(e.id)+'\')">'+
       '<span class="db-pick-dot">'+(sel?"&#9679;":"")+'</span>'+
-      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+tag+on+grey+made+warn+'</button>';
+      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+tag+on+grey+warn+'</button>';
   }).join("");
   openModal("Choose a database",
-    '<p class="modal-desc">The databases on <b>this computer</b>. The title is its nickname; the grey line says where it was created.</p>'+
+    '<p class="modal-desc">The databases on <b>this computer</b>. The title is its nickname; a database on another computer shows its host in grey.</p>'+
     '<div class="db-pick-list">'+rows+'</div>'+
     '<div class="db-pick-sep"></div>'+
     '<button class="db-pick-add" onclick="closeModal();openCreateDb()">+&nbsp; Add new database&hellip;</button>'+
@@ -2250,6 +2248,8 @@ function refreshDbHostWarning(){
   var e=el(f);if(e)e.addEventListener("input",function(){if(currentDbMode==="custom")refreshUrl();refreshDbSummary();});});});
 /* "on HOST:PORT" for a database on another computer, else "". Mirror of
    core.database_host_note (the picker and briefing get it from Python). */
+/* A list row's grey host note: core's (row.host_note) when Python sent one. */
+function dbRowHostNote(e){return (e&&e.host_note!==undefined)?e.host_note:dbHostNote(e);}
 function dbHostNote(e){
   e=e||{};if((e.db_mode||"custom")==="none")return "";
   var host=String(e.db_host==null?"":e.db_host).trim();
@@ -2257,14 +2257,15 @@ function dbHostNote(e){
   return "on "+host+":"+(String(e.db_port==null?"":e.db_port).trim()||"5432");
 }
 /* The Database card: in the app every line comes from core (Api.database_card:
-   the nickname label, grey host note, grey "created on" line, the location
-   warning and the "not on this computer" note). The static preview renders a
+   the nickname label, grey host note (blank for localhost), the location
+   warning and the "not on this computer" note; the "created on" details are in
+   the Edit view only). The static preview renders a
    local approximation. */
 function renderDbCard(c){
   c=c||{};
   if(c.db_label)el("dbSummary").textContent=c.db_label;
   var n=el("dbHostNote");if(n){n.textContent=c.db_host_note||"";n.hidden=!c.db_host_note;}
-  [["dbCreatedOn","db_created_on"],["dbWarn","db_warning"],["dbNote","db_note"]].forEach(function(p){
+  [["dbWarn","db_warning"],["dbNote","db_note"]].forEach(function(p){
     var e=el(p[0]);if(e){e.textContent=c[p[1]]||"";e.hidden=!c[p[1]];}});
 }
 var dbCardSeq=0;
@@ -2279,7 +2280,7 @@ function refreshDbSummary(){
   var entry=null,list=DATABASES.length?DATABASES:PREVIEW_DATABASES;
   for(var i=0;i<list.length;i++){var d=list[i];
     if(d.id===currentDatabaseId||(!currentDatabaseId&&mode==="lab"&&d.is_default))entry=d;}
-  if(mode!=="none"&&entry){renderDbCard({db_label:entry.title+" (Postgres)",db_created_on:entry.created_on_line||"",db_warning:entry.location_warning||""});return;}
+  if(mode!=="none"&&entry){renderDbCard({db_label:entry.title+" (Postgres)",db_host_note:dbHostNote(entry),db_warning:entry.location_warning||""});return;}
   renderDbCard({});
   if(mode==="lab")base="This computer's default database";
   else if(mode==="none")base="oTree default (SQLite)";
@@ -3293,7 +3294,10 @@ function lsCustomDbRows(){
   return list.map(function(e){
     var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
     var tag=(e.is_default||e.id===defaultDatabase)?'<span class="db-default-tag">(default)</span>':'';
-    var made=e.created_on_line?'<div class="db-created">'+escapeHtml(e.created_on_line)+'</div>':'';
+    /* Only "on HOST:PORT" for another computer's database; nothing for localhost.
+       The "created on" details are in the Edit dialog. */
+    var note=dbRowHostNote(e);
+    var made=note?'<span class="db-pick-by db-host-note">  '+escapeHtml(note)+'</span>':'';
     var warn=e.location_warning?'<div class="db-warn">'+escapeHtml(e.location_warning)+'</div>':'';
     if(e.login_missing)warn+='<div class="db-warn">'+escapeHtml(UI_TEXT.admin_login_missing)+'</div>';
     else if(e.uses_admin_login)made+='<div class="db-created">'+escapeHtml(UI_TEXT.admin_login_note)+'</div>';
@@ -4665,7 +4669,7 @@ function wizStepDb(){
     var id="old:"+d.id;
     return '<div class="wiz-dbrow"><div class="body"><label class="chk" style="margin:0"><input type="radio" name="wizDefault"'+(WIZ.defaultChoice===id?" checked":"")+
       ' onchange="wizSetDefault(\''+escapeHtml(id)+'\')"> <span class="nm">'+escapeHtml(d.title)+'</span></label>'+
-      (d.created_on_line?'<div class="db-created">'+escapeHtml(d.created_on_line)+'</div>':'')+
+      (dbRowHostNote(d)?'<div class="db-created">'+escapeHtml(dbRowHostNote(d))+'</div>':'')+
       (d.location_warning?'<div class="db-warn">'+escapeHtml(d.location_warning)+'</div>':'')+'</div></div>';
   }).join("");
   return '<p class="modal-desc"><b>This computer’s databases.</b> The ticked one is the default: the Lab default config uses it.</p>'+

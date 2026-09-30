@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -5380,9 +5380,11 @@ def config_database_note(cfg):
 
 
 def database_created_on_line(entry):
-    """The grey line under a database's title: where and when it was created
-    (or registered), e.g. "Created on LAB-PC-7 (10.0.0.7), Large lab, 2026-09-23".
-    "" when unknown."""
+    """Where and when a database was created (or registered), e.g. "Created on
+    LAB-PC-7 (10.0.0.7), Large lab, 2026-09-23". "" when unknown. Shown ONLY in
+    the database's Edit view (1.5.1): lists, the Database card and the launch
+    briefing show just :func:`database_host_note` (blank for localhost) and
+    :func:`database_location_warning`."""
     stamp = normalize_created_on((entry or {}).get("created_on"))
     if not stamp:
         return ""
@@ -8492,7 +8494,9 @@ def setup_state():
     """Everything the wizard shows, for both faces (JSON-serialisable)."""
     machine = load_machine()
     labs = [l for l in lab_info_labs() if not l.get("deleted")]
-    dbs = [dict(d, created_on_line=database_created_on_line(d),
+    # List rows show only "on HOST:PORT" for another computer's database (the
+    # created-on details live in the Edit view) plus the location warning.
+    dbs = [dict(d, host_note=database_host_note(d),
                 location_warning=database_location_warning(d))
            for d in machine["databases"] if not d.get("deleted")]
     for d in dbs:

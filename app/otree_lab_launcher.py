@@ -2264,9 +2264,9 @@ class LauncherApp(object):
         self.db_summary = tk.StringVar(self.root, value="")
         # "on HOST:PORT" in grey when the database is on another computer.
         self.db_host_note = tk.StringVar(self.root, value="")
-        # Grey: where/when the database was created; warn: the config's database
-        # is missing on this PC, or a localhost database made on another PC.
-        self.db_created_line = tk.StringVar(self.root, value="")
+        # Warn: the config's database is missing on this PC, or a localhost
+        # database made on another PC. (Where/when it was created is shown in the
+        # database's Edit dialog only.)
         self.db_warning = tk.StringVar(self.root, value="")
 
         # One summary line: the current database NAME in bold + a pen (edit) icon
@@ -2311,11 +2311,7 @@ class LauncherApp(object):
             bd=0, highlightthickness=0, padx=0, cursor="hand2")
         summary_row.add(self.reset_check, gap=18, push_right=True)
 
-        # Under the name: the grey created-on line and, when needed, a warning.
-        self.db_created_label = tk.Label(
-            body, textvariable=self.db_created_line, bg=COLORS["card"],
-            fg=COLORS["faint"], font=self.fonts.small, anchor="w", justify="left")
-        self.db_created_label.grid(row=1, column=0, columnspan=2, sticky="w")
+        # Under the name, only when needed: a warning.
         self.db_warning_label = tk.Label(
             body, textvariable=self.db_warning, bg=COLORS["card"],
             fg=COLORS["warn"], font=self.fonts.small, anchor="w", justify="left",
@@ -3323,18 +3319,15 @@ class LauncherApp(object):
         if hasattr(self, "db_host_note"):
             note = core.database_host_note(self._db_db_fields())
             self.db_host_note.set(note)
-        if hasattr(self, "db_created_line"):
+        if hasattr(self, "db_warning"):
             entry = self._resolved_db_entry()
-            self.db_created_line.set(core.database_created_on_line(entry) if entry else "")
             warnings = [core.config_database_note(self._db_db_fields()),
                         core.database_location_warning(entry) if entry else ""]
             self.db_warning.set("\n".join(w for w in warnings if w))
-            for var, label in ((self.db_created_line, self.db_created_label),
-                               (self.db_warning, self.db_warning_label)):
-                if var.get():
-                    label.grid()
-                else:
-                    label.grid_remove()
+            if self.db_warning.get():
+                self.db_warning_label.grid()
+            else:
+                self.db_warning_label.grid_remove()
 
     def _lab_label(self, lab):
         preset = core.find_lab_preset(lab, self.lab_presets)
@@ -7139,10 +7132,6 @@ class DatabasePickerDialog(object):
             # The creator researcher, in grey, on the SAME line (whose DB is this).
             tk.Label(row, text="   created by %s" % entry["researcher"], bg=COLORS["card"],
                      fg=COLORS["faint"], font=self.fonts.small, anchor="w").pack(side="left")
-        created = core.database_created_on_line(entry)
-        if created:
-            tk.Label(outer, text=created, bg=COLORS["card"], fg=COLORS["faint"],
-                     font=self.fonts.small, anchor="w").pack(fill="x", padx=(28, 0))
         warning = core.database_location_warning(entry)
         if warning:
             tk.Label(outer, text=warning, bg=COLORS["card"], fg=COLORS["warn"],
@@ -8620,15 +8609,17 @@ class LabSettingsDialog(object):
             if entry["id"] == default_id:
                 tk.Label(line, text=" (default)", bg=COLORS["card"], fg=COLORS["faint"],
                          font=self.fonts.small, anchor="w").pack(side="left")
+            # Only "on HOST:PORT" for another computer's database; nothing for
+            # localhost. Where/when it was created is in the Edit dialog.
+            note = core.database_host_note(entry)
+            if note:
+                tk.Label(line, text="  " + note, bg=COLORS["card"], fg=COLORS["faint"],
+                         font=self.fonts.small, anchor="w").pack(side="left")
             if entry.get("researcher"):
                 tk.Label(line, text="   created by %s" % entry["researcher"], bg=COLORS["card"],
                          fg=COLORS["faint"], font=self.fonts.small, anchor="w").pack(side="left")
             ttk.Button(line, text="Edit", width=6,
                        command=lambda e=entry: self._edit_database(e)).pack(side="right")
-            created = core.database_created_on_line(entry)
-            if created:
-                tk.Label(block, text=created, bg=COLORS["card"], fg=COLORS["faint"],
-                         font=self.fonts.small, anchor="w").pack(fill="x")
             warning = core.database_location_warning(entry)
             if warning:
                 tk.Label(block, text=warning, bg=COLORS["card"], fg=COLORS["warn"],
@@ -9260,8 +9251,8 @@ class FirstRunWizard(object):
                 line.pack(fill="x")
                 tk.Radiobutton(line, text=entry["title"], variable=self.default_choice,
                                value="id:" + entry["id"], anchor="w").pack(side="left")
-                if entry.get("created_on_line"):
-                    tk.Label(line, text="  " + entry["created_on_line"], fg="#8a94a1").pack(
+                if entry.get("host_note"):
+                    tk.Label(line, text="  " + entry["host_note"], fg="#8a94a1").pack(
                         side="left")
                 if entry.get("location_warning"):
                     tk.Label(self.body, text=entry["location_warning"], fg="#8a5a00",

@@ -66,9 +66,12 @@ Everything the wizard set is editable later under **gear -> Lab Settings**.
 Room maps are part of `lab_info.json`; the two example maps ship in
 `app/assets/maps/`, whose README explains the map format.
 
-Each database is listed by its nickname, with a grey line saying which computer
-it was created on. A database on `localhost` only exists on the computer it was
-made on: if a database shows a warning that it was created on another computer,
+Each database is listed by its nickname. A database on another computer also
+shows a grey **on HOST:PORT**; one on this computer (`localhost`) shows nothing
+extra. Which computer a database was created on, and when, is shown in its
+**Edit** dialog (Lab Settings). A database on `localhost` only exists on the
+computer it was made on: if a database shows a warning that it was created on
+another computer,
 `localhost` on this one is a different Postgres, and a database of the same name
 here is not the same data.
 
