@@ -57,31 +57,80 @@ takes the setup.
    create their own database later, so you do not have to make one per study.
    (Creating a database from the app also needs `psycopg2`:
    `pip install psycopg2-binary`.)
+   **A database on another computer can be added too, but only registered, not
+   created.** In the add-database dialog the **Host** shows `localhost` greyed
+   out; **click the pen at the end of the box** to type another IP or hostname
+   (the Port unlocks with it). As soon as the host is not this computer, **"The
+   database already exists in Postgres"** is ticked and locked: the database must
+   already exist there, and launches then connect to that host. Switching back to
+   `localhost` brings the create option back.
 
 3. **GitHub workspaces (Organisation Sync) — for pulling experiment folders from
    your lab's GitHub organisation.** This is optional and **off by default**. To
    let experimenters clone and update experiment repos straight from your lab's
    GitHub organisation (no terminal), the lab manager must:
-   - Create a GitHub organisation for the lab. See GitHub's own guide:
-     <https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/creating-a-new-organization-from-scratch>
-   - Sign each lab experimenter PC into that organisation with a **read-only
-     credential** stored once on the machine. Use a fine-grained personal access
-     token scoped to read-only. GitHub's own guide covers creating and scoping
-     tokens (including fine-grained tokens):
-     <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>
+   - **Create a GitHub organisation** for the lab and **set its base member
+     permission to Read**, so members can clone and pull but not push. Make the
+     lab's own GitHub account a member and allow fine-grained personal access
+     tokens in the organisation settings.
+   - **Give each shared lab PC one read-only lab token (recommended).** Using the
+     lab account, create ONE fine-grained token for the organisation with
+     **Contents: Read-only** on **All repositories**, and paste it once on each
+     lab PC as the password on the first clone; it is stored in Windows
+     Credential Manager / the macOS Keychain. It can only read the lab's code,
+     belongs to the lab (not a person), and leaves no personal login on a shared
+     PC. Renew it before it expires. (Simpler alternative: sign the lab account
+     in on each PC. **Never** use a personal account on a shared PC.)
+   - **Researchers' own computers:** sign in with their own GitHub account.
 
-   The credential can be as broad as the whole lab or as fine-grained as
-   per-PC. **The launcher never stores or handles any token itself** — it relies
-   entirely on the git credential already on the machine. If that is not set up,
+   **The full step-by-step setup is in
+   [GitHub Organisation Sync: setup and use](github_org_sync.md)** (organisation
+   settings, the lab token, signing in and out on Windows and macOS, publishing a study into
+   the organisation, moving repos between organisations, troubleshooting).
+   **The launcher never stores or handles any token or GitHub login itself**; it
+   relies entirely on the login already stored on the machine. If that is not set up,
    leave the feature off.
 
    Turn it on under **gear -> Lab Settings -> GitHub Organisation Sync**: a tick
    box shows or hides the GitHub buttons, and a field sets the organisation name
-   (so the clone target is `<org>/<repo>` and is not hardcoded). Both settings
-   are saved on this computer. When it is on, experimenters get a **GitHub**
-   button next to Browse (clones a named repo and auto-selects it) and a
+   (so the clone target is `<org>/<repo>` and is not hardcoded). Both are lab
+   settings, saved with the rest of the lab setup in `data/lab_info.json` (not
+   with the per-user light/dark theme). When it is on, experimenters get a **GitHub**
+   button next to Browse (clones a named repo and auto-selects it; its folder
+   picker opens in the launcher's git-ignored `local/` scratch folder) and a
    per-config **Git Pull** button (runs `git pull` in the selected study folder,
    never the launcher's own folder).
+
+   **What the experimenter sees.** Both buttons report back in plain language,
+   with the key result in bold and git's own output tucked into a collapsed
+   **Git output** block (open it only when troubleshooting):
+
+   - **Clone.** Pressing **Clone** keeps the dialog open and shows
+     *Checking that `<org>/<repo>` exists…* then *Cloning…*. On success the
+     dialog closes and the new folder is selected as the study folder. If
+     something is wrong the dialog **stays open with the name still typed in**,
+     shows the reason, and the button becomes **Retry**. Typical reasons: *No
+     repository called X found in ORG, or this computer's GitHub login cannot
+     see it. Check the name.* (GitHub answers the same way for a repository
+     that does not exist and a private one this PC has no access to, so check
+     the spelling first, then the PC's GitHub login); a folder with that name
+     already exists in the chosen parent folder; GitHub could not be reached
+     (no network); GitHub did not accept this PC's login; or the organisation
+     name is not set yet.
+   - **Git Pull.** After every pull a result appears at the bottom of the
+     project status box, one of three:
+     - **Nothing new: already up to date.**
+     - **Pulled N changed files.** with the date and subject of the latest
+       commit that came in, and a collapsed **Changes pulled from Git** list
+       showing each file as added / modified / deleted with its lines added and
+       removed.
+     - **Git pull failed** with the reason, for example: no network; GitHub did
+       not accept this PC's login; *local changes to `app/pages.py` would be
+       overwritten* (the files are named, and nothing was changed); or the
+       folder is not a git repo.
+
+     The result stays while that study folder is selected and clears when you
+     choose another folder.
 
 **The per-seat links (the important part)**
 
@@ -130,7 +179,9 @@ Three things, in order. Read the first line of each, do it, and move on. The
 - Click **Browse** and pick your oTree project folder. (You can also paste the
   folder path directly into the path box.)
 - Or click the **GitHub** button to pull the folder from your lab's GitHub
-  organisation.
+  organisation. Type the repository name, choose a parent folder, and press
+  **Clone**; the dialog only closes once the clone has worked. If it says no
+  repository was found, check the spelling and press **Retry**.
 
 *Note:* the GitHub option only works if your lab manager has set up
 Organisation Sync. If you do not see it, or it does not work, ask your lab

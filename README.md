@@ -3,6 +3,7 @@
 **Make any working oTree project run in your lab with one click.** Point it at your project and it wires up Postgres, per-seat participant links, and the experiment room, then starts the server ready for participants.
 
 See [docs/user_guide.md](docs/user_guide.md) for the full user guide (lab manager setup and experimenter usage).
+To clone and update studies from your lab's GitHub organisation, see [docs/github_org_sync.md](docs/github_org_sync.md).
 
 ## What it does
 

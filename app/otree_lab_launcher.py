@@ -1541,11 +1541,12 @@ class LauncherApp(object):
         self.running = False
         self.row_widgets = []
         self._password_entries = []
-        # GitHub Organisation Sync opt-in (default OFF), persisted in ui_prefs.json
-        # (same mechanism as the theme). Loaded before the cards are built so the
-        # GitHub Org. / Git update buttons start in the right (hidden) state.
-        self.github_sync_enabled = core.load_github_sync_enabled()
-        self.github_org = core.load_github_org()
+        # GitHub Organisation Sync opt-in (default OFF), a lab setting persisted in
+        # lab_info.json. Loaded before the cards are built so the GitHub Org. / Git
+        # update buttons start in the right (hidden) state.
+        github_sync = core.load_github_sync()
+        self.github_sync_enabled = github_sync["enabled"]
+        self.github_org = github_sync["org"]
 
         root.title(APP_NAME)
         root.configure(bg=COLORS["window"])
@@ -1967,7 +1968,7 @@ class LauncherApp(object):
         self.github_org_btn = ttk.Button(
             picker, text="GitHub Org...", command=self.github_org_clone)
         self.git_update_btn = ttk.Button(
-            picker, text="Git update", command=self.git_update_study)
+            picker, text="Git Pull", command=self.git_update_study)
         self.github_org_btn.grid(row=0, column=2, padx=(8, 0))
         self.git_update_btn.grid(row=0, column=3, padx=(8, 0))
         self._apply_github_sync_buttons()
@@ -1982,9 +1983,15 @@ class LauncherApp(object):
         self.app_bullets.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(20, 0))
         self.app_bullets.grid_remove()
 
-        # A thin divider, then the merged "oTree admin" sub-section.
-        tk.Frame(body, bg=COLORS["card_line"], height=1).grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(10, 8))
+        # The Git Pull RESULT section (hidden until a pull runs), then a thin
+        # divider, then the merged "oTree admin" sub-section. They share row 3 so
+        # the result sits at the bottom of the project status, above the divider.
+        holder = tk.Frame(body, bg=COLORS["card"])
+        holder.grid(row=3, column=0, columnspan=2, sticky="ew")
+        self.git_result = tk.Frame(holder, bg=COLORS["card"])
+        self._git_result_path = ""
+        self._git_divider = tk.Frame(holder, bg=COLORS["card_line"], height=1)
+        self._git_divider.pack(fill="x", pady=(10, 8))
 
         # The admin row is ONE inline sentence of three separate decisions, split
         # by vertically-centred middle dots (UI round 2):
@@ -3259,6 +3266,7 @@ class LauncherApp(object):
         else:
             self.project_status.set(level, message)
             self._set_app_bullets([])
+        self._sync_git_result(cfg["project_path"])
         self.refresh_seats(cfg)
 
     def refresh_seats(self, cfg=None):
@@ -3423,22 +3431,23 @@ class LauncherApp(object):
                 btn.grid_remove()
 
     def _set_github_sync(self, enabled, org):
-        """Persist the tick box + org name (ui_prefs.json) and refresh the buttons.
-        Fail-soft in core; returns the stored state."""
-        stored = core.save_github_sync_prefs(enabled, org)
+        """Persist the tick box + org name (lab settings, lab_info.json) and
+        refresh the buttons. Fail-soft in core; returns the stored state."""
+        stored = core.save_github_sync_settings(enabled, org)
         self.github_sync_enabled = stored["enabled"]
         self.github_org = stored["org"]
         self._apply_github_sync_buttons()
         return stored
 
     def github_org_clone(self):
-        """GitHub Org. button: clone <org>/<repo> from the configured organisation
-        in the background, then auto-select the cloned folder as the study folder.
+        """GitHub Org. button: open the clone dialog (GithubCloneDialog), which
+        validates the clone INSIDE itself (busy Checking -> Cloning line, inline
+        error + Retry) and only closes once the clone has succeeded; then the
+        cloned folder is auto-selected as the study folder.
 
         The org name is a configured value (Lab Settings), so the target is not
         hardcoded; the clone relies on the machine's pre-stored read-only git
-        credential. Errors (bad/missing repo, no credential, network) surface as a
-        clear message and never hang (bounded timeout in core)."""
+        credential. All outcomes are decided in core.git_clone_org_repo."""
         if not self.github_org:
             messagebox.showwarning(
                 "Set the organisation first",
@@ -3446,33 +3455,18 @@ class LauncherApp(object):
                 "Organisation Sync before cloning.", parent=self.root)
             self.open_lab_settings()
             return
-        repo = simpledialog.askstring(
-            "Clone from GitHub organisation",
-            "Repository name to clone from %s:" % self.github_org,
-            parent=self.root)
-        if not repo or not repo.strip():
-            return
-        repo = repo.strip()
-        # The repo is cloned into a NEW <repo> subfolder inside the folder chosen
-        # here (the PARENT), so name that folder in the title to make the choice
-        # self-explanatory.
-        dest = filedialog.askdirectory(
-            parent=self.root,
-            title="Choose where to create the '%s' folder" % repo)
-        if not dest:
-            return
-        self.github_org_btn.config(state="disabled", text="Cloning...")
-        self.log("Cloning %s/%s into %s ..." % (self.github_org, repo, dest), "info")
 
-        def worker():
-            result = core.git_clone_org_repo(self.github_org, repo, dest)
-            self.root.after(0, lambda: self._on_clone_done(result))
+        def on_start():
+            self.github_org_btn.config(state="disabled", text="Cloning...")
 
-        threading.Thread(target=worker, name="git-clone", daemon=True).start()
+        GithubCloneDialog(self.root, self.fonts, self.github_org,
+                          on_start=on_start, on_finish=self._on_clone_done)
 
-    def _on_clone_done(self, result):
+    def _on_clone_done(self, result, dialog_open=False):
         """Back on the UI thread: re-enable the button, report, and on success
-        auto-select the cloned folder as the study folder (same path as Browse)."""
+        auto-select the cloned folder as the study folder (same path as Browse).
+        A failure while the dialog is open is shown there (inline + Retry), so
+        here it only goes to the log."""
         self.github_org_btn.config(state="normal", text="GitHub Org...")
         if result.get("ok") and result.get("path"):
             path = os.path.normpath(result["path"])
@@ -3481,47 +3475,111 @@ class LauncherApp(object):
             self.log(result.get("message") or ("Cloned into %s." % path), "ok")
             self.log(message, {"ok": "ok", "warn": "warn", "error": "err"}[level])
             self._maybe_offer_get_ready(path)
-        else:
-            self.log(result.get("message") or "Could not clone the repository.", "err")
+            return
+        self.log(result.get("message") or "Could not clone the repository.", "err")
+        if result.get("output"):
+            self.log(result["output"], "info")
+        if not dialog_open:
             messagebox.showerror(
                 "Could not clone",
-                result.get("message") or "Could not clone the repository.",
+                "\n\n".join(x for x in (result.get("message"), result.get("hint"))
+                             if x) or "Could not clone the repository.",
                 parent=self.root)
 
     def git_update_study(self):
-        """Git update button (per config): git pull in the SELECTED study folder
-        (never the launcher app/ folder). Three outcomes, each with a clear
-        message: not a git repo, updated, or already current; a real pull error is
-        surfaced as text. Reuses the shared core git plumbing."""
+        """Git Pull button (per config): git pull in the SELECTED study folder
+        (never the launcher app/ folder). core.git_update_study decides the
+        outcome; the result is rendered as a section at the bottom of the project
+        status (see _render_git_result)."""
         path = (self.var["project_path"].get() or "").strip()
         if not path:
             messagebox.showwarning(
                 "No study folder",
-                "Choose or clone a study folder first, then Git update.",
+                "Choose or clone a study folder first, then Git Pull.",
                 parent=self.root)
             return
-        self.git_update_btn.config(state="disabled", text="Updating...")
+        self.git_update_btn.config(state="disabled", text="Pulling...")
         self.log("Running git pull in %s ..." % path, "info")
+        self._render_git_result({"busy": True}, path)
 
         def worker():
             result = core.git_update_study(path)
-            self.root.after(0, lambda: self._on_git_update_done(result))
+            self.root.after(0, lambda: self._on_git_update_done(result, path))
 
         threading.Thread(target=worker, name="git-update", daemon=True).start()
 
-    def _on_git_update_done(self, result):
-        """Back on the UI thread: re-enable the button and report the outcome."""
-        self.git_update_btn.config(state="normal", text="Git update")
+    def _on_git_update_done(self, result, path=None):
+        """Back on the UI thread: re-enable the button, log, and render the result
+        section under the project status."""
+        self.git_update_btn.config(state="normal", text="Git Pull")
         level = "ok" if result.get("ok") else "err"
-        self.log(result.get("message") or "Git update finished.", level)
+        self.log(result.get("message") or "Git Pull finished.", level)
         if result.get("output"):
             self.log(result["output"], "info")
-        if result.get("ok"):
-            messagebox.showinfo("Git update", result.get("message") or "Done.",
-                                parent=self.root)
+        self._render_git_result(result, path or self.var["project_path"].get())
+        if result.get("status") == "updated":
+            self.refresh_previews()   # new files may change the detected apps
+
+    def _render_git_result(self, result, path):
+        """Draw the Git Pull RESULT section (the Tk twin of the web page's
+        renderGitPullResult). Bold core line: "Nothing new: already up to date."
+        / "Git pull failed" / "Pulled N changed files."; then a quieter line (the
+        latest commit, or the plain-language reason); then COLLAPSED blocks for
+        the changed-file list ("Changes pulled from Git") or git's raw output."""
+        frame = self.git_result
+        for child in list(frame.winfo_children()):
+            child.destroy()
+        self._git_result_path = (path or "").strip()
+        bg = COLORS["card"]
+        stamp = time.strftime("%H:%M")
+        if result.get("busy"):
+            head, color, sub = "Pulling...", COLORS["text"], ""
+        elif result.get("ok") and result.get("status") == "current":
+            head, color, sub = (result.get("message") or
+                                "Nothing new: already up to date.",
+                                COLORS["text"], "")
+        elif result.get("ok"):
+            head, color, sub = (result.get("message") or "Pulled.", COLORS["ok"],
+                                result.get("detail", ""))
         else:
-            messagebox.showerror("Git update", result.get("message") or "Failed.",
-                                 parent=self.root)
+            head, color, sub = ("Git pull failed", COLORS["error"],
+                                result.get("reason") or result.get("message", ""))
+        line = tk.Frame(frame, bg=bg)
+        line.pack(fill="x")
+        tk.Label(line, text=head, bg=bg, fg=color, font=self.fonts.small_bold,
+                 anchor="w", justify="left", wraplength=320).pack(side="left")
+        tk.Label(line, text=stamp, bg=bg, fg=COLORS["faint"],
+                 font=self.fonts.small).pack(side="left", padx=(6, 0))
+        if sub:
+            tk.Label(frame, text=sub, bg=bg, fg=COLORS["muted"],
+                     font=self.fonts.small, anchor="w", justify="left",
+                     wraplength=360).pack(fill="x", pady=(2, 0))
+        files = result.get("files") or []
+        if result.get("ok") and files:
+            fold = Collapsible(frame, "Changes pulled from Git", self.fonts.small)
+            fold.pack(fill="x", pady=(4, 0))
+            for entry in files:
+                tk.Label(fold.inner, text=core.git_file_change_line(entry), bg=bg,
+                         fg=COLORS["text"], font=self.fonts.mono, anchor="w",
+                         justify="left").pack(fill="x")
+        elif not result.get("ok") and result.get("output"):
+            fold = Collapsible(frame, "Git output", self.fonts.small)
+            fold.pack(fill="x", pady=(4, 0))
+            _git_output_box(fold.inner, self.fonts, result["output"]).pack(fill="x")
+        frame.pack(fill="x", pady=(8, 0), before=self._git_divider)
+
+    def _sync_git_result(self, project_path):
+        """Keep the Git Pull result only while the same study folder is selected
+        (and Org Sync is on); otherwise hide it."""
+        frame = getattr(self, "git_result", None)
+        if frame is None or not self._git_result_path:
+            return
+        if (not self.github_sync_enabled
+                or (project_path or "").strip() != self._git_result_path):
+            for child in list(frame.winfo_children()):
+                child.destroy()
+            frame.pack_forget()
+            self._git_result_path = ""
 
     def save_as_new(self, on_success=None):
         """Save the on-screen settings as a new config. ``on_success`` (used by
@@ -4064,17 +4122,10 @@ class LauncherApp(object):
     # -- Create a new database (Feature 2) ---------------------------------
 
     def create_database_dialog(self):
-        admin = core.pg_admin_from_store(self.store_extra)
-        missing = core.pg_admin_ready(admin)
-        if missing:
-            messagebox.showinfo(
-                "Fill in the admin details first",
-                "The Postgres admin details are not complete (%s).\n\n"
-                "Open Lab Settings (the gear at the top left) and fill in the admin "
-                "username, password, host and port before creating a database."
-                % ", ".join(missing),
-                parent=self.root)
-            return
+        # No admin-details gate here (web parity): registering a database that
+        # already exists on another host needs no admin login, and a create
+        # without admin details is refused by core.create_database with the
+        # "Fill in the Postgres admin details" message.
         roster = core.list_researchers(self.store_extra, self.presets)
         suggested_researcher = str(self.store_extra.get("last_author", "")).strip() or default_author()
         CreateDatabaseDialog(self.root, self.fonts, self,
@@ -4097,13 +4148,17 @@ class LauncherApp(object):
         ok, _msg = core.validate_pg_identifier(slug)
         return slug if ok else ""
 
-    def _run_create_database(self, name, user, password, researcher, on_done):
+    def _run_create_database(self, name, user, password, researcher, on_done,
+                             host="", port=""):
         """Do the create off the UI thread and hand the result back on it. On a
         confirmed create, ALSO register the database in the global registry with
         its creator researcher (the Postgres user is recorded separately), so it
         appears in every config's picker afterward."""
         admin = core.pg_admin_from_store(self.store_extra)
-        result = core.create_database(admin, name, new_user=user, new_password=password)
+        # host/port = the dialog's Host/Port; core refuses a non-local host.
+        result = core.create_database(admin, name, new_user=user, new_password=password,
+                                      host=host or admin["admin_host"],
+                                      port=port or admin["admin_port"])
         if result.get("ok"):
             fields = result.get("fields") or {}
             try:
@@ -4117,24 +4172,17 @@ class LauncherApp(object):
                 result["register_error"] = str(error)
         self._on_main(lambda: on_done(result))
 
-    def _run_register_existing_database(self, name, user, password, researcher, on_done):
+    def _run_register_existing_database(self, name, user, password, researcher, on_done,
+                                        host="", port=""):
         """Register an ALREADY-EXISTING database (the create dialog's "already
         exists" checkbox): record the connection in the global registry WITHOUT
-        running CREATE DATABASE. Host/port come from the Lab Settings admin config
-        (where the database lives) and a blank user/password falls back to the
-        admin role, so the resulting registry entry is IDENTICAL in shape to a
-        freshly-created one and is selectable/editable afterward."""
+        running CREATE DATABASE. Host/port are the dialog's Host/Port fields
+        (blank = the Lab Settings admin host/port) and a blank user/password falls
+        back to the admin role, so the resulting registry entry is IDENTICAL in
+        shape to a freshly-created one and is selectable/editable afterward."""
         admin = core.pg_admin_from_store(self.store_extra)
-        a_user = str(admin.get("admin_username", "")).strip()
-        a_pw = str(admin.get("admin_password", ""))
-        fields = {
-            "db_mode": core.DB_MODE_CUSTOM,
-            "db_name": name,
-            "db_user": user or a_user,
-            "db_password": password if user else a_pw,
-            "db_host": str(admin.get("admin_host", "")).strip(),
-            "db_port": str(admin.get("admin_port", "")).strip(),
-        }
+        fields = core.existing_database_fields(admin, name, user, password,
+                                               host=host, port=port)
         result = {"ok": True, "created_db": False, "registered_only": True,
                   "fields": fields,
                   "message": "Registered the existing database %r (not created)." % name}
@@ -5161,6 +5209,251 @@ class BlockDialog(object):
             self.add_button.state(["disabled"])
             self.status.set("ok", "Added. A timestamped copy of the old settings.py is "
                                   "beside it; both paths are in the log.")
+
+
+class Collapsible(tk.Frame):
+    """A de-emphasised "▸ Title" toggle over a body frame that starts COLLAPSED
+    (the Tk stand-in for an HTML <details>). Put the hidden content in
+    ``self.inner``."""
+
+    def __init__(self, master, title, font, bg=None):
+        bg = bg or COLORS["card"]
+        tk.Frame.__init__(self, master, bg=bg)
+        self._title = title
+        self._open = False
+        self.toggle = tk.Label(self, text="▸  " + title, bg=bg, fg=COLORS["muted"],
+                               font=font, anchor="w", cursor="hand2")
+        self.toggle.pack(fill="x")
+        self.toggle.bind("<Button-1>", lambda _e: self.set_open(not self._open))
+        self.inner = tk.Frame(self, bg=bg)
+
+    def set_open(self, value):
+        self._open = bool(value)
+        self.toggle.configure(text=("▾  " if self._open else "▸  ") + self._title)
+        if self._open:
+            self.inner.pack(fill="x", pady=(2, 0))
+        else:
+            self.inner.pack_forget()
+
+    @property
+    def is_open(self):
+        return self._open
+
+
+def _git_output_box(master, fonts, text):
+    """A read-only monospace box holding git's raw output (for a Collapsible)."""
+    lines = text.splitlines() or [""]
+    box = tk.Text(master, height=min(max(len(lines), 2), 10), wrap="word",
+                  font=fonts.mono, bg=COLORS["field_off"], fg=COLORS["text"],
+                  relief="flat", highlightthickness=1,
+                  highlightbackground=COLORS["card_line"], padx=6, pady=4)
+    box.insert("1.0", text)
+    box.configure(state="disabled")
+    return box
+
+
+class GithubCloneDialog(object):
+    """Clone from the lab's GitHub organisation, validated INSIDE the dialog.
+
+    Repository name + parent folder (either order), then Clone. Pressing Clone
+    does NOT close the dialog: it shows a busy line (Checking -> Cloning) and
+    runs core.git_clone_org_repo on a worker thread. On failure the dialog stays
+    open with the name intact, an inline error (bold result, quieter hint, git's
+    raw output collapsed) and Clone relabelled Retry. Only success closes it.
+    ``on_finish(result, dialog_open)`` is called on the UI thread whenever a clone
+    finishes (success, or failure after the user closed the dialog), so the owner
+    can auto-select the folder and restore its toolbar button.
+    """
+
+    def __init__(self, parent, fonts, org, on_start, on_finish):
+        self.parent = parent
+        self.fonts = fonts
+        self.org = org
+        self.on_start = on_start
+        self.on_finish = on_finish
+        self.dest = ""
+        self.running = False
+        self.alive = True
+        top = self.top = tk.Toplevel(parent)
+        top.title("Clone from GitHub organisation")
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.resizable(False, False)
+        top.protocol("WM_DELETE_WINDOW", self.cancel)
+        bg = COLORS["card"]
+
+        body = self.body = tk.Frame(top, bg=bg)
+        body.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(body, text="Clone from GitHub organisation", bg=bg,
+                 fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x")
+        tk.Label(body,
+                 text="Clones https://github.com/%s/<repo> using this PC's read-only "
+                      "organisation credential, into a new folder inside the parent "
+                      "folder you choose, and selects it as your study folder." % org,
+                 bg=bg, fg=COLORS["muted"], font=fonts.small, anchor="w",
+                 justify="left", wraplength=420).pack(fill="x", pady=(4, 12))
+
+        tk.Label(body, text="Repository name", bg=bg, fg=COLORS["muted"],
+                 font=fonts.small, anchor="w").pack(fill="x")
+        self.repo_var = tk.StringVar(top)
+        self.entry = ttk.Entry(body, textvariable=self.repo_var, width=48)
+        self.entry.pack(fill="x", pady=(2, 0))
+        self.repo_var.trace_add("write", lambda *_a: self._on_input())
+
+        tk.Label(body, text="Parent folder", bg=bg, fg=COLORS["muted"],
+                 font=fonts.small, anchor="w").pack(fill="x", pady=(10, 0))
+        row = tk.Frame(body, bg=bg)
+        row.pack(fill="x", pady=(2, 0))
+        self.folder_btn = ttk.Button(row, text="Choose parent folder...",
+                                     command=self.pick_folder)
+        self.folder_btn.pack(side="left")
+        self.folder_label = tk.Label(row, text="No folder chosen yet.", bg=bg,
+                                     fg=COLORS["faint"], font=fonts.small, anchor="w",
+                                     justify="left", wraplength=260)
+        self.folder_label.pack(side="left", padx=(8, 0), fill="x", expand=True)
+
+        self.preview = tk.Label(body, text="", bg=bg, fg=COLORS["muted"],
+                                font=fonts.mono, anchor="w", justify="left",
+                                wraplength=420)
+        self.preview.pack(fill="x", pady=(10, 0))
+
+        self.busy = tk.Label(body, text="", bg=bg, fg=COLORS["text"],
+                             font=fonts.small_bold, anchor="w")
+        self.error = tk.Frame(body, bg=bg)
+        self.buttons = tk.Frame(body, bg=bg)
+        self.buttons.pack(fill="x", pady=(14, 0))
+        self.cancel_btn = ttk.Button(self.buttons, text="Cancel", command=self.cancel)
+        self.cancel_btn.pack(side="right")
+        self.go_btn = ttk.Button(self.buttons, text="Clone", command=self.clone)
+        self.go_btn.pack(side="right", padx=(0, 8))
+
+        top.bind("<Return>", lambda _e: self.clone())
+        top.bind("<Escape>", lambda _e: None if self.running else self.cancel())
+        self._on_input()
+        self.entry.focus_set()
+        _center_on(parent, top)
+        _grab_modal(top)
+
+    # -- state -------------------------------------------------------------
+
+    def repo_name(self):
+        return core.clone_repo_name(self.repo_var.get())
+
+    def _on_input(self):
+        parent = self.dest.rstrip("/\\") if self.dest else "parent"
+        self.preview.configure(text="Target folder: %s%s%s" % (
+            parent, os.sep, self.repo_name() or "<repo>"))
+        if not self.running:
+            ready = bool(self.dest and self.repo_name())
+            self.go_btn.configure(state="normal" if ready else "disabled")
+
+    def pick_folder(self):
+        name = self.repo_name()
+        path = filedialog.askdirectory(
+            parent=self.top,
+            title=("Choose where to create the '%s' folder" % name) if name
+            else "Choose where to create the cloned study folder",
+            # Open in the gitignored local/ scratch folder, not the working
+            # directory (the launcher checkout itself).
+            initialdir=self.dest or core.default_clone_parent() or None)
+        if path:
+            self.dest = os.path.normpath(path)
+            self.folder_label.configure(text=self.dest, fg=COLORS["text"])
+        self._on_input()
+
+    def _set_busy(self, on, text=""):
+        self.running = bool(on)
+        state = "disabled" if on else "normal"
+        for widget in (self.entry, self.folder_btn, self.cancel_btn):
+            widget.configure(state=state)
+        if on:
+            self.go_btn.configure(state="disabled", text="Cloning...")
+            self.error.pack_forget()
+            self.busy.configure(text=text)
+            self.busy.pack(fill="x", pady=(10, 0), before=self.buttons)
+        else:
+            self.busy.pack_forget()
+            self._on_input()
+
+    def _phase(self, phase):
+        if not self.alive:
+            return
+        target = "%s/%s" % (self.org, self.repo_name())
+        self.busy.configure(text=("Cloning %s ..." % target) if phase == "cloning"
+                            else ("Checking that %s exists ..." % target))
+
+    def _show_error(self, result):
+        for child in list(self.error.winfo_children()):
+            child.destroy()
+        bg = COLORS["card"]
+        tk.Label(self.error, text=result.get("message") or "Could not clone.",
+                 bg=bg, fg=COLORS["error"], font=self.fonts.small_bold, anchor="w",
+                 justify="left", wraplength=420).pack(fill="x")
+        if result.get("hint"):
+            tk.Label(self.error, text=result["hint"], bg=bg, fg=COLORS["muted"],
+                     font=self.fonts.small, anchor="w", justify="left",
+                     wraplength=420).pack(fill="x", pady=(2, 0))
+        if result.get("output"):
+            fold = Collapsible(self.error, "Git output", self.fonts.small)
+            fold.pack(fill="x", pady=(4, 0))
+            _git_output_box(fold.inner, self.fonts, result["output"]).pack(fill="x")
+        self.error.pack(fill="x", pady=(10, 0), before=self.buttons)
+        self.go_btn.configure(text="Retry")
+        self.entry.focus_set()
+        self.entry.selection_range(0, "end")
+
+    # -- actions -----------------------------------------------------------
+
+    def clone(self):
+        if self.running:
+            return
+        repo = self.repo_name()
+        if not repo or not self.dest:
+            return
+        self._set_busy(True, "Checking that %s/%s exists ..." % (self.org, repo))
+        self.on_start()
+        # Post back through the (always-alive) parent, not the dialog, so a
+        # dialog closed mid-clone still gets its result delivered.
+        org, dest, root = self.org, self.dest, self.parent
+
+        def worker():
+            result = core.git_clone_org_repo(
+                org, repo, dest,
+                on_phase=lambda phase: root.after(0, self._phase, phase))
+            root.after(0, self._done, result)
+
+        self._spawn(worker)
+
+    @staticmethod
+    def _spawn(target):
+        """Run the clone off the UI thread (a seam tests replace)."""
+        threading.Thread(target=target, name="git-clone", daemon=True).start()
+
+    def _done(self, result):
+        self.running = False
+        if result.get("ok") and result.get("path"):
+            self._close()
+            self.on_finish(result, False)
+            return
+        if not self.alive:
+            self.on_finish(result, False)
+            return
+        self._set_busy(False)
+        self._show_error(result)
+        self.on_finish(result, True)
+
+    def cancel(self):
+        # Closing mid-clone is allowed (window X; Cancel/Escape are disabled while
+        # busy): the clone finishes in the background and on_finish reports it.
+        self._close()
+
+    def _close(self):
+        self.alive = False
+        try:
+            self.top.destroy()
+        except tk.TclError:
+            pass
 
 
 class NameDialog(object):
@@ -6613,14 +6906,41 @@ class CreateDatabaseDialog(object):
         self.user = tk.StringVar(top)
         self.password = tk.StringVar(top)
         self._row(body, 2, "Database name", ttk.Entry(body, textvariable=self.name))
+        # Host + Port of the database: visible, greyed and read-only by default;
+        # only the pen at the END of the host box makes them editable. Another
+        # host than this computer forces register-only (_on_host_change).
+        admin = core.pg_admin_from_store(self.app.store_extra)
+        style = ttk.Style(top)
+        style.map("HostLock.TEntry",
+                  fieldbackground=[("readonly", COLORS["field_off"])],
+                  foreground=[("readonly", COLORS["faint"])])
+        self.host = tk.StringVar(top, value=admin.get("admin_host") or "localhost")
+        self.port = tk.StringVar(top, value=admin.get("admin_port") or "5432")
+        hostframe = tk.Frame(body, bg=COLORS["card"])
+        hostframe.columnconfigure(0, weight=1)
+        self.host_entry = ttk.Entry(hostframe, textvariable=self.host,
+                                    style="HostLock.TEntry", state="readonly")
+        self.host_entry.grid(row=0, column=0, sticky="ew")
+        self.host_pen = tk.Button(
+            hostframe, text="\u270E", command=self._unlock_host, relief="flat", bd=0,
+            highlightthickness=0, padx=2, pady=0, cursor="hand2", font=fonts.body,
+            bg=COLORS["field_off"], fg=COLORS["accent"],
+            activebackground=COLORS["field_off"], activeforeground=COLORS["accent"])
+        self.host_pen.place(in_=self.host_entry, relx=1.0, x=-3, rely=0.5, anchor="e")
+        tk.Label(hostframe, text="Port", bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.small).grid(row=0, column=1, padx=(8, 4))
+        self.port_entry = ttk.Entry(hostframe, textvariable=self.port, width=7,
+                                    style="HostLock.TEntry", state="readonly")
+        self.port_entry.grid(row=0, column=2)
+        self._row(body, 3, "Host", hostframe)
         # Researcher (required): whose database this is. Type a new name or pick
         # from the shared roster (the same list Save-as-new uses). Recorded in the
         # registry so every config's picker shows the creator.
         self.researcher = tk.StringVar(top, value=suggested_researcher)
         self.researcher_combo = ttk.Combobox(
             body, textvariable=self.researcher, values=list(researchers or []))
-        self._row(body, 3, "Researcher (required)", self.researcher_combo)
-        self._row(body, 4, "New user (optional)", ttk.Entry(body, textvariable=self.user))
+        self._row(body, 4, "Researcher (required)", self.researcher_combo)
+        self._row(body, 5, "New user (optional)", ttk.Entry(body, textvariable=self.user))
         # Password entry with the Show toggle inline to its right (aligned like
         # the main window's password rows).
         pwframe = tk.Frame(body, bg=COLORS["card"])
@@ -6630,7 +6950,7 @@ class CreateDatabaseDialog(object):
         self.show_pw = tk.BooleanVar(top, value=False)
         ttk.Checkbutton(pwframe, text="Show", variable=self.show_pw,
                         command=self._toggle_pw).grid(row=0, column=1, padx=(6, 0))
-        self._row(body, 5, "New password (optional)", pwframe)
+        self._row(body, 6, "New password (optional)", pwframe)
 
         # "Already exists" (Feature 4): register the connection in the global
         # registry WITHOUT running CREATE DATABASE. The entry is identical either
@@ -6638,10 +6958,10 @@ class CreateDatabaseDialog(object):
         # "Register" and the create is skipped.
         self.already_exists = tk.BooleanVar(top, value=False)
         exists_row = tk.Frame(body, bg=COLORS["card"])
-        exists_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        exists_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.exists_check = tk.Checkbutton(
             exists_row,
-            text="Database already exists in Postgres (register without creating)",
+            text="The database already exists in Postgres (register without creating)",
             variable=self.already_exists, command=self._on_exists_toggle,
             bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["card"],
             activeforeground=COLORS["text"], selectcolor=COLORS["accent"],
@@ -6649,26 +6969,26 @@ class CreateDatabaseDialog(object):
             cursor="hand2", wraplength=420, justify="left")
         self.exists_check.pack(side="left")
 
-        # Feature 1: creating a database is local-only for now. When the Postgres
-        # admin host (Lab Settings) is remote, force register-only -- tick + lock
-        # the "already exists" box so the action stays Register and CREATE never
-        # runs (the backend also refuses, but the UI makes the reason plain).
-        admin = core.pg_admin_from_store(self.app.store_extra)
-        self._remote_admin = not core.is_local_host(admin.get("admin_host", ""))
+        # One short grey note, shown only while the host is not this computer.
+        self.host_note = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["faint"],
+                                  font=fonts.small, anchor="w", justify="left",
+                                  wraplength=420)
+        self.host_note.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self.host_note.grid_remove()
 
         self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
                                font=fonts.small, anchor="w", justify="left", wraplength=420)
-        self.status.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.status.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         # A selectable copy of the last message, so an error can be copied out.
         self.detail = tk.Text(body, height=3, font=fonts.mono_small, wrap="word",
                               bg=COLORS["field_off"], fg=COLORS["text"], relief="flat",
                               highlightthickness=1, highlightbackground=COLORS["card_line"])
-        self.detail.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.detail.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.detail.configure(state="disabled")
         self.detail.grid_remove()
 
         buttons = tk.Frame(body, bg=COLORS["card"])
-        buttons.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         buttons.columnconfigure(0, weight=1)
         # "Cancel" until a create succeeds, then "Close".
         self.cancel_button = ttk.Button(buttons, text="Cancel", command=self._close)
@@ -6679,16 +6999,11 @@ class CreateDatabaseDialog(object):
             activeforeground="#ffffff", relief="flat", padx=14, pady=6, cursor="hand2")
         self.create_button.grid(row=0, column=1, sticky="e")
 
-        if self._remote_admin:
-            self.already_exists.set(True)
-            self.exists_check.configure(state="disabled")
-            self.create_button.configure(text="Register")
-            self._set_status(
-                "Creating a database is local-only for now (admin host %s is remote), so "
-                "this registers the existing database. It must already exist on that host, "
-                "set up exactly this way, and no other launcher may use it at the same time."
-                % admin.get("admin_host", ""),
-                COLORS["warn"])
+        # Another host than this computer = register only (checked now for the
+        # default, which is the Lab Settings admin host, and on every edit).
+        self._auto_exists = False
+        self.host.trace_add("write", lambda *_a: self._on_host_change())
+        self._on_host_change()
 
         _center_on(parent, top)
         try:
@@ -6703,6 +7018,34 @@ class CreateDatabaseDialog(object):
 
     def _toggle_pw(self):
         self.pw_entry.configure(show="" if self.show_pw.get() else MASK_CHAR)
+
+    def _unlock_host(self):
+        """The pen: make Host AND Port editable (clicking the box does nothing)."""
+        self.host_entry.configure(state="normal")
+        self.port_entry.configure(state="normal")
+        self.host_pen.place_forget()
+        self.host_entry.focus_set()
+        self.host_entry.select_range(0, "end")
+
+    def _on_host_change(self):
+        """A non-local host ticks + locks "already exists" (register, never
+        create) with one grey note; back to a local host restores the default
+        (create), unless the user had ticked the box themselves."""
+        if core.is_local_host(self.host.get()):
+            self.exists_check.configure(state="normal")
+            if self._auto_exists:
+                self.already_exists.set(False)
+                self._auto_exists = False
+            self.host_note.configure(text="")
+            self.host_note.grid_remove()
+        else:
+            if not self.already_exists.get():
+                self.already_exists.set(True)
+                self._auto_exists = True
+            self.exists_check.configure(state="disabled")
+            self.host_note.configure(text=core.REMOTE_DB_NOTE)
+            self.host_note.grid()
+        self._on_exists_toggle()
 
     def _on_exists_toggle(self):
         self.create_button.configure(
@@ -6731,6 +7074,8 @@ class CreateDatabaseDialog(object):
         thread = threading.Thread(
             target=target,
             args=(name, self.user.get().strip(), self.password.get(), researcher, self._done),
+            kwargs={"host": self.host.get().strip() or "localhost",
+                    "port": self.port.get().strip() or "5432"},
             daemon=True)
         thread.start()
 
@@ -7550,9 +7895,8 @@ class LabSettingsDialog(object):
         """The opt-in GitHub Organisation Sync card: an explanation + PREREQUISITE,
         a single tick box (default off) that shows/hides the GitHub Org. + Git
         update buttons, and the organisation name field so the clone target is
-        <org>/<repo> and not hardcoded. Both the tick box and org name persist to
-        disk (ui_prefs.json) via app._set_github_sync, the same mechanism as the
-        theme."""
+        <org>/<repo> and not hardcoded. Both the tick box and org name persist as
+        lab settings (lab_info.json) via app._set_github_sync."""
         fonts = self.fonts
         card = tk.Frame(outer, bg=COLORS["card"], highlightthickness=1,
                         highlightbackground=COLORS["card_line"])
@@ -7599,7 +7943,7 @@ class LabSettingsDialog(object):
         org_entry.bind("<FocusOut>", lambda _ev: self._save_github_sync())
         org_entry.bind("<Return>", lambda _ev: self._save_github_sync())
         self.gh_status = tk.Label(
-            card, text="Off by default. Saved on this computer.", bg=COLORS["card"],
+            card, text="Off by default. Saved in the lab settings.", bg=COLORS["card"],
             fg=COLORS["faint"], font=fonts.small, anchor="w")
         self.gh_status.grid(row=5, column=0, columnspan=3, sticky="w", padx=12,
                             pady=(0, 10))
@@ -7621,7 +7965,7 @@ class LabSettingsDialog(object):
             org = self.gh_org_var.get().strip() or "(none set)"
             status.config(text="On. Organisation: %s." % org)
         else:
-            status.config(text="Off by default. Saved on this computer.")
+            status.config(text="Off by default. Saved in the lab settings.")
 
     # -- footer: Launch history link + version / update nudge (reviews F + I) --
 
@@ -8202,6 +8546,7 @@ class FirstRunWizard(object):
         dbf = tk.Frame(top)
         dbf.grid(row=row, column=0, columnspan=4, sticky="ew", padx=10)
         self.db_vars = {}
+        self._host_lock = []
         for i, (key, label, default) in enumerate([
                 ("db_name", "Database", "otree"), ("db_user", "User", "otree"),
                 ("db_password", "Password", ""), ("db_host", "Host", "localhost"),
@@ -8209,9 +8554,20 @@ class FirstRunWizard(object):
             tk.Label(dbf, text=label).grid(row=0, column=i, sticky="w")
             var = tk.StringVar(dbf, value=default)
             show = "*" if key == "db_password" else ""
-            tk.Entry(dbf, textvariable=var, width=13, show=show).grid(
-                row=1, column=i, padx=(0, 6))
+            entry = tk.Entry(dbf, textvariable=var, width=13, show=show)
+            entry.grid(row=1, column=i, padx=(0, 6))
             self.db_vars[key] = var
+            if key in ("db_host", "db_port"):
+                # Host + Port start greyed/read-only; the pen at the end of the
+                # host box unlocks both (clicking the box itself does nothing).
+                entry.configure(state="readonly")
+                self._host_lock.append(entry)
+                if key == "db_host":
+                    entry.configure(width=16)
+                    self.host_pen = tk.Button(
+                        dbf, text="\u270E", command=self._unlock_db_host, relief="flat",
+                        bd=0, highlightthickness=0, padx=1, pady=0, cursor="hand2")
+                    self.host_pen.place(in_=entry, relx=1.0, x=-2, rely=0.5, anchor="e")
         row += 1
 
         # --- Admin ----------------------------------------------------------
@@ -8278,6 +8634,11 @@ class FirstRunWizard(object):
         self.w_shortcut.delete(0, "end")
         self.status.configure(text="")
 
+    def _unlock_db_host(self):
+        for entry in self._host_lock:
+            entry.configure(state="normal")
+        self.host_pen.place_forget()
+
     def _remove_lab(self):
         sel = list(self.lab_list.curselection())
         for index in reversed(sel):
@@ -8290,11 +8651,10 @@ class FirstRunWizard(object):
         _modal_close(self.top)
 
     def _use_example(self):
-        example = core.load_example_lab_info()
+        example = core.example_lab_info_to_save()
         if not example:
             self.status.configure(text="Could not read lab_info.example.json.")
             return
-        example.pop("_comment", None)
         self._collect_and_save(example)
 
     def _create(self):

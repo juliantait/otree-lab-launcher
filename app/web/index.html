@@ -418,6 +418,40 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .study-card .bullets li{position:relative;padding-left:14px;font-size:11.5px;color:var(--ok);margin:0;line-height:1.55}
 .study-card .bullets li::before{content:"";position:absolute;left:2px;top:7px;
   width:4px;height:4px;border-radius:50%;background:var(--ok)}
+/* Git Pull RESULT: a section appended at the bottom of the status card after
+   every pull. The bold head line is the core result (nothing new / failed /
+   pulled N files); the commit line and reason are quieter; the changed-file list
+   and git's raw output sit in COLLAPSED <details> blocks. */
+.git-result{margin-top:8px;padding-top:7px;border-top:1px solid var(--line-soft);font-size:11.5px;line-height:1.45}
+.git-result .gr-head{color:var(--text-strong)}
+.git-result .gr-head b{font-weight:700}
+.git-result .gr-head.ok{color:var(--ok)} .git-result .gr-head.err{color:var(--err)}
+.git-result .gr-when{color:var(--faint);font-weight:400;margin-left:6px}
+.git-result .gr-sub{color:var(--muted);margin-top:2px}
+.git-result details{margin-top:4px}
+.git-result summary{cursor:pointer;color:var(--muted);font-weight:600;list-style:none;user-select:none}
+.git-result summary::-webkit-details-marker{display:none}
+.git-result summary::before{content:"\25B8  ";color:var(--faint)}
+.git-result details[open]>summary::before{content:"\25BE  "}
+.git-result summary:hover{color:var(--text-strong)}
+.git-result .gr-files{list-style:none;margin:4px 0 0;padding:0}
+.git-result .gr-files li{display:flex;gap:8px;align-items:baseline;margin:1px 0}
+.git-result .gr-ch{flex:none;width:58px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.git-result .gr-ch.added{color:var(--ok)} .git-result .gr-ch.deleted{color:var(--err)}
+.git-result .gr-path{font-family:var(--mono);font-size:11px;color:var(--text);word-break:break-all;min-width:0}
+.git-result .gr-n{flex:none;font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-left:auto}
+.git-result .mono-line,.gh-err .mono-line{font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;margin:4px 0 0}
+/* Clone dialog: busy line + inline error (bold result, quieter hint, collapsed
+   git output). */
+.gh-busy{display:none;margin-top:10px;font-size:12.5px;color:var(--text-strong)}
+.gh-busy .spin{display:inline-block;width:10px;height:10px;margin-right:8px;border:2px solid var(--line);
+  border-top-color:var(--accent);border-radius:50%;animation:ghspin .8s linear infinite;vertical-align:-1px}
+@keyframes ghspin{to{transform:rotate(360deg)}}
+.gh-err{display:none;margin-top:10px;font-size:12px;color:var(--muted);line-height:1.45}
+.gh-err b{color:var(--err)}
+.gh-err .gh-hint{margin-top:3px}
+#modalBody .btn:disabled{opacity:.55;cursor:not-allowed}
+.gh-err details{margin-top:4px} .gh-err summary{cursor:pointer;font-weight:600}
 
 /* Production-mode toggle: a bold title with a lighter-grey description flowing
    INLINE right after it on the same line (pm-text is a flex item, so its two
@@ -560,6 +594,15 @@ input::placeholder{color:var(--faint)}
 /* pen/edit icon (database card + oTree admin) */
 .db-edit{flex:none;background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
 .db-edit:hover{color:var(--accent-dim,var(--accent))}
+/* Host + Port of a NEW database: read-only (grey) until the pen at the END of
+   the host box is clicked. Clicking the box itself changes nothing. */
+.hostpen{display:flex;align-items:center;gap:8px}
+.hostpen .hp-box{position:relative;flex:1;display:flex;min-width:0}
+.hostpen .hp-box input{flex:1;min-width:0;padding-right:30px}
+.hostpen input.port{width:78px;flex:none}
+.hostpen .plbl{font-size:12px;color:var(--muted)}
+.hostpen .host-pen{position:absolute;right:6px;top:50%;transform:translateY(-50%)}
+.hostpen .host-pen[hidden]{display:none}
 .db-reset{flex:none;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
 .db-details-toggle{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:700;padding:4px 0 0;margin:0}
 .db-details-toggle:hover{color:var(--accent-dim,var(--accent))}
@@ -805,8 +848,7 @@ input::placeholder{color:var(--faint)}
 .upd-badge{width:52px;height:52px;margin:2px auto 15px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
   background:var(--ok-soft);border:1px solid rgba(78,201,138,.35);color:var(--ok);font-size:25px;line-height:1}
-.upd-head{margin:0 0 6px;font-size:21px;font-weight:700;color:var(--text-strong);line-height:1.3}
-.upd-sub{margin:0 0 18px;font-size:13px;color:var(--muted);line-height:1.5}
+.upd-head{margin:0 0 18px;font-size:21px;font-weight:700;color:var(--text-strong);line-height:1.3}
 .upd-cta{margin:0 auto;max-width:430px;padding:14px 16px;border-radius:var(--r-md);
   background:var(--panel-2);border:1px solid var(--line)}
 .upd-cta-title{margin:0 0 5px;font-size:15px;font-weight:700;color:var(--text-strong)}
@@ -1224,6 +1266,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
               <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet.</span></div>
               <ul class="bullets" id="appBullets" hidden></ul>
               <ul class="ways" id="projWays" hidden></ul>
+              <div class="git-result" id="gitPullResult" hidden></div>
             </div>
             <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
               onclick="onGitUpdateStudy()"
@@ -1520,7 +1563,7 @@ var currentSeatExcluded=[];
 /* True while the first-run "create a new lab" flow is open, so on save the new
    lab is adopted as this machine's lab via set_lab_marker (item 6). */
 var pendingIdentityAdopt=false;
-/* GitHub Organisation Sync (opt-in, DEFAULT OFF). Loaded from ui_prefs.json via
+/* GitHub Organisation Sync (opt-in, DEFAULT OFF). A lab setting, loaded from lab_info.json via
    the initial state; drives whether the GitHub org button + the per-config Git Pull button show. */
 var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
 /* The "get ready for the lab" popup fires at most once per project selection;
@@ -1698,6 +1741,7 @@ window.pywOnShortcutsResult=function(r){pcShortcutsResult(r);};
    working state; on failure/cancel show the message and re-enable the button. */
 window.pywOnCloneDone=function(r){
   r=r||{};
+  ghCloneRunning=false;   /* the clone is over whatever happened to the dialog */
   /* Re-enable AND re-render the button through updateGithubOrgBtn so it keeps its
      GitHub logo. Setting g.textContent (the old code) replaced the SVG logo with a
      bare text node, so the button lost its icon after a clone/cancel. */
@@ -1711,11 +1755,28 @@ window.pywOnCloneDone=function(r){
     return;
   }
   if(r.ok&&r.path){
+    if(ghCloneDialogOpen())closeModal();   /* success: the ONLY path that closes the dialog */
     window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
     window.pywStatus("ok",r.message||("Cloned into "+r.path+" and selected it as the study folder."));
+  }else if(ghCloneDialogOpen()){
+    /* Failure with the dialog still open: keep it open, name intact, show the
+       inline error and turn Clone into Retry. */
+    ghCloneBusy(false);
+    ghShowCloneError(r);
+    window.pywStatus("err",r.message||"Could not clone the repository.");
   }else{
     window.pywStatus("err",r.message||"Could not clone the repository.");
+    if(r.output)appendLog("err",r.output);
   }
+};
+/* Clone progress (checking -> cloning), pushed by the worker; shown on the busy
+   line inside the dialog. */
+window.pywOnCloneProgress=function(p){
+  p=p||{};
+  var b=el("ghBusyMsg");if(!b)return;
+  var target=escapeHtml((p.org||GITHUB_ORG)+"/"+(p.repo||ghCloneRepoName()));
+  b.innerHTML=p.phase==="cloning"?("<b>Cloning</b> "+target+"…")
+                                 :("<b>Checking</b> that "+target+" exists…");
 };
 
 /* ======================================================================
@@ -1810,6 +1871,7 @@ function applyProject(p){
   if(p.apps&&p.apps.length){p.apps.forEach(function(a){var li=document.createElement("li");li.textContent=titlecase(a);bul.appendChild(li);});bul.hidden=false;}
   else bul.hidden=true;
   updateProjectGitPull();
+  syncGitPullResult();
 }
 /* Render the empty-state "ways to add a project" list, shown ONLY when no folder
    is chosen and there is no problem message. It folds in the old loose helper
@@ -1983,6 +2045,23 @@ function isLocalHost(host){
 /* Feature 1: the plain-language warning shown wherever a REMOTE per-database host
    is in play. Creating is local-only, so a remote database must already exist,
    set up exactly this way, and must not be shared by two launchers at once. */
+/* The one short note shown when a new database's Host is not this computer.
+   Same text as core.REMOTE_DB_NOTE. */
+var REMOTE_DB_NOTE="Creating a database only works on this computer; a database on another host is registered, not created.";
+/* Host + Port fields with the pen at the end of the host box (p = id prefix,
+   onchg = the JS function name to call as the host is edited). Both start
+   read-only; only the pen (unlockHostPen) makes them editable. */
+function hostPenField(p,host,port,onchg){
+  return '<div class="mfield"><label>Host</label><div class="hostpen">'+
+    '<div class="hp-box"><input type="text" id="'+p+'Host" value="'+escapeHtml(host||"localhost")+'" readonly oninput="'+onchg+'(\''+p+'\')">'+
+    '<button type="button" class="db-edit pen host-pen" id="'+p+'HostPen" title="Edit host and port" aria-label="Edit host and port" onclick="unlockHostPen(\''+p+'\')">&#9998;</button></div>'+
+    '<span class="plbl">Port</span><input type="text" class="port" id="'+p+'Port" value="'+escapeHtml(port||"5432")+'" readonly></div></div>';
+}
+function unlockHostPen(p){
+  ["Host","Port"].forEach(function(f){var i=el(p+f);if(i)i.readOnly=false;});
+  var b=el(p+"HostPen");if(b)b.hidden=true;
+  var h=el(p+"Host");if(h){h.focus();h.select();}
+}
 function remoteHostWarning(host){
   var h=escapeHtml(String(host||"").trim());
   return "This database must already exist on "+h+", set up exactly this way: same "+
@@ -2313,6 +2392,7 @@ var ghClonePath="";   /* the parent folder chosen in the clone dialog ("" = unse
 function onGithubOrgClone(){
   if(!GITHUB_ORG){window.pywStatus("err","Set the GitHub organisation name in Settings > GitHub Organisation Sync first.");openLabSettings();return;}
   ghClonePath="";   /* fresh dialog: no folder chosen yet */
+  ghCloneRunning=false;
   openModal("Clone from GitHub organisation",
     '<p class="modal-desc">Clones <code>https://github.com/'+escapeHtml(GITHUB_ORG)+'/&lt;repo&gt;</code> using this PC’s read-only organisation credential.</p>'+
     '<p class="modal-desc">Enter the repository name <b>and</b> choose a <b>parent</b> folder (either order). The repo is cloned into a new folder inside it and selected as your study folder.</p>'+
@@ -2322,7 +2402,9 @@ function onGithubOrgClone(){
       '<div class="mono-line" id="ghFolderPath" style="margin-top:8px">No folder chosen yet.</div></div></div>'+
     '<p class="modal-desc" style="margin-top:12px">Target folder: <code id="ghDestPreview">parent/&lt;repo&gt;</code></p>'+
     '<div class="modal-err" id="ghRepoErr"></div>'+
-    '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<div class="gh-busy" id="ghBusy"><span class="spin"></span><span id="ghBusyMsg">Checking…</span></div>'+
+    '<div class="gh-err" id="ghCloneErr"></div>'+
+    '<div class="cta"><button class="btn" id="ghCloneCancel" onclick="closeModal()">Cancel</button>'+
     '<button class="btn accent" id="ghCloneGo" onclick="doGithubOrgClone()" disabled>Clone</button></div>');
   updateGhClonePreview();updateGhCloneState();
   var r=el("ghRepo");if(r)r.focus();
@@ -2349,6 +2431,31 @@ function updateGhCloneState(){
 }
 /* Repo field input: refresh preview + Clone-enabled state (either order allowed). */
 function onGhCloneInput(){updateGhClonePreview();updateGhCloneState();}
+/* True while the clone dialog is the open modal. */
+function ghCloneDialogOpen(){return !el("infoModal").hidden&&!!el("ghCloneGo");}
+/* Busy state INSIDE the dialog: lock the inputs + buttons and show the
+   checking/cloning line; the dialog stays open until the clone succeeds. */
+var ghCloneRunning=false;
+function ghCloneBusy(on){
+  ghCloneRunning=!!on;
+  var b=el("ghBusy");if(b)b.style.display=on?"block":"none";
+  ["ghRepo","ghCloneCancel"].forEach(function(id){var x=el(id);if(x)x.disabled=!!on;});
+  var fb=document.querySelector('#modalBody .mfield button');if(fb)fb.disabled=!!on;
+  var go=el("ghCloneGo");if(go){go.disabled=!!on;if(on)go.textContent="Cloning…";}
+  if(on){var e=el("ghCloneErr");if(e)e.style.display="none";var m=el("ghRepoErr");if(m)m.style.display="none";}
+  if(!on)updateGhCloneState();
+}
+/* The inline failure: bold result line, a quieter hint, git's raw output in a
+   collapsed monospace block, and Clone relabelled Retry. */
+function ghShowCloneError(r){
+  var e=el("ghCloneErr");if(!e)return;
+  var html='<b>'+escapeHtml(r.message||"Could not clone the repository.")+'</b>';
+  if(r.hint)html+='<div class="gh-hint">'+escapeHtml(r.hint)+'</div>';
+  if(r.output)html+='<details><summary>Git output</summary><div class="mono-line">'+escapeHtml(r.output)+'</div></details>';
+  e.innerHTML=html;e.style.display="block";
+  var go=el("ghCloneGo");if(go)go.textContent="Retry";
+  var f=el("ghRepo");if(f){f.focus();f.select();}
+}
 /* Choose parent folder button: open ONLY the native folder picker (no clone) and
    store the chosen path. Re-selectable; cancelling leaves the folder unset (keeps
    any previously chosen one) and does NOT close the dialog. */
@@ -2373,10 +2480,12 @@ function doGithubOrgClone(){
   if(!repo){if(e){e.style.display="block";e.textContent="Enter the experiment repository name.";}return;}
   if(!ghClonePath){if(e){e.style.display="block";e.textContent="Choose a parent folder for the clone.";}return;}
   if(!NATIVE||!API||!API.clone_org_repo){closeModal();window.pywStatus("","Cloning works in the app, not the static preview.");return;}
+  if(ghCloneRunning)return;
   var dest=ghClonePath;
-  closeModal();
-  /* Keep the GitHub logo while cloning; only swap the label (innerHTML, not
-     textContent, so the SVG mark stays). pywOnCloneDone restores the org name. */
+  /* The dialog STAYS OPEN: busy state inside it (checking -> cloning); only a
+     successful clone closes it (pywOnCloneDone). Keep the GitHub logo on the
+     toolbar button while cloning (innerHTML, so the SVG mark stays). */
+  ghCloneBusy(true);window.pywOnCloneProgress({phase:"checking"});
   var g=el("githubOrgBtn");if(g){g.disabled=true;g.innerHTML=GH_LOGO_SVG+'<span>Cloning…</span>';}
   window.pywStatus("","Cloning "+repo+" into "+dest+"…");
   API.clone_org_repo(repo,dest).then(function(r){
@@ -2394,13 +2503,65 @@ function onGitUpdateStudy(){
   if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git Pull works in the app, not the static preview.");return;}
   var u=el("gitPullBtn");if(u){u.disabled=true;u.textContent="Pulling…";}
   window.pywStatus("","Running git pull in the study folder…");
+  renderGitPullResult({busy:true},p);
   API.git_update_study(p).then(function(r){
     if(u){u.disabled=false;u.textContent="Git Pull";}
     r=r||{};
     var level=r.ok?(r.status==="current"?"":"ok"):"err";
     window.pywStatus(level,r.message||"Git Pull finished.");
     if(r.output)appendLog(r.ok?"muted":"err",r.output);
+    renderGitPullResult(r,p);
+    /* New files may add/remove app packages: refresh the detected-app list. */
+    if(r.status==="updated"&&API.validate_project)API.validate_project(p).then(function(v){if(v&&v.project)applyProject(v.project);});
   });
+}
+/* The Git Pull RESULT section at the bottom of the study status card. core
+   decides the outcome (HEAD before vs after); this only renders it:
+     nothing new  -> bold "Nothing new: already up to date."
+     failed       -> bold "Git pull failed" + the plain reason + raw git output
+                     (collapsed)
+     pulled       -> bold "Pulled N changed files." + latest commit date/subject
+                     + a collapsed "Changes pulled from Git" file list.
+   Kept per folder: choosing another study folder clears it. */
+var gitPullResult=null,gitPullResultPath="";
+function _grNow(){var d=new Date();return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
+function renderGitPullResult(r,path){
+  gitPullResult=r;gitPullResultPath=path||"";
+  var box=el("gitPullResult");if(!box)return;
+  var when='<span class="gr-when">'+_grNow()+'</span>',h="";
+  if(r.busy){
+    h='<div class="gr-head"><b>Pulling…</b>'+when+'</div>';
+  }else if(r.ok&&r.status==="current"){
+    h='<div class="gr-head"><b>'+escapeHtml(r.message||"Nothing new: already up to date.")+'</b>'+when+'</div>';
+  }else if(r.ok){
+    h='<div class="gr-head ok"><b>'+escapeHtml(r.message||"Pulled.")+'</b>'+when+'</div>';
+    if(r.detail)h+='<div class="gr-sub">'+escapeHtml(r.detail)+'</div>';
+    var files=r.files||[];
+    if(files.length){
+      h+='<details><summary>Changes pulled from Git</summary><ul class="gr-files">';
+      files.forEach(function(f){
+        var n=(f.added!=null||f.removed!=null)?('+'+(f.added||0)+' \u2212'+(f.removed||0)):'binary';
+        var name=f.old_path?(f.old_path+' \u2192 '+f.path):f.path;
+        h+='<li><span class="gr-ch '+escapeHtml(f.change)+'">'+escapeHtml(f.change)+'</span>'+
+           '<span class="gr-path">'+escapeHtml(name)+'</span><span class="gr-n">'+n+'</span></li>';
+      });
+      h+='</ul></details>';
+    }
+  }else{
+    h='<div class="gr-head err"><b>Git pull failed</b>'+when+'</div>'+
+      '<div class="gr-sub">'+escapeHtml(r.reason||r.message||"git reported an error.")+'</div>';
+    if(r.output)h+='<details><summary>Git output</summary><div class="mono-line">'+escapeHtml(r.output)+'</div></details>';
+  }
+  box.innerHTML=h;box.hidden=false;
+}
+/* Keep the result only while the same study folder is selected (and Org Sync is
+   on); otherwise hide + forget it. */
+function syncGitPullResult(){
+  var box=el("gitPullResult");if(!box)return;
+  var cur=(currentProjectPath||"").trim();
+  if(!gitPullResult||!GITHUB_SYNC_ENABLED||!cur||cur!==gitPullResultPath){
+    gitPullResult=null;gitPullResultPath="";box.hidden=true;box.innerHTML="";
+  }
 }
 function validateProjectPath(){
   var p=(val("projPathInput")||"").trim();if(!p)return;
@@ -2782,11 +2943,14 @@ function renderCreateDb(roster,suggestedResearcher){
   /* Feature 1: creating a database is local-only for now. When the Postgres admin
      host (Lab Settings) is remote, force register-only: the "already exists" tick
      is checked + disabled, so the action stays Register and CREATE never runs. */
-  var adminHost=(PG_ADMIN.admin_host||"").trim();
-  var remoteAdmin=!isLocalHost(adminHost);
+  var adminHost=(PG_ADMIN.admin_host||"").trim()||"localhost";
+  var adminPort=(PG_ADMIN.admin_port||"").trim()||"5432";
   openModal("Create a new Postgres database",
     '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
     '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
+    /* Host (+ Port): visible, read-only until the pen is clicked. Another host
+       forces register-only (see cdbHostChanged). */
+    hostPenField("cdb",adminHost,adminPort,"cdbHostChanged")+
     /* Researcher (required): type a new name or pick from the shared roster. A
        datalist gives the combobox behaviour (dropdown + free text). */
     '<div class="mfield"><label>Researcher (required)</label>'+
@@ -2796,25 +2960,40 @@ function renderCreateDb(roster,suggestedResearcher){
     '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
     /* Feature 4: register an existing database WITHOUT running CREATE DATABASE.
        The entry is identical either way, so it is selectable/editable afterward. */
-    '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" '+(remoteAdmin?'checked disabled ':'')+'onchange="onCdbExistsToggle()"> Database already exists in Postgres (register without creating)</label>'+
-    (remoteAdmin?'<div class="db-mode-note" style="display:block">Creating a database is local-only for now (admin host '+escapeHtml(adminHost)+' is remote), so this registers the existing database. '+remoteHostWarning(adminHost)+'</div>':'')+
+    '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" onchange="onCdbExistsToggle()"> The database already exists in Postgres (register without creating)</label>'+
+    '<div class="db-mode-note" id="cdbHostNote" style="display:none;margin-left:0"></div>'+
     '<div class="modal-err" id="cdbErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
-    '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">'+(remoteAdmin?'Register':'Create')+'</button></div>');
+    '<button class="btn accent" id="cdbCreate" onclick="doCreateDb()">Create</button></div>');
+  cdbAutoExists=false;cdbHostChanged("cdb");
 }
 function onCdbExistsToggle(){
   var b=el("cdbCreate");if(b)b.textContent=(el("cdbExists")&&el("cdbExists").checked)?"Register":"Create";
+}
+/* Another host than this computer: tick + lock "already exists" (register only)
+   with one short grey note. Back to localhost: unlock and restore the default
+   (create new), unless the user ticked it themselves. */
+var cdbAutoExists=false;
+function cdbHostChanged(){
+  var c=el("cdbExists"),n=el("cdbHostNote");if(!c)return;
+  var remote=!isLocalHost(val("cdbHost"));
+  if(remote){if(!c.checked){c.checked=true;cdbAutoExists=true;}c.disabled=true;
+    if(n){n.style.display="block";n.textContent=REMOTE_DB_NOTE;}}
+  else{c.disabled=false;if(cdbAutoExists){c.checked=false;cdbAutoExists=false;}
+    if(n){n.style.display="none";n.textContent="";}}
+  onCdbExistsToggle();
 }
 function doCreateDb(){
   var name=(val("cdbName")||"").trim(),researcher=(val("cdbResearcher")||"").trim();
   var user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
   var exists=!!(el("cdbExists")&&el("cdbExists").checked);
+  var host=(val("cdbHost")||"").trim()||"localhost",port=(val("cdbPort")||"").trim()||"5432";
   var e=el("cdbErr");
   if(!name){e.style.display="block";e.textContent="Enter a database name.";return;}
   if(!researcher){e.style.display="block";e.textContent="Enter or pick a researcher: whose database this is.";return;}
   if(!NATIVE||!API){closeModal();window.pywStatus("","Create database works in the app, not the static preview.");return;}
   el("cdbCreate").textContent=exists?"Registering…":"Creating…";
-  API.create_database(name,user,pw,researcher,exists).then(function(r){
+  API.create_database(name,user,pw,researcher,exists,host,port).then(function(r){
     if(r&&r.ok){closeModal();applyDbMode("custom");
       if(r.fields)setDbVals(r.fields.db_name,r.fields.db_user,r.fields.db_password,r.fields.db_host,r.fields.db_port);
       /* keep the local registry + roster in sync with what the backend saved */
@@ -3040,7 +3219,7 @@ function openLabSettings(){
        button (toggleGhInfo reveals #ghSyncInfo). The tick box shows/hides the two
        main-screen buttons (GitHub org button next to Browse, and the per-config Git
        Pull button); there is no service to turn on -- hiding the buttons is enough.
-       Both the tick box and org name persist to disk (ui_prefs.json). */
+       Both the tick box and org name persist as lab settings (lab_info.json). */
     '<div class="ls-card"><h4 style="display:flex;align-items:center;gap:8px">GitHub Organisation Sync'+
         '<button type="button" class="i-btn" title="About GitHub Organisation Sync" aria-label="About GitHub Organisation Sync" aria-expanded="false" id="ghInfoBtn" onclick="toggleGhInfo()">i</button></h4>'+
       '<div id="ghSyncInfo" hidden>'+
@@ -3110,7 +3289,7 @@ function toggleGhInfo(){
   e.hidden=!e.hidden;
   if(b)b.setAttribute("aria-expanded",e.hidden?"false":"true");
 }
-/* Persist the tick box + org name (API.set_github_sync -> ui_prefs.json), update
+/* Persist the tick box + org name (API.set_github_sync -> lab_info.json), update
    the in-page state, and show/hide the two main-screen buttons. Fail-soft: in the
    static preview it just updates the UI without a backend call. */
 function saveGithubSync(){
@@ -3121,7 +3300,7 @@ function saveGithubSync(){
   if(!NATIVE||!API||!API.set_github_sync){if(st)st.textContent=GITHUB_SYNC_ENABLED?"On (preview: not saved).":"Off.";return;}
   API.set_github_sync(GITHUB_SYNC_ENABLED,GITHUB_ORG).then(function(r){
     if(r&&r.ok){GITHUB_SYNC_ENABLED=!!r.enabled;GITHUB_ORG=r.org||"";applyGithubSyncButtons();
-      if(st)st.textContent=GITHUB_SYNC_ENABLED?("On. Organisation: "+(GITHUB_ORG||"(none set)")+"."):"Off by default. Saved on this computer.";}
+      if(st)st.textContent=GITHUB_SYNC_ENABLED?("On. Organisation: "+(GITHUB_ORG||"(none set)")+"."):"Off by default. Saved in the lab settings.";}
   });
 }
 /* Show the GitHub org button (+ refresh the Git Pull button) only when the opt-in is on; hide them
@@ -3256,7 +3435,6 @@ function updateDoneHTML(output){
   return '<div class="upd-done">'+
     '<div class="upd-badge" aria-hidden="true">✓</div>'+
     '<h3 class="upd-head">'+head+'</h3>'+
-    '<p class="upd-sub">The new version has been downloaded, but it is <strong>not active yet</strong> — this window is still running the old version.</p>'+
     '<div class="upd-cta">'+
       '<p class="upd-cta-title">Restart to activate the update</p>'+
       '<p class="upd-cta-note">Quit this window and reopen the launcher from the usual shortcut. It will start up on the new version.</p>'+
@@ -4090,17 +4268,29 @@ function wizConnFields(p,o){
     '<div class="mfield"><label>User</label><input type="text" id="'+p+'User" value="'+escapeHtml(o.db_user)+'"></div>'+
     '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="'+p+'Pw" value="'+escapeHtml(o.db_password)+'">'+
       '<button type="button" class="pw-toggle" onclick="togglePw2(\''+p+'Pw\',this)">Show</button></div></div>'+
-    '<div class="mfield"><label>Host</label><input type="text" id="'+p+'Host" value="'+escapeHtml(o.db_host)+'" oninput="wizHostChanged(\''+p+'\')"></div>'+
-    '<div class="mfield"><label>Port</label><input type="text" id="'+p+'Port" value="'+escapeHtml(o.db_port)+'"></div>'+
-    /* Feature 1: live remote-host warning for this database card. */
-    '<p class="db-mode-note" id="'+p+'HostWarn" style="display:'+(isLocalHost(o.db_host)?'none':'block')+'">'+(isLocalHost(o.db_host)?'':remoteHostWarning(o.db_host))+'</p>';
+    /* Host + Port: read-only until the pen at the end of the host box. */
+    hostPenField(p,o.db_host,o.db_port,"wizHostChanged")+
+    /* One short note when this card's host is not this computer. */
+    '<p class="db-mode-note" id="'+p+'HostWarn" style="display:'+(isLocalHost(o.db_host)?'none':'block')+'">'+(isLocalHost(o.db_host)?'':REMOTE_DB_NOTE)+'</p>';
 }
-/* Live-toggle a wizard card's remote-host warning as its Host field is edited. */
+/* A wizard card's Host was edited: show/hide the note and re-gate its create
+   toggle (another host = link/register only). */
 function wizHostChanged(p){
-  var w=el(p+"HostWarn");if(!w)return;
+  var w=el(p+"HostWarn");
   var host=(val(p+"Host")||"").trim();
-  if(!isLocalHost(host)){w.style.display="block";w.innerHTML=remoteHostWarning(host);}
-  else{w.style.display="none";w.innerHTML="";}
+  if(w){if(!isLocalHost(host)){w.style.display="block";w.textContent=REMOTE_DB_NOTE;}
+    else{w.style.display="none";w.textContent="";}}
+  wizGateCreate(p);
+}
+/* Enable/disable one card's create toggle from the admin section AND its host. */
+function wizGateCreate(p){
+  var c=el(p+"Create");if(!c)return;
+  var remote=!isLocalHost(val(p+"Host"));
+  var ready=wizCreateAllowed()&&!remote;
+  c.disabled=!ready;
+  var hint=el(p+"Hint");if(hint){hint.hidden=ready||remote;hint.innerHTML=wizCreateHint();}
+  if(!ready&&c.checked)c.checked=false;
+  var n=el(p+"Note");if(n){n.className="db-mode-note"+(c.checked?" create":"");n.innerHTML=wizModeNote(c.checked);}
 }
 /* The ONE shared Postgres admin section (top of the Databases step). Optional:
    filled = create-new becomes available on every database card; blank = those
@@ -4146,14 +4336,7 @@ function wizAdminChanged(){
       an.innerHTML="Creating a database is local-only for now (this admin host is remote), so databases below can only be linked to ones that already exist.";}
     else{an.style.display="none";an.innerHTML="";}
   }
-  ["wd"].concat(WIZ.extraOpen?["ex"]:[]).forEach(function(p){
-    var c=el(p+"Create");if(!c)return;
-    c.disabled=!ready;
-    var hint=el(p+"Hint");if(hint){hint.hidden=ready;hint.innerHTML=wizCreateHint();}
-    if(!ready&&c.checked)c.checked=false;
-    var eff=c.checked&&ready;
-    var n=el(p+"Note");if(n){n.className="db-mode-note"+(eff?" create":"");n.innerHTML=wizModeNote(eff);}
-  });
+  ["wd"].concat(WIZ.extraOpen?["ex"]:[]).forEach(wizGateCreate);
 }
 function wizModeNote(create){
   return create
@@ -4164,12 +4347,13 @@ function wizDbControl(p,o){
   // The create toggle relies on the ONE shared admin section above: disabled
   // (with a hint) until admin user + password are filled AND the admin host is
   // local (creating is local-only for now).
-  var ready=wizCreateAllowed();
+  var remote=!isLocalHost(o.db_host);
+  var ready=wizCreateAllowed()&&!remote;
   var eff=o.create&&ready;
   return wizConnFields(p,o)+
     '<label class="chk" style="margin:12px 0 2px"><input type="checkbox" id="'+p+'Create"'+(eff?" checked":"")+(ready?"":" disabled")+' onchange="wizToggleCreate(\''+p+'\')"> Create this database in Postgres for me</label>'+
     '<p class="db-mode-note'+(eff?' create':'')+'" id="'+p+'Note">'+wizModeNote(eff)+'</p>'+
-    '<p class="db-create-hint" id="'+p+'Hint"'+(ready?' hidden':'')+'>'+wizCreateHint()+'</p>';
+    '<p class="db-create-hint" id="'+p+'Hint"'+((ready||remote)?' hidden':'')+'>'+wizCreateHint()+'</p>';
 }
 function wizToggleCreate(p){
   var c=el(p+"Create");if(!c||c.disabled)return;

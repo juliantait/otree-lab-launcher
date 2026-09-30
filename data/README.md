@@ -14,11 +14,17 @@ lives in `app/`; `data/` stays at the repo root.
 
 ## Yours (created at runtime, not in git)
 
-- `lab_info.json` - your labs, hosts, database and admin settings.
+- `lab_info.json` - your labs, hosts, database and admin settings, plus the
+  GitHub Organisation Sync on/off switch and organisation name.
 - `presets.json` - your saved launch configs.
 - `lab.local` - one word naming which lab this computer is.
+- `ui_prefs.json` - your light/dark theme.
 - `seats/` - generated participant-label files.
 - `otree-lab-launcher.log` / `web_launcher.log` - logs.
+
+Test studies and GitHub clones belong in `local/` at the repo root (next to
+`app/` and `data/`), not in here: git ignores that whole folder, the GitHub clone
+picker opens there, and the launcher creates it when first needed.
 
 The env vars `OTREE_LAB_INFO`, `OTREE_LAB_MARKER` and
 `OTREE_LAB_LAUNCHER_PRESETS` override the default locations when set.

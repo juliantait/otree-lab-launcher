@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy this file to lab_info.json (gitignored) and edit it for your lab: set each lab's real 'host', and set the database and admin passwords. Each lab's 'map' names a file in the maps/ folder (maps/<name>.json); seat cells in the map fill from the lab's 'seats' list in order. Add your own room by dropping maps/<name>.json and pointing a lab at it.",
+  "_comment": "Copy this file to lab_info.json (gitignored) and edit it for your lab: set each lab's real 'host', and set the database and admin passwords. Each lab's 'map' names a file in the maps/ folder (maps/<name>.json); seat cells in the map fill from the lab's 'seats' list in order. Add your own room by dropping maps/<name>.json and pointing a lab at it. 'github_sync_enabled' / 'github_org' are the GitHub Organisation Sync lab settings (off / no organisation by default); set them in Lab Settings.",
   "default_lab": "large",
   "labs": {
     "small": {
@@ -80,5 +80,7 @@
   "admin": {
     "username": "admin",
     "password": "changeme"
-  }
+  },
+  "github_sync_enabled": false,
+  "github_org": ""
 }

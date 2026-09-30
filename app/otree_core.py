@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.12"
+APP_VERSION = "1.4.13"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -336,6 +336,20 @@ def lab_info_example_path():
 def load_example_lab_info():
     """The committed lab_info.example.json as a dict, or None."""
     return load_lab_info(lab_info_example_path())
+
+
+def example_lab_info_to_save():
+    """The example as a lab_info dict ready for "Use example values", or None.
+
+    Drops the ``_comment`` and the GitHub Organisation Sync placeholders (off /
+    empty), so a sync setting chosen before the wizard ran (held in ui_prefs.json)
+    still migrates in instead of being outranked by the example's defaults."""
+    example = load_example_lab_info()
+    if example is None:
+        return None
+    for key in ("_comment", "github_sync_enabled", "github_org"):
+        example.pop(key, None)
+    return example
 
 
 def available_maps():
@@ -1612,11 +1626,13 @@ def presets_path():
 
 # --- Per-user UI preferences (theme) ---------------------------------------
 # A tiny, CREDENTIAL-FREE prefs file in data/, separate from presets.json (which
-# carries DB/admin passwords). It persists the light/dark theme so the choice
+# carries DB/admin passwords). It persists ONLY the light/dark theme so the choice
 # survives a restart: in browser mode the page's localStorage is tied to the
 # server PORT, which changes on the next launch, so a file on disk is the only
-# durable per-user store. Everything here is FAIL-SOFT: a missing or corrupt file
-# just yields the "dark" default and a write error is swallowed.
+# durable per-user store. (GitHub Organisation Sync used to live here too; it is
+# a LAB setting now, in lab_info.json -- see below.) Everything here is
+# FAIL-SOFT: a missing or corrupt file just yields the "dark" default and a write
+# error is swallowed.
 UI_PREFS_FILENAME = "ui_prefs.json"
 
 
@@ -1644,6 +1660,21 @@ def load_ui_prefs(path=None):
         return {}
 
 
+def _write_ui_prefs(prefs, path):
+    """Atomically write the prefs dict. Returns True on success; never raises."""
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(prefs, handle, indent=2)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
+
+
 def load_ui_theme(path=None):
     """The saved light/dark theme, defaulting to 'dark' when nothing is stored."""
     return normalize_theme(load_ui_prefs(path).get("theme"))
@@ -1657,69 +1688,136 @@ def save_ui_theme(theme, path=None):
     value = normalize_theme(theme)
     prefs = load_ui_prefs(path)
     prefs["theme"] = value
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(prefs, handle, indent=2)
-        os.replace(tmp, path)
-    except OSError:
-        pass  # fail-soft: the on-screen theme already changed
+    _write_ui_prefs(prefs, path)  # fail-soft: the on-screen theme already changed
     return value
 
 
-# --- GitHub Organisation Sync opt-in (persisted like the theme) ------------
+# --- GitHub Organisation Sync opt-in (a LAB setting, in lab_info.json) ------
 # An OPT-IN, DEFAULT-OFF feature that wires the launcher into a lab's read-only
 # GitHub organisation git setup so an experimenter can clone/update a study repo
 # without touching a terminal. It works ONLY when the lab manager has already set
 # up git and a read-only GitHub organisation credential ON THIS lab experimenter
 # PC (the PC signed in read-only to the org). The launcher never stores or
 # handles any token itself -- it relies entirely on the machine's pre-stored git
-# credential. Two things persist here, in the SAME credential-free prefs file as
-# the theme (data/ui_prefs.json): the tick-box state and the organisation name
-# (so the clone target is <org>/<repo> and the org is NOT hardcoded). Both are
-# fail-soft: a missing/corrupt file yields the OFF default and an empty org.
+# credential. Two things persist, as top-level keys of the data folder's
+# lab_info.json (the same file the Lab Settings Database section writes, so
+# each data folder -- data/, data_CREED_large/, data_CREED_small/ -- carries its
+# own): the tick-box state and the organisation name (so the clone target is
+# <org>/<repo> and the org is NOT hardcoded). Both are fail-soft: a missing or
+# corrupt file yields the OFF default and an empty org.
+#
+# Two edge cases:
+#   * No readable lab_info.json yet (first run): a save must NEVER create one --
+#     that would make the app think setup is done and skip the first-run wizard.
+#     The values are held in ui_prefs.json until lab_info.json exists.
+#   * Older installs kept both keys in ui_prefs.json. The first load after
+#     lab_info.json exists moves them over (a value already in lab_info.json
+#     wins) and strips them from ui_prefs.json, leaving only the theme there.
 GITHUB_SYNC_ENABLED_KEY = "github_sync_enabled"
 GITHUB_ORG_KEY = "github_org"
+_GITHUB_SYNC_KEYS = (GITHUB_SYNC_ENABLED_KEY, GITHUB_ORG_KEY)
 
 
-def load_github_sync_enabled(path=None):
-    """The saved GitHub Organisation Sync opt-in flag. Default OFF (False) when
-    nothing is stored (fail-soft)."""
-    return bool(load_ui_prefs(path).get(GITHUB_SYNC_ENABLED_KEY, False))
+def _github_sync_values(source):
+    source = source or {}
+    return {"enabled": bool(source.get(GITHUB_SYNC_ENABLED_KEY, False)),
+            "org": str(source.get(GITHUB_ORG_KEY, "") or "").strip()}
 
 
-def load_github_org(path=None):
+def _set_live_lab_info_keys(path, values):
+    """Keep the in-memory LAB_INFO in step when the default lab_info.json changed."""
+    if isinstance(LAB_INFO, dict) and os.path.abspath(path) == os.path.abspath(lab_info_path()):
+        LAB_INFO.update(values)
+
+
+def migrate_github_sync_prefs(path=None, prefs_path=None):
+    """One-time move of the GitHub Organisation Sync keys from ui_prefs.json into
+    lab_info.json. Copies each key lab_info.json lacks, then removes both keys from
+    ui_prefs.json (lab_info.json wins if it already had them). Does nothing while
+    there is no readable lab_info.json. Returns True when ui_prefs.json was
+    changed. Never raises."""
+    path = path or lab_info_path()
+    prefs_path = prefs_path or ui_prefs_path()
+    prefs = load_ui_prefs(prefs_path)
+    if not any(key in prefs for key in _GITHUB_SYNC_KEYS):
+        return False
+    info = load_lab_info(path)
+    if info is None:
+        return False
+    missing = {key: prefs[key] for key in _GITHUB_SYNC_KEYS
+               if key in prefs and key not in info}
+    if missing:
+        info.update(missing)
+        try:
+            save_lab_info(info, path)
+        except Exception:
+            return False  # keep ui_prefs.json as-is; retry on the next load
+        _set_live_lab_info_keys(path, missing)
+    for key in _GITHUB_SYNC_KEYS:
+        prefs.pop(key, None)
+    return _write_ui_prefs(prefs, prefs_path)
+
+
+def load_github_sync(path=None, prefs_path=None):
+    """The saved GitHub Organisation Sync settings as ``{"enabled", "org"}``.
+
+    Reads lab_info.json (running the one-time ui_prefs.json migration first).
+    Before lab_info.json exists, falls back to values held in ui_prefs.json.
+    Default OFF with an empty org (fail-soft)."""
+    path = path or lab_info_path()
+    prefs_path = prefs_path or ui_prefs_path()
+    try:
+        migrate_github_sync_prefs(path, prefs_path)
+    except Exception:
+        pass
+    info = load_lab_info(path)
+    if info is None:
+        return _github_sync_values(load_ui_prefs(prefs_path))
+    return _github_sync_values(info)
+
+
+def load_github_sync_enabled(path=None, prefs_path=None):
+    """The saved GitHub Organisation Sync opt-in flag. Default OFF (False)."""
+    return load_github_sync(path, prefs_path)["enabled"]
+
+
+def load_github_org(path=None, prefs_path=None):
     """The saved GitHub organisation name, or '' when nothing is stored. This is
     the <org> in the clone target https://github.com/<org>/<repo>; it is a
     configured value, never hardcoded (fail-soft)."""
-    return str(load_ui_prefs(path).get(GITHUB_ORG_KEY, "") or "").strip()
+    return load_github_sync(path, prefs_path)["org"]
 
 
-def save_github_sync_prefs(enabled, org, path=None):
+def save_github_sync_settings(enabled, org, path=None, prefs_path=None):
     """Persist the GitHub Organisation Sync opt-in flag AND the organisation name
-    into the prefs file (created if needed), preserving any other keys (e.g. the
-    theme). Returns the stored ``{"enabled": bool, "org": str}``. Never raises: a
-    write failure is swallowed (the UI has already updated in place)."""
-    path = path or ui_prefs_path()
-    enabled = bool(enabled)
-    org = str(org or "").strip()
-    prefs = load_ui_prefs(path)
-    prefs[GITHUB_SYNC_ENABLED_KEY] = enabled
-    prefs[GITHUB_ORG_KEY] = org
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(prefs, handle, indent=2)
-        os.replace(tmp, path)
-    except OSError:
-        pass  # fail-soft: the on-screen state already changed
-    return {"enabled": enabled, "org": org}
+    into lab_info.json, preserving every other key. With no readable
+    lab_info.json yet they go to ui_prefs.json instead (never creating
+    lab_info.json, which would skip the first-run wizard) and are migrated later.
+    Returns the stored ``{"enabled": bool, "org": str}``. Never raises: a write
+    failure is swallowed (the UI has already updated in place)."""
+    path = path or lab_info_path()
+    prefs_path = prefs_path or ui_prefs_path()
+    values = {GITHUB_SYNC_ENABLED_KEY: bool(enabled),
+              GITHUB_ORG_KEY: str(org or "").strip()}
+    info = load_lab_info(path)
+    if info is None:
+        prefs = load_ui_prefs(prefs_path)
+        prefs.update(values)
+        _write_ui_prefs(prefs, prefs_path)
+    else:
+        info.update(values)
+        try:
+            save_lab_info(info, path)
+            _set_live_lab_info_keys(path, values)
+        except Exception:
+            pass  # fail-soft: the on-screen state already changed
+        # Drop any stale pre-migration copies so ui_prefs.json holds only the theme.
+        prefs = load_ui_prefs(prefs_path)
+        if any(key in prefs for key in _GITHUB_SYNC_KEYS):
+            for key in _GITHUB_SYNC_KEYS:
+                prefs.pop(key, None)
+            _write_ui_prefs(prefs, prefs_path)
+    return _github_sync_values(values)
 
 
 # --- Per-machine lab identity (lab.local) ----------------------------------
@@ -2641,139 +2739,489 @@ def is_git_repo(folder):
     return output.strip().lower() == "true"
 
 
-def git_update_study(folder):
-    """Run ``git pull`` in a selected STUDY folder and classify the outcome.
-
-    Returns ``{"ok": bool, "status": str, "message": str, "output": str}`` where
-    ``status`` is one of:
-      * ``"not_repo"``  -> the folder is not a git repo (nothing pulled). Detected
-                           up front with :func:`is_git_repo`.
-      * ``"current"``   -> git printed "Already up to date" (no new commits).
-      * ``"updated"``   -> git pulled new commits.
-      * ``"error"``     -> a real pull failure (auth, network, merge conflict); the
-                           git error text is surfaced in ``message``/``output``.
-    NEVER touches the launcher app/ folder or any oTree/experiment process. Never
-    hangs (a bounded timeout) and never raises (git missing / bad path -> a
-    well-formed error result).
-    """
-    folder = str(folder or "").strip()
-    if not is_git_repo(folder):
-        return {"ok": False, "status": "not_repo", "output": "",
-                "message": "This folder is not a git repo."}
-    try:
-        result = subprocess.run(
-            ["git", "-C", folder, "pull"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            timeout=120)
-    except FileNotFoundError:
-        return {"ok": False, "status": "error", "output": "",
-                "message": "git is not installed on this machine."}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "status": "error", "output": "",
-                "message": "git pull timed out."}
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return {"ok": False, "status": "error", "output": "",
-                "message": "Could not run git pull: %s" % error}
-    output = result.stdout or b""
-    if isinstance(output, (bytes, bytearray)):
-        output = output.decode("utf-8", "replace")
-    output = output.strip()
-    if result.returncode != 0:
-        # A real pull failure -- surface git's own text (auth, network, conflict).
-        detail = output or ("git pull failed (exit code %s)." % result.returncode)
-        return {"ok": False, "status": "error", "output": output,
-                "message": detail}
-    # git says "Already up to date." (a trailing full stop in some versions).
-    if "already up to date" in output.lower():
-        return {"ok": True, "status": "current", "output": output,
-                "message": "No updates available on git."}
-    return {"ok": True, "status": "updated", "output": output,
-            "message": "Updated."}
-
-
-def github_clone_url(org, repo):
-    """The HTTPS clone URL for ``<org>/<repo>``. The repo name is stripped of a
-    trailing ``.git`` and any surrounding whitespace so a user can type either
-    form. Raises ValueError when the org or repo is empty."""
-    org = str(org or "").strip().strip("/")
-    repo = str(repo or "").strip().strip("/")
-    if repo.lower().endswith(".git"):
-        repo = repo[:-4]
-    if not org:
-        raise ValueError("Enter the GitHub organisation name first.")
-    if not repo:
-        raise ValueError("Enter the experiment repository name.")
-    return GITHUB_URL_TEMPLATE % (org, repo)
-
-
-def git_clone_org_repo(org, repo, dest_parent, runner=None):
-    """Clone ``https://github.com/<org>/<repo>`` into ``dest_parent`` using the
-    machine's already-stored read-only git credential (a plain ``git clone`` --
-    the launcher never handles the token itself).
-
-    ``dest_parent`` is the destination FOLDER the user chose; the repo is cloned
-    into a ``<repo>`` subfolder of it and that subfolder's absolute path is
-    returned as ``path`` on success, so the caller can auto-select it as the study
-    folder. Returns ``{"ok": bool, "message": str, "output": str, "path": str}``.
-
-    ``runner`` lets tests inject a fake clone spawn; it defaults to
-    :func:`subprocess.run`. Fail-soft and bounded: a bad/missing repo, a missing
-    credential, no git, a network error or a timeout all return ``ok`` False with
-    a clear message rather than hanging or raising. The clone target subfolder
-    must not already exist.
-    """
-    try:
-        url = github_clone_url(org, repo)
-    except ValueError as error:
-        return {"ok": False, "message": str(error), "output": "", "path": ""}
-    dest_parent = str(dest_parent or "").strip()
-    if not dest_parent:
-        return {"ok": False, "output": "", "path": "",
-                "message": "Choose a destination folder for the clone."}
-    if not os.path.isdir(dest_parent):
-        return {"ok": False, "output": "", "path": "",
-                "message": "Destination folder does not exist: %s" % dest_parent}
-    repo_name = url.rstrip("/").rsplit("/", 1)[-1]
-    target = os.path.join(dest_parent, repo_name)
-    if os.path.exists(target):
-        return {"ok": False, "output": "", "path": "",
-                "message": ("A folder named %r already exists in the destination. "
-                            "Remove it or pick another folder." % repo_name)}
+def _run_git(args, runner=None, timeout=60):
+    """Run ``git <args>`` and return ``(returncode, output)`` with stdout+stderr
+    merged and decoded. Raises what subprocess raises (FileNotFoundError when git
+    is missing, TimeoutExpired, OSError); callers turn those into results."""
     run = runner if runner is not None else subprocess.run
-    try:
-        result = run(
-            ["git", "clone", url, target],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            timeout=600)
-    except FileNotFoundError:
-        return {"ok": False, "output": "", "path": "",
-                "message": "git is not installed on this machine."}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "output": "", "path": "",
-                "message": "git clone timed out (check the network)."}
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return {"ok": False, "output": "", "path": "",
-                "message": "Could not run git clone: %s" % error}
+    result = run(["git"] + list(args),
+                 stdin=subprocess.DEVNULL,
+                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                 timeout=timeout)
     output = getattr(result, "stdout", b"") or b""
     if isinstance(output, (bytes, bytearray)):
         output = output.decode("utf-8", "replace")
+    return getattr(result, "returncode", 1), output
+
+
+def _git_text(folder, *args, timeout=30):
+    """Stripped output of a read-only ``git -C <folder> <args>``, or None when it
+    fails for any reason (never raises)."""
+    try:
+        code, output = _run_git(["-C", folder] + list(args), timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return output.strip() if code == 0 else None
+
+
+def _is_launcher_folder(folder):
+    """True when running git in ``folder`` would act on the LAUNCHER's own
+    install (repo_root()): the folder is the install directory itself, or sits
+    inside it without being a separate git repo of its own. Git Pull must never
+    touch the launcher (that is the in-app updater's job)."""
+    def norm(path):
+        return os.path.normcase(os.path.realpath(path))
+    root = norm(repo_root())
+    real = norm(folder)
+    if real == root:
+        return True
+    if not real.startswith(root.rstrip(os.sep) + os.sep):
+        return False
+    top = _git_text(folder, "rev-parse", "--show-toplevel")
+    return not top or norm(top) == root
+
+
+def _plural(count, word):
+    return "%d %s%s" % (count, word, "" if count == 1 else "s")
+
+
+def _short_file_list(files, limit=5):
+    """'a.py', 'a.py and b.py' or 'a.py, b.py, c.py and 2 more' for messages."""
+    files = list(files)
+    if len(files) > limit:
+        shown = files[:limit - 1]
+        return "%s and %d more" % (", ".join(shown), len(files) - len(shown))
+    if len(files) <= 1:
+        return "".join(files)
+    return "%s and %s" % (", ".join(files[:-1]), files[-1])
+
+
+def _indented_files_after(lines, marker):
+    """The tab-indented file names git prints under a line containing
+    ``marker`` (e.g. "would be overwritten by merge:")."""
+    files = []
+    for index, line in enumerate(lines):
+        if marker in line:
+            for follow in lines[index + 1:]:
+                if not follow.startswith(("\t", "    ")) or not follow.strip():
+                    break
+                files.append(follow.strip())
+    return files
+
+
+def classify_git_error(output):
+    """Turn raw git error text into a plain-language reason for the UI.
+
+    Returns ``{"code": str, "reason": str, "files": [str]}`` where ``code`` is
+    one of ``local_changes``, ``untracked``, ``conflict``, ``diverged``,
+    ``no_upstream``, ``not_found``, ``auth``, ``network``, ``ownership``,
+    ``not_repo`` or ``unknown``, and ``files`` names the files involved when git
+    lists them (local changes / conflicts). Pure text matching; shared by the
+    Git Pull result and the clone dialog so both faces word failures alike.
+    """
+    text = str(output or "")
+    low = text.lower()
+    lines = text.splitlines()
+    if "would be overwritten by" in low and "untracked working tree files" in low:
+        files = _indented_files_after(lines, "untracked working tree files")
+        return {"code": "untracked", "files": files,
+                "reason": ("New files on this computer would be overwritten by the "
+                           "pull: %s. Nothing was changed. Move or delete them, "
+                           "then pull again." % (_short_file_list(files) or
+                                                 "see the git output"))}
+    if "would be overwritten by" in low:
+        files = _indented_files_after(lines, "would be overwritten by")
+        return {"code": "local_changes", "files": files,
+                "reason": ("This computer has local changes to %s that the pull "
+                           "would overwrite. Nothing was changed. Undo those edits "
+                           "(or ask the study owner to commit them), then pull "
+                           "again." % (_short_file_list(files) or
+                                       "some files"))}
+    if "conflict" in low and ("merge conflict" in low
+                              or "automatic merge failed" in low):
+        files = re.findall(r"Merge conflict in (.+)", text)
+        return {"code": "conflict", "files": [f.strip() for f in files],
+                "reason": ("The pulled changes clash with changes made on this "
+                           "computer in %s (a merge conflict). The folder now "
+                           "needs a manual fix in git." %
+                           (_short_file_list(f.strip() for f in files) or
+                            "some files"))}
+    if ("divergent branches" in low or "not possible to fast-forward" in low
+            or "need to specify how to reconcile" in low):
+        return {"code": "diverged", "files": [],
+                "reason": ("This folder and GitHub both have new commits, so git "
+                           "will not combine them automatically.")}
+    if ("no tracking information" in low or "no such ref was fetched" in low
+            or "couldn't find remote ref" in low):
+        return {"code": "no_upstream", "files": [],
+                "reason": ("This folder is not linked to a branch on GitHub, so "
+                           "git does not know what to pull.")}
+    if ("repository not found" in low
+            or "does not appear to be a git repository" in low
+            or re.search(r"repository '[^']*' not found", low)):
+        return {"code": "not_found", "files": [],
+                "reason": ("GitHub has no such repository, or this computer's "
+                           "GitHub login cannot see it.")}
+    if any(key in low for key in (
+            "authentication failed", "could not read username",
+            "could not read password", "terminal prompts disabled",
+            "invalid username or password", "returned error: 403",
+            "returned error: 401", "permission denied (publickey)")):
+        return {"code": "auth", "files": [],
+                "reason": ("GitHub did not accept this computer's login, or no "
+                           "GitHub login is set up on it. Ask the lab manager to "
+                           "check it.")}
+    if any(key in low for key in (
+            "could not resolve host", "failed to connect", "connection timed out",
+            "connection refused", "network is unreachable", "operation timed out",
+            "unable to access", "could not resolve proxy", "ssl")):
+        return {"code": "network", "files": [],
+                "reason": ("Could not reach GitHub. Check that this computer is "
+                           "online, then try again.")}
+    if "dubious ownership" in low:
+        return {"code": "ownership", "files": [],
+                "reason": ("Git refuses to work in this folder because it belongs "
+                           "to a different user account on this computer.")}
+    if "not a git repository" in low:
+        return {"code": "not_repo", "files": [],
+                "reason": "This folder is not a git repo."}
+    return {"code": "unknown", "files": [],
+            "reason": "Git reported an error (see the git output below)."}
+
+
+def _format_commit_date(iso):
+    """'28 Sep 2026, 16:05' in this computer's local time, from git's strict ISO
+    date; falls back to the raw text when it does not parse."""
+    try:
+        when = _dt.datetime.fromisoformat(iso.strip())
+        return when.astimezone().strftime("%d %b %Y, %H:%M").lstrip("0")
+    except (ValueError, TypeError, OSError):
+        return str(iso or "").strip()
+
+
+_CHANGE_NAMES = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed",
+                 "C": "copied", "T": "modified"}
+
+
+def git_changed_files(folder, old, new):
+    """The files that differ between commits ``old`` and ``new`` in ``folder``.
+
+    Returns ``[{"path", "change", "added", "removed", "old_path"}]`` where
+    ``change`` is added / modified / deleted / renamed / copied and ``added`` /
+    ``removed`` are line counts (None for binary files). Uses ``git diff -z
+    --name-status`` + ``--numstat`` (cheap, read-only). ``old`` may be "" (an
+    unborn branch), meaning "everything in ``new``". Never raises; [] on error.
+    """
+    base = old or "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   # git's empty tree
+    status_raw = _git_text(folder, "diff", "-z", "-M", "--name-status", base, new)
+    numstat_raw = _git_text(folder, "diff", "-z", "-M", "--numstat", base, new)
+    if status_raw is None:
+        return []
+    files, order = {}, []
+    parts = status_raw.split("\0")
+    i = 0
+    while i < len(parts):
+        code = parts[i].strip()
+        if not code:
+            i += 1
+            continue
+        kind = code[0]
+        if kind in "RC" and i + 2 < len(parts):
+            old_path, path = parts[i + 1], parts[i + 2]
+            i += 3
+        else:
+            old_path, path = "", parts[i + 1] if i + 1 < len(parts) else ""
+            i += 2
+        if not path:
+            continue
+        files[path] = {"path": path, "change": _CHANGE_NAMES.get(kind, "modified"),
+                       "added": None, "removed": None, "old_path": old_path}
+        order.append(path)
+    parts = (numstat_raw or "").split("\0")
+    i = 0
+    while i < len(parts):
+        head = parts[i]
+        if not head.strip():
+            i += 1
+            continue
+        fields = head.split("\t")
+        if len(fields) >= 3 and fields[2] == "":
+            # A rename: "added\tremoved\t" then old\0new\0.
+            path = parts[i + 2] if i + 2 < len(parts) else ""
+            i += 3
+        else:
+            path = fields[2] if len(fields) >= 3 else ""
+            i += 1
+        entry = files.get(path)
+        if entry is not None and len(fields) >= 2:
+            entry["added"] = int(fields[0]) if fields[0].isdigit() else None
+            entry["removed"] = int(fields[1]) if fields[1].isdigit() else None
+    return [files[p] for p in order]
+
+
+def git_update_study(folder):
+    """Run ``git pull`` in a selected STUDY folder and report what happened.
+
+    Returns a dict both faces render the same way::
+
+        {"ok", "status", "message", "detail", "reason", "reason_code", "output",
+         "files", "file_count", "commit_count", "commit", "conflict_files",
+         "old_head", "new_head"}
+
+    ``status`` is one of:
+      * ``"current"``  -> nothing new (HEAD did not move). ``message`` is
+                          "Nothing new: already up to date."
+      * ``"updated"``  -> HEAD moved. ``message`` is "Pulled N changed files.",
+                          ``files`` lists each changed file (added / modified /
+                          deleted, +/- lines), ``commit`` holds the date and
+                          subject of the latest pulled commit and ``detail`` says
+                          it in one line.
+      * ``"not_repo"`` -> the folder is not a git repo (nothing run).
+      * ``"error"``    -> the pull failed; ``reason`` is the plain-language cause
+                          (classify_git_error), ``conflict_files`` names the files
+                          when git lists them, and ``output`` keeps git's raw text
+                          for a collapsed detail block.
+
+    The outcome is decided by comparing HEAD before and after the pull, not by
+    parsing git's wording. NEVER runs in the launcher's own folder
+    (``reason_code`` "launcher_folder") and never touches any oTree process.
+    Bounded by timeouts; never raises.
+    """
+    folder = str(folder or "").strip()
+    result = {"ok": False, "status": "error", "message": "", "detail": "",
+              "reason": "", "reason_code": "", "output": "", "files": [],
+              "file_count": 0, "commit_count": 0, "commit": {},
+              "conflict_files": [], "old_head": "", "new_head": ""}
+
+    def failed(code, reason, output=""):
+        result.update(reason_code=code, reason=reason, output=output.strip(),
+                      message="Git pull failed: " + reason)
+        return result
+
+    if folder and _is_launcher_folder(folder):
+        return failed("launcher_folder",
+                      "This is the launcher's own folder, not a study folder. "
+                      "Choose your study folder first.")
+    if not is_git_repo(folder):
+        result.update(status="not_repo", reason_code="not_repo",
+                      reason="This folder is not a git repo.",
+                      message="Git pull failed: this folder is not a git repo.")
+        return result
+    old = _git_text(folder, "rev-parse", "HEAD") or ""
+    try:
+        code, output = _run_git(["-C", folder, "pull"], timeout=120)
+    except FileNotFoundError:
+        return failed("no_git", "git is not installed on this computer.")
+    except subprocess.TimeoutExpired:
+        return failed("timeout", "git pull took too long and was stopped. Check "
+                                 "the internet connection, then try again.")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return failed("error", "Could not run git pull (%s)." % error)
     output = output.strip()
-    if getattr(result, "returncode", 1) != 0:
-        detail = output or ("git clone failed (exit code %s)."
-                            % getattr(result, "returncode", "?"))
-        # Nudge toward the usual cause: no stored read-only org credential.
-        hint = ("\n\nThis needs git and a read-only GitHub organisation credential "
-                "already set up on this lab PC. Check the repository name and that "
-                "the PC is signed in to the organisation.")
-        return {"ok": False, "output": output, "path": "",
-                "message": detail + hint}
+    result["output"] = output
+    if code != 0:
+        why = classify_git_error(output)
+        result["conflict_files"] = why["files"]
+        return failed(why["code"], why["reason"], output)
+    new = _git_text(folder, "rev-parse", "HEAD") or ""
+    result.update(ok=True, old_head=old, new_head=new)
+    if new == old:
+        result.update(status="current", message="Nothing new: already up to date.")
+        return result
+    files = git_changed_files(folder, old, new)
+    count_raw = _git_text(folder, "rev-list", "--count",
+                          ("%s..%s" % (old, new)) if old else new)
+    commits = int(count_raw) if count_raw and count_raw.isdigit() else 0
+    log = _git_text(folder, "log", "-1", "--format=%cI%x1f%s%x1f%h", new) or ""
+    bits = (log.split("\x1f") + ["", "", ""])[:3]
+    commit = {"iso": bits[0], "date": _format_commit_date(bits[0]),
+              "subject": bits[1], "short": bits[2]}
+    if files:
+        message = "Pulled %s." % _plural(len(files), "changed file")
+    else:
+        message = "Pulled %s (no file changes)." % _plural(commits, "new commit")
+    detail = "Latest commit, %s: %s" % (commit["date"], commit["subject"])
+    if commits > 1:
+        detail += " (%s pulled)" % _plural(commits, "commit")
+    result.update(status="updated", message=message, detail=detail, files=files,
+                  file_count=len(files), commit_count=commits, commit=commit)
+    return result
+
+
+def git_file_change_line(entry):
+    """One plain line for a changed file, for text renderers:
+    'modified  app/pages.py  (+2 -1)'."""
+    counts = ""
+    if entry.get("added") is not None or entry.get("removed") is not None:
+        counts = "  (+%s -%s)" % (entry.get("added") or 0, entry.get("removed") or 0)
+    path = entry.get("path", "")
+    if entry.get("old_path"):
+        path = "%s -> %s" % (entry["old_path"], path)
+    return "%-9s %s%s" % (entry.get("change", "modified"), path, counts)
+
+
+# The gitignored scratch folder at the repo root (``local/``). The clone folder
+# pickers OPEN here, instead of wherever the process happens to run (the launch
+# scripts cd to the repo root, so a quick "Choose" used to drop a clone straight
+# into the launcher checkout). Anything put in local/ is never committed or pushed.
+SCRATCH_DIRNAME = "local"
+
+
+def scratch_dir():
+    """The repo-root scratch folder (gitignored) for test studies and clones."""
+    return os.path.join(repo_root(), SCRATCH_DIRNAME)
+
+
+def default_clone_parent():
+    """The folder the clone destination picker opens in: :func:`scratch_dir`,
+    created on demand. Returns "" if it cannot be created (the picker then keeps
+    its own default). Only the picker's STARTING folder; the user still chooses."""
+    path = scratch_dir()
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return ""
+    return path
+
+
+def github_clone_url(org, repo, url_template=None):
+    """The HTTPS clone URL for ``<org>/<repo>``. The repo name is stripped of a
+    trailing ``.git`` and any surrounding whitespace so a user can type either
+    form. Raises ValueError when the org or repo is empty. ``url_template``
+    (default GITHUB_URL_TEMPLATE) lets tests point at a local folder of bare
+    repos instead of github.com."""
+    org = str(org or "").strip().strip("/")
+    repo = clone_repo_name(repo)
+    if not org:
+        raise ValueError("Set the GitHub organisation name in Settings > GitHub "
+                         "Organisation Sync first.")
+    if not repo:
+        raise ValueError("Enter the experiment repository name.")
+    return (url_template or GITHUB_URL_TEMPLATE) % (org, repo)
+
+
+def clone_repo_name(repo):
+    """The bare repo (and new folder) name from what the user typed: surrounding
+    whitespace, slashes and a trailing ``.git`` are dropped, and only the last
+    path segment is kept."""
+    repo = str(repo or "").strip().strip("/")
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    return repo.rsplit("/", 1)[-1].strip()
+
+
+def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
+                       on_phase=None):
+    """Check, then clone, ``https://github.com/<org>/<repo>`` into a new
+    ``<repo>`` subfolder of ``dest_parent`` using the machine's already-stored
+    read-only git credential (plain git -- the launcher never handles a token).
+
+    Returns ``{"ok", "status", "message", "hint", "output", "path"}``.
+    ``status`` is "ok" on success (``path`` is the cloned folder, for the
+    auto-select) or one of: ``no_org``, ``no_repo``, ``no_dest``,
+    ``dest_missing``, ``exists`` (all refused before any git runs),
+    ``not_found``, ``auth``, ``network``, ``no_git``, ``timeout``, ``error``.
+    ``message`` is the one bold line for the dialog, ``hint`` a secondary
+    sentence and ``output`` git's raw text for a collapsed detail block.
+
+    It first runs a cheap ``git ls-remote`` so a wrong name fails fast with a
+    clear not-found message (GitHub gives the SAME answer for a missing repo and
+    a private one this login cannot see, so the message covers both). ``on_phase``
+    is called with "checking" then "cloning" so a dialog can show progress.
+    ``runner`` lets tests inject a fake spawn; ``url_template`` lets them clone
+    from local bare repos. Bounded by timeouts; never raises.
+    """
+    def outcome(status, message, hint="", output="", path=""):
+        return {"ok": status == "ok", "status": status, "message": message,
+                "hint": hint, "output": (output or "").strip(), "path": path}
+
+    def phase(name):
+        if on_phase is not None:
+            try:
+                on_phase(name)
+            except Exception:
+                pass
+
+    org = str(org or "").strip().strip("/")
+    name = clone_repo_name(repo)
+    if not org:
+        return outcome("no_org", "Set the GitHub organisation name in Settings > "
+                                 "GitHub Organisation Sync first.")
+    if not name:
+        return outcome("no_repo", "Enter the experiment repository name.")
+    url = github_clone_url(org, name, url_template)
+    dest_parent = str(dest_parent or "").strip()
+    if not dest_parent:
+        return outcome("no_dest", "Choose a destination folder for the clone.")
+    if not os.path.isdir(dest_parent):
+        return outcome("dest_missing",
+                       "Destination folder does not exist: %s" % dest_parent)
+    target = os.path.join(dest_parent, name)
+    if os.path.exists(target):
+        return outcome("exists",
+                       "A folder named '%s' already exists in %s." % (name, dest_parent),
+                       "Pick another parent folder, or remove or rename that "
+                       "folder, then try again.")
+
+    def git_failure(output):
+        why = classify_git_error(output)
+        if why["code"] == "not_found":
+            return outcome("not_found",
+                           "No repository called '%s' found in %s, or this "
+                           "computer's GitHub login cannot see it. Check the "
+                           "name." % (name, org), "", output)
+        if why["code"] == "auth":
+            return outcome("auth",
+                           "Could not open %s/%s: GitHub asked for a login this "
+                           "computer does not have (or did not accept)."
+                           % (org, name),
+                           "Check the repository name. If it is right, ask the lab "
+                           "manager to check the read-only GitHub login on this "
+                           "computer.", output)
+        if why["code"] == "network":
+            return outcome("network", "Could not reach GitHub.",
+                           "Check that this computer is online, then try again.",
+                           output)
+        return outcome("error", "Could not clone %s/%s." % (org, name),
+                       why["reason"], output)
+
+    def spawn_errors(action):
+        return {
+            FileNotFoundError: outcome(
+                "no_git", "git is not installed on this computer.",
+                "Ask the lab manager to install git."),
+            subprocess.TimeoutExpired: outcome(
+                "timeout", "%s took too long and was stopped." % action,
+                "Check the internet connection, then try again."),
+        }
+
+    phase("checking")
+    try:
+        code, output = _run_git(["ls-remote", url, "HEAD"], runner=runner,
+                                timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        return spawn_errors("Checking the repository")[type(error)]
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return outcome("error", "Could not run git.", str(error))
+    if code != 0:
+        return git_failure(output)
+
+    phase("cloning")
+    try:
+        code, output = _run_git(["clone", url, target], runner=runner, timeout=600)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        shutil.rmtree(target, ignore_errors=True)   # drop a half-made clone
+        return spawn_errors("Cloning")[type(error)]
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        shutil.rmtree(target, ignore_errors=True)
+        return outcome("error", "Could not run git clone.", str(error))
+    if code != 0:
+        return git_failure(output)
     if not os.path.isdir(target):
-        return {"ok": False, "output": output, "path": "",
-                "message": "git clone reported success but the folder is missing."}
-    return {"ok": True, "output": output, "path": target,
-            "message": "Cloned %s into %s." % (repo_name, target)}
+        return outcome("error", "git clone reported success but the folder is "
+                                "missing.", "", output)
+    return outcome("ok", "Cloned %s/%s into %s." % (org, name, target),
+                   output=output, path=target)
 
 
 def version_footer_lines():
@@ -3658,6 +4106,12 @@ PG_ADMIN_KEYS = ("admin_username", "admin_password", "admin_host", "admin_port")
 # DATABASE) is only supported against a local Postgres for now; a remote host may
 # be USED (registered) but not created on. See is_local_host below.
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+# The one short note both faces show when the Host of a new database is not
+# this computer: the create option is disabled and "already exists" is forced.
+REMOTE_DB_NOTE = ("Creating a database only works on this computer; a database on "
+                  "another host is registered, not created.")
 
 
 def is_local_host(host):
@@ -5882,7 +6336,30 @@ def _try_drop_role(conn, sql, role):
         return False, _pg_error(error)
 
 
-def create_database(admin, new_db, new_user="", new_password=""):
+def existing_database_fields(admin, new_db, new_user="", new_password="",
+                             host=None, port=None):
+    """The Custom config fields for REGISTERING an already-existing database
+    (no CREATE DATABASE). ``host``/``port`` are the dialog's Host/Port fields;
+    when blank they fall back to the Lab Settings admin host/port (localhost /
+    5432 by default). A blank user falls back to the admin role (and its
+    password), so the entry has the same shape as a freshly-created one."""
+    admin = admin or {}
+    a_user = str(admin.get("admin_username", "")).strip()
+    a_pw = str(admin.get("admin_password", ""))
+    user = str(new_user or "").strip()
+    host = str(host or "").strip() or str(admin.get("admin_host", "")).strip() or "localhost"
+    port = str(port or "").strip() or str(admin.get("admin_port", "")).strip() or "5432"
+    return {
+        "db_mode": DB_MODE_CUSTOM,
+        "db_name": str(new_db or "").strip(),
+        "db_user": user or a_user,
+        "db_password": (new_password or "") if user else a_pw,
+        "db_host": host,
+        "db_port": port,
+    }
+
+
+def create_database(admin, new_db, new_user="", new_password="", host=None, port=None):
     """Create a Postgres database (and optionally a role) using the admin config.
 
     Returns a result dict. On a confirmed success ``ok`` is True and ``fields``
@@ -5896,11 +6373,24 @@ def create_database(admin, new_db, new_user="", new_password=""):
     owns the database; the admin config must be complete or the create is
     blocked; a role created just before a failed CREATE DATABASE is dropped
     again (or named if it cannot be), never left a silent orphan.
+
+    ``host``/``port`` (the dialog's Host/Port fields) override the admin
+    host/port when given. Creating only works on THIS computer, so a non-local
+    host is refused before anything connects (register it instead).
     """
     result = {"ok": False, "reason": "", "message": "", "created_db": False,
               "created_role": False, "connect_ok": False, "fields": None}
 
     admin = admin or {}
+    # The target host (the dialog's Host field) is checked FIRST: a database on
+    # another host can only be registered, whatever the admin details say.
+    target = str(host or "").strip()
+    if host is not None and not is_local_host(target):
+        result["reason"] = "remote_host"
+        result["message"] = ("Not created: %s is another host. %s Tick \"The database "
+                             "already exists in Postgres\" to register it."
+                             % (target, REMOTE_DB_NOTE))
+        return result
     missing = pg_admin_ready(admin)
     if missing:
         result["reason"] = "admin_missing"
@@ -5911,6 +6401,10 @@ def create_database(admin, new_db, new_user="", new_password=""):
     a_pw = str(admin.get("admin_password", ""))
     a_host = str(admin.get("admin_host", "")).strip()
     a_port = str(admin.get("admin_port", "")).strip()
+    if host is not None:
+        a_host = target or a_host
+    if str(port or "").strip():
+        a_port = str(port).strip()
 
     # Creating a database (CREATE ROLE / CREATE DATABASE) is only supported on a
     # local Postgres for now. A remote admin host is refused here, so the block

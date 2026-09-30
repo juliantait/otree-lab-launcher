@@ -19,19 +19,43 @@ env/
 # this folder's README ARE committed. Everything the launcher writes at runtime
 # is NOT: real hosts/DB/admin (lab_info.json), saved configs which may hold
 # plaintext passwords (presets.json + its corrupt-store rescue copies), the
-# per-machine lab identity (lab.local), generated seat/label files (seats/) and
-# the app-written logs. Ignore each of those precisely so the shipped files stay.
+# per-machine lab identity (lab.local), generated seat/label files (seats/), the
+# per-user theme (ui_prefs.json) and the app-written logs. Ignore each of those
+# precisely so the shipped files stay.
 data/lab_info.json
 data/presets.json
 data/presets.json.broken-*
 data/lab.local
 data/seats/
 data/*.log
-# the launch history log and the once-a-day update-check cache (runtime state)
+# the launch history log, the once-a-day update-check cache and the per-user
+# light/dark theme (runtime state)
 data/sessions.jsonl
 data/update_check.json
+data/ui_prefs.json
 # per-settings.py append locks the launcher keeps in its OWN data folder
 data/locks/
+# save leftovers: presets.json's lock file, the temp files of the atomic saves
+# (present only if a save was interrupted) and a malformed lab_info.json that the
+# launcher moved aside before rewriting it
+data/presets.json.lock
+data/.presets-*.tmp
+data/.lab_info-*.tmp
+data/ui_prefs.json.tmp
+data/lab_info.json.*.corrupt
 
 # settings.py backups the launcher writes (those land in the user's own project)
 *.bak
+
+# local/ -- a SCRATCH folder at the repo root for anything you try out with the
+# launcher inside this checkout: test studies, repos cloned with GitHub
+# Organisation Sync (the clone folder picker opens here), exported files. The
+# launcher creates it on demand; nothing in it is ever committed or pushed.
+/local/
+
+# Files the launcher writes wherever you point its save/folder pickers (which can
+# open inside this checkout): exported one-click shortcuts (Launch_<config>.vbs /
+# .command) and participant-PC shortcut bundles ("<lab> participant PC shortcuts/").
+Launch_*.vbs
+Launch_*.command
+* participant PC shortcuts/

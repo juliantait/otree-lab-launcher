@@ -394,12 +394,15 @@ _FOLDER_DIALOG_HELPER = (
 )
 
 
-def _build_folder_dialog_helper(title):
+def _build_folder_dialog_helper(title, initialdir=""):
     """A stdlib-tkinter folder-picker helper source with a custom window title
     (JSON-encoded so any quote/backslash is safe). Mirrors
     :data:`_FOLDER_DIALOG_HELPER` but lets the caller name what folder to choose
-    (e.g. where to save the participant-PC shortcuts)."""
+    (e.g. where to save the participant-PC shortcuts) and, optionally, the folder
+    the picker opens in."""
     title_lit = json.dumps(str(title or "Choose a folder"))
+    if initialdir:
+        title_lit += ", initialdir=%s" % json.dumps(str(initialdir))
     return (
         "import sys\n"
         "import tkinter\n"
@@ -774,10 +777,9 @@ class Api(object):
             # this lets the native pywebview path apply it right after boot too.
             "theme": core.load_ui_theme(),
             # GitHub Organisation Sync opt-in (default OFF): the tick-box state and
-            # the configured org name (ui_prefs.json). Drives whether the page shows
-            # the GitHub Org. + Git update buttons.
-            "github_sync": {"enabled": core.load_github_sync_enabled(),
-                            "org": core.load_github_org()},
+            # the configured org name (a lab setting, in lab_info.json). Drives
+            # whether the page shows the GitHub Org. + Git update buttons.
+            "github_sync": core.load_github_sync(),
         }
 
     @api_call
@@ -1227,26 +1229,28 @@ class Api(object):
 
     @api_call
     def get_github_sync(self):
-        """The persisted GitHub Organisation Sync opt-in (data/ui_prefs.json).
-        Fail-soft: a missing/broken file returns the OFF default and an empty org.
+        """The persisted GitHub Organisation Sync opt-in (a lab setting, in
+        lab_info.json). Fail-soft: a missing/broken file returns the OFF default
+        and an empty org.
         """
-        return {"ok": True, "enabled": core.load_github_sync_enabled(),
-                "org": core.load_github_org()}
+        stored = core.load_github_sync()
+        return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
 
     @api_call
     def set_github_sync(self, enabled, org=""):
         """Persist the GitHub Organisation Sync tick box AND the organisation name
-        to the per-user prefs file (ui_prefs.json), same mechanism as the theme.
+        as lab settings (lab_info.json, like the Lab Settings Database section).
         The tick box only shows/hides the buttons; nothing runs here. Fail-soft."""
-        stored = core.save_github_sync_prefs(enabled, org)
+        stored = core.save_github_sync_settings(enabled, org)
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
 
     @api_call
     def git_update_study(self, project_path):
         """Per-config Git update: run ``git pull`` in the SELECTED study folder
         (core.git_update_study, fail-soft), NEVER the launcher app/ folder and never
-        any oTree/experiment process. Returns the classified outcome (not_repo /
-        current / updated / error) with a clear message for the page to show."""
+        any oTree/experiment process. Returns core's result (not_repo / current /
+        updated / error, plus the changed files, latest commit and plain-language
+        failure reason) for the page to render in the study status card."""
         return core.git_update_study(project_path or "")
 
     @api_call
@@ -1312,7 +1316,12 @@ class Api(object):
                                               "message": "GitHub clone cancelled."})
             return
         self._status("", "Cloning %s/%s into %s ..." % (org, repo, dest))
-        result = core.git_clone_org_repo(org, repo, dest)
+        # Checking -> cloning phases drive the busy line INSIDE the clone dialog,
+        # which stays open until the clone has succeeded.
+        result = core.git_clone_org_repo(
+            org, repo, dest,
+            on_phase=lambda phase: self._callback(
+                "pywOnCloneProgress", {"phase": phase, "org": org, "repo": repo}))
         if result.get("ok") and result.get("path"):
             path = result["path"]
             result["project"] = project_status(path)
@@ -1329,16 +1338,20 @@ class Api(object):
         Browser mode runs the local stdlib-tkinter subprocess dialog, whose
         ``askdirectory`` supports a title. Native pywebview uses create_file_dialog
         on this worker thread; pywebview's FOLDER_DIALOG has no title parameter, so
-        the OS default folder prompt is shown there."""
+        the OS default folder prompt is shown there. Both open in the gitignored
+        local/ scratch folder (core.default_clone_parent), not the launcher
+        checkout the process runs in."""
         repo = (repo or "").strip()
         title = ("Choose where to create the '%s' folder" % repo if repo
                  else "Choose where to create the cloned study folder")
+        start = core.default_clone_parent()
         if getattr(self, "browser_mode", False):
             return _native_folder_dialog_subprocess(
-                helper=_build_folder_dialog_helper(title))
+                helper=_build_folder_dialog_helper(title, start))
         try:
             import webview
-            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+            result = self.window.create_file_dialog(
+                webview.FOLDER_DIALOG, directory=start)
         except Exception:
             LOG.exception("clone destination dialog failed")
             return ""
@@ -1364,7 +1377,7 @@ class Api(object):
 
     @api_call
     def create_database(self, new_db, new_user="", new_password="", researcher="",
-                        already_exists=False):
+                        already_exists=False, host="", port=""):
         """Create a Postgres database with the stored admin config (Feature 2),
         then, on a confirmed create, register it in the global registry with its
         creator researcher and persist the store (Round 3, Task 2).
@@ -1381,12 +1394,20 @@ class Api(object):
         REGISTERS the connection WITHOUT running CREATE DATABASE, mirroring the Tk
         ``_run_register_existing_database``. The registry entry is identical either
         way, so the database is selectable/editable afterward.
+
+        ``host``/``port`` are the dialog's Host/Port fields (blank = the Lab
+        Settings admin host/port, localhost by default). Registering keeps them
+        so launches use that host; creating on a non-local host is refused by
+        ``core.create_database``.
         """
+        admin = core.pg_admin_from_store(self.store_extra)
+        host = str(host or "").strip() or admin.get("admin_host", "") or "localhost"
+        port = str(port or "").strip() or admin.get("admin_port", "") or "5432"
         if already_exists:
             return self._register_existing_database(new_db, new_user, new_password,
-                                                    researcher)
-        admin = core.pg_admin_from_store(self.store_extra)
-        result = core.create_database(admin, new_db, new_user, new_password)
+                                                    researcher, host, port)
+        result = core.create_database(admin, new_db, new_user, new_password,
+                                      host=host, port=port)
         if result.get("ok"):
             fields = result.get("fields") or {}
             try:
@@ -1400,27 +1421,19 @@ class Api(object):
                 result["register_error"] = str(error)
         return result
 
-    def _register_existing_database(self, new_db, new_user, new_password, researcher):
+    def _register_existing_database(self, new_db, new_user, new_password, researcher,
+                                    host="", port=""):
         """Register an ALREADY-EXISTING database (no CREATE DATABASE). Host/port
-        come from the Lab Settings admin config (where the database lives) and a
-        blank user/password falls back to the admin role, so the resulting registry
-        entry is IDENTICAL in shape to a freshly-created one (mirror of the Tk
-        ``_run_register_existing_database``)."""
+        are the dialog's Host/Port fields (blank = the Lab Settings admin
+        host/port) and a blank user/password falls back to the admin role, so the
+        resulting registry entry is IDENTICAL in shape to a freshly-created one
+        (mirror of the Tk ``_run_register_existing_database``)."""
         new_db = (new_db or "").strip()
         if not new_db:
             return {"ok": False, "message": "Enter a database name."}
         admin = core.pg_admin_from_store(self.store_extra)
-        a_user = str(admin.get("admin_username", "")).strip()
-        a_pw = str(admin.get("admin_password", ""))
-        user = (new_user or "").strip()
-        fields = {
-            "db_mode": core.DB_MODE_CUSTOM,
-            "db_name": new_db,
-            "db_user": user or a_user,
-            "db_password": (new_password or "") if user else a_pw,
-            "db_host": str(admin.get("admin_host", "")).strip(),
-            "db_port": str(admin.get("admin_port", "")).strip(),
-        }
+        fields = core.existing_database_fields(admin, new_db, new_user, new_password,
+                                               host=host, port=port)
         result = {"ok": True, "created_db": False, "registered_only": True,
                   "fields": fields,
                   "message": "Registered the existing database %r (not created)." % new_db}
@@ -1591,7 +1604,8 @@ class Api(object):
             return saved
         admin_cfg = core.pg_admin_from_store(self.store_extra)
         res = core.create_database(admin_cfg, fields["db_name"],
-                                   fields["db_user"], fields["db_password"])
+                                   fields["db_user"], fields["db_password"],
+                                   host=fields["db_host"], port=fields["db_port"])
         if res.get("ok"):
             result = {"ok": True, "created": True, "existed": False,
                       "fields": res.get("fields") or fields,
@@ -1642,12 +1656,11 @@ class Api(object):
     def use_example_lab_info(self):
         """Convenience mirror of the Tk wizard's "Use example values": write the
         shipped lab_info.example.json as lab_info.json and reload. Thin wrapper
-        over ``core.load_example_lab_info`` + save + reload."""
-        example = core.load_example_lab_info()
+        over ``core.example_lab_info_to_save`` + save + reload."""
+        example = core.example_lab_info_to_save()
         if not example:
             return {"ok": False,
                     "message": "Could not read lab_info.example.json."}
-        example.pop("_comment", None)
         try:
             core.save_lab_info(example)
             core.reload_lab_info()
