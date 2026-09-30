@@ -16,6 +16,7 @@ Standard library only: Python 3 + tkinter/ttk.  No pip installs, no build step.
 from __future__ import annotations
 
 import contextlib
+import copy
 import datetime as _dt
 import getpass
 import hashlib
@@ -24,6 +25,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
 import struct
 import subprocess
@@ -76,15 +78,52 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.15"
+APP_VERSION = "1.5.0"
+
+# ---------------------------------------------------------------------------
+# The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
+# and gitignored; nothing in it ships. Three files, three scopes:
+#   lab_info.json       LAB level: copied between the PCs of a lab to set one up
+#                        (labs, maps, default oTree admin login, lab settings).
+#   machine.json        THIS PC only: which lab it is (home_lab), which labs it
+#                        shows, the theme, the Postgres admin login and this PC's
+#                        databases (with passwords) + its default database.
+#   saved_configs.json  THIS PC's saved launch configs (each references a database
+#                        by id) + the researcher roster.
+# Generated: launch_history.jsonl, seats/, update_check.json, logs, locks/.
+# Old (v0) files -- presets.json, lab.local, ui_prefs.json, sessions.jsonl,
+# maps/ -- are converted once at startup by migrate_data_folder() and moved to
+# data/retired/. See _ai/storage_redesign_plan.md.
+# ---------------------------------------------------------------------------
+SCHEMA_VERSION = 1
+# Back-compat alias (older callers/tests read STORAGE_VERSION).
+STORAGE_VERSION = SCHEMA_VERSION
+MACHINE_FILENAME = "machine.json"
+SAVED_CONFIGS_FILENAME = "saved_configs.json"
+LAUNCH_HISTORY_FILENAME = "launch_history.jsonl"
+UPDATE_CHECK_FILENAME = "update_check.json"
+LOCKS_DIRNAME = "locks"
+RETIRED_DIRNAME = "retired"
+ASSETS_DIRNAME = "assets"
+# Old (v0) file names, read only by the migration (and its fail-soft fallback).
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
-UPDATE_CHECK_FILENAME = "update_check.json"
-# A gitignored, one-word per-machine marker ("large"/"small") that identifies
-# which lab this computer is. It sits next to the launcher checkout, not in a
-# researcher's project, because it is a property of the machine.
 LAB_MARKER_FILENAME = "lab.local"
-STORAGE_VERSION = 1
+LEGACY_UI_PREFS_FILENAME = "ui_prefs.json"
+LEGACY_MAPS_DIRNAME = "maps"
+
+
+class NewerSchemaError(Exception):
+    """A data file was written by a NEWER launcher (its schema_version is higher
+    than this app knows). The app refuses to migrate or overwrite it."""
+
+    def __init__(self, path, version):
+        self.path = path
+        self.version = version
+        Exception.__init__(self, (
+            "%s was saved by a newer version of the launcher (schema %s; this "
+            "version knows up to %s). Update the launcher before using this data "
+            "folder." % (os.path.basename(str(path)), version, SCHEMA_VERSION)))
 
 # ---------------------------------------------------------------------------
 # Lab-specific data lives in lab_info.json (gitignored), NOT in this source.
@@ -125,8 +164,30 @@ def app_dir():
 
 def data_dir():
     """The single folder holding everything the launcher reads and writes:
-    the repo root's data/ folder (parent of app/)."""
+    the repo root's data/ folder (parent of app/). OTREE_LAB_DATA_DIR overrides
+    it (the test suite points it at a temp folder so no test touches real data)."""
+    override = os.environ.get("OTREE_LAB_DATA_DIR")
+    if override:
+        return override
     return os.path.join(repo_root(), DATA_DIRNAME)
+
+
+def assets_dir():
+    """Shipped, read-only files (the example lab_info, example maps, the data
+    folder README text): app/assets/. Nothing here is ever written."""
+    return os.path.join(app_dir(), ASSETS_DIRNAME)
+
+
+def locks_dir(folder=None):
+    """Where every lock file lives: data/locks/ (each is removed after use)."""
+    return os.path.join(folder or data_dir(), LOCKS_DIRNAME)
+
+
+def lock_path(name, folder=None):
+    """The lock file for ``name`` inside locks/ (the folder is created)."""
+    target = locks_dir(folder)
+    os.makedirs(target, exist_ok=True)
+    return os.path.join(target, name + ".lock")
 
 
 def secure_chmod(path):
@@ -154,14 +215,23 @@ def exclusive_file_lock(lock_path):
     no-op; the caller's atomic re-read + os.replace is still correct on its own,
     the lock only serialises concurrent appenders so they cannot each pass the
     "marker not present" check before either writes.
+
+    The lock file is REMOVED after use (1.5.0: data/locks/ used to collect
+    hundreds of stale files). After locking, the holder checks the path still
+    names the file it locked (another holder may have removed it meanwhile) and
+    retries on a fresh file if not, so removing it never lets two holders in.
     """
-    handle = open(lock_path, "a+")
-    locked = False
-    try:
+    folder = os.path.dirname(lock_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    handle, locked, posix = None, False, False
+    for _attempt in range(50):
+        handle = open(lock_path, "a+")
+        locked = posix = False
         try:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            locked = True
+            locked = posix = True
         except ImportError:
             try:
                 import msvcrt
@@ -170,23 +240,57 @@ def exclusive_file_lock(lock_path):
                 locked = True
             except (ImportError, OSError):
                 pass
+        if not locked:
+            break
+        try:
+            same = os.path.samestat(os.fstat(handle.fileno()), os.stat(lock_path))
+        except OSError:
+            same = False
+        if same:
+            break
+        _release_file_lock(handle, posix)
+        handle = None
+    try:
         yield
     finally:
-        if locked:
-            try:
-                import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except Exception:
+        if handle is not None:
+            if locked and posix:
+                # POSIX: unlink while still holding it; a waiter that then gets
+                # the lock sees the path is gone and retries on a new file.
                 try:
-                    import msvcrt
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                except Exception:
+                    os.unlink(lock_path)
+                except OSError:
                     pass
+            _release_file_lock(handle, posix if locked else None)
+            if locked and not posix:
+                # Windows: an open file cannot be deleted, so remove it after
+                # closing; if another process already holds it, it stays for
+                # that holder to remove.
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+
+
+def _release_file_lock(handle, posix):
+    """Unlock (posix True/False; None = never locked) and close a lock handle."""
+    if posix is True:
         try:
-            handle.close()
-        except OSError:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
             pass
+    elif posix is False:
+        try:
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+    try:
+        handle.close()
+    except OSError:
+        pass
 
 
 def launch_port(cfg):
@@ -211,103 +315,56 @@ def launch_port(cfg):
     return None
 
 
-def lab_info_path():
-    """Where lab_info.json lives. OTREE_LAB_INFO overrides it (used by tests)."""
-    override = os.environ.get("OTREE_LAB_INFO")
-    if override:
-        return override
-    return os.path.join(data_dir(), LAB_INFO_FILENAME)
+# ---------------------------------------------------------------------------
+# JSON helpers shared by the three data files (lab_info.json, machine.json,
+# saved_configs.json). Every file carries a top-level schema_version; a missing
+# one means the old (v0) layout.
+# ---------------------------------------------------------------------------
 
 
-def lab_info_status(path=None):
-    """Distinguish the three states of lab_info.json.
+def schema_version_of(data):
+    """The schema_version of a loaded data file (missing or garbled = 0, "v0")."""
+    if not isinstance(data, dict):
+        return 0
+    try:
+        return max(0, int(data.get("schema_version", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
-    Returns one of:
-      "missing"  -- the file does not exist (genuine first run)
-      "malformed" -- the file exists but is unreadable or not a JSON object
-                     (a hand-edit typo, or an interrupted write from before the
-                     atomic-save fix); it is RECOVERABLE, so a wizard must not
-                     silently overwrite it (see :func:`load_lab_info_for_setup`)
-      "ok"       -- the file exists and parses to a dict
-    """
-    path = path or lab_info_path()
-    if not os.path.exists(path):
-        return "missing"
+
+def _read_json(path):
+    """``(status, data)`` for a JSON file: status is "missing", "malformed" or "ok"."""
+    if not path or not os.path.exists(path):
+        return "missing", None
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
+            return "ok", json.load(handle)
     except (OSError, ValueError):
-        return "malformed"
-    return "ok" if isinstance(data, dict) else "malformed"
+        return "malformed", None
 
 
-def load_lab_info(path=None):
-    """Read lab_info.json into a dict, or None when it is absent or unreadable.
+def refuse_newer_schema(path):
+    """Raise :class:`NewerSchemaError` when the file at ``path`` was written by a
+    newer launcher. Absent or unreadable files pass."""
+    status, data = _read_json(path)
+    if status == "ok" and schema_version_of(data) > SCHEMA_VERSION:
+        raise NewerSchemaError(path, schema_version_of(data))
 
-    A present-but-unparseable file also returns None, so a hand-edit typo is
-    treated the same as "not set up yet" (first run) rather than crashing. To
-    tell those apart (and preserve a recoverable file) use
-    :func:`lab_info_status` / :func:`preserve_corrupt_lab_info`.
+
+def write_json_atomic(path, data, prefix=".data-"):
+    """Write ``data`` to ``path`` atomically and owner-only (0o600).
+
+    A temp file in the same folder is written, fsync'd and os.replace'd into
+    place, so an interrupted write never leaves half a file. The data files hold
+    passwords, hence 0o600 on POSIX (see :func:`secure_chmod`). Refuses with
+    :class:`NewerSchemaError` to overwrite a file a newer launcher wrote.
     """
-    path = path or lab_info_path()
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def preserve_corrupt_lab_info(path=None):
-    """Rename a malformed lab_info.json to a timestamped ``.corrupt`` copy.
-
-    Called before a first-run wizard is allowed to write a fresh lab_info.json:
-    when the existing file EXISTS but is unreadable/invalid it is recoverable, so
-    it is moved aside (``lab_info.json.<stamp>.corrupt``) rather than silently
-    overwritten. Returns the recovery path if one was made, else None (the file
-    was absent or already valid). Never raises: a rename failure just returns
-    None so the caller can still proceed.
-    """
-    path = path or lab_info_path()
-    if lab_info_status(path) != "malformed":
-        return None
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    recovery = "%s.%s.corrupt" % (path, stamp)
-    try:
-        os.replace(path, recovery)
-    except OSError:
-        return None
-    return recovery
-
-
-def lab_info_present(path=None):
-    """True when a readable lab_info.json exists. The first-run check: when this
-    is False the launcher runs its setup wizard to create the file."""
-    return load_lab_info(path) is not None
-
-
-def save_lab_info(data, path=None):
-    """Write a lab_info dict to lab_info.json atomically, owner-only. Returns path.
-
-    The pretty-printed JSON is written to a temp file in the same directory,
-    flushed + fsync'd, then os.replace'd into place, so an interrupted write can
-    never leave a half-written (malformed) lab_info.json that the next start
-    would mistake for a broken first run. The file holds DB and oTree admin
-    passwords, so it is created 0o600 (owner-only) on POSIX -- see
-    :func:`secure_chmod`.
-    """
-    path = path or lab_info_path()
     folder = os.path.dirname(path) or "."
     os.makedirs(folder, exist_ok=True)
-    # If the file we are about to replace is malformed (a recoverable typo or a
-    # half-written file from an old, non-atomic save), move it aside first so the
-    # first-run wizard's fresh write never silently destroys recoverable data. A
-    # valid file is left untouched (this is a no-op) and overwritten as normal.
-    preserve_corrupt_lab_info(path)
-    text = json.dumps(data, indent=2)
+    refuse_newer_schema(path)
+    text = json.dumps(data, indent=2, ensure_ascii=False)
     handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=folder, prefix=".lab_info-", suffix=".tmp", delete=False
-    )
+        "w", encoding="utf-8", dir=folder, prefix=prefix, suffix=".tmp", delete=False)
     tmp_name = handle.name
     try:
         secure_chmod(tmp_name)
@@ -328,22 +385,246 @@ def save_lab_info(data, path=None):
     return path
 
 
+# ---------------------------------------------------------------------------
+# lab_info.json (LAB level). The ONLY place labs live: the setup wizard and Lab
+# Settings write here, and a lab manager copies this one file to every PC of the
+# lab. Schema 1:
+#   {schema_version, labs: [{id, name, host, seats, geometry, cols, map,
+#    default_room, shortcut_label, deleted, suggested_database: {db_name,
+#    db_user}}], maps: {name: map}, default_admin: {username, password},
+#    github_sync_enabled, github_org, databases_localhost_only}
+# No database passwords and nothing machine-specific live here.
+# ---------------------------------------------------------------------------
+
+
+def lab_info_path():
+    """Where lab_info.json lives. OTREE_LAB_INFO overrides it (used by tests)."""
+    override = os.environ.get("OTREE_LAB_INFO")
+    if override:
+        return override
+    return os.path.join(data_dir(), LAB_INFO_FILENAME)
+
+
+def lab_info_status(path=None):
+    """Distinguish the three states of lab_info.json.
+
+    Returns one of:
+      "missing"  -- the file does not exist (genuine first run)
+      "malformed" -- the file exists but is unreadable or not a JSON object
+                     (a hand-edit typo, or an interrupted write); it is
+                     RECOVERABLE, so it is moved aside, never silently overwritten
+      "ok"       -- the file exists and parses to a dict
+    """
+    status, data = _read_json(path or lab_info_path())
+    if status == "ok" and not isinstance(data, dict):
+        return "malformed"
+    return status
+
+
+def load_lab_info_raw(path=None):
+    """lab_info.json exactly as stored (any schema), or None."""
+    status, data = _read_json(path or lab_info_path())
+    return data if status == "ok" and isinstance(data, dict) else None
+
+
+def load_lab_info(path=None):
+    """lab_info.json as a schema-1 dict, or None when absent or unreadable.
+
+    An old (v0) file is converted IN MEMORY (nothing is written here; the
+    startup migration does the writing). For the default location the full
+    legacy conversion is used, so Lab Settings edits that an old install kept in
+    presets.json still show even if the migration could not run (fail-soft).
+    A present-but-unparseable file returns None, like a first run.
+    """
+    default = path is None
+    path = path or lab_info_path()
+    data = load_lab_info_raw(path)
+    if default and (data is None or schema_version_of(data) == 0):
+        legacy = _legacy_view()
+        if legacy is not None and legacy.get("lab_info") is not None:
+            return copy.deepcopy(legacy["lab_info"])
+    if data is None:
+        return None
+    if schema_version_of(data) == 0:
+        return lab_info_from_v0(data, os.path.dirname(os.path.abspath(path)))
+    return normalize_lab_info(data)
+
+
+def preserve_corrupt_lab_info(path=None):
+    """Rename a malformed lab_info.json to a timestamped ``.corrupt`` copy.
+
+    Called before lab_info.json is rewritten: when the existing file EXISTS but
+    is unreadable/invalid it is recoverable, so it is moved aside
+    (``lab_info.json.<stamp>.corrupt``) rather than silently overwritten.
+    Returns the recovery path if one was made, else None. Never raises.
+    """
+    path = path or lab_info_path()
+    if lab_info_status(path) != "malformed":
+        return None
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    recovery = "%s.%s.corrupt" % (path, stamp)
+    try:
+        os.replace(path, recovery)
+    except OSError:
+        return None
+    return recovery
+
+
+def lab_info_present(path=None):
+    """True when a readable lab_info.json (any schema) exists."""
+    return load_lab_info(path) is not None
+
+
+def save_lab_info(data, path=None):
+    """Write a lab_info dict to lab_info.json (schema 1) atomically, owner-only.
+
+    A v0 dict is converted first. Holds the lab_info lock, refuses to overwrite a
+    newer-schema file, and moves a malformed existing file aside first. Returns
+    the path."""
+    path = path or lab_info_path()
+    if schema_version_of(data) == 0 and _looks_v0_lab_info(data):
+        data = lab_info_from_v0(data, os.path.dirname(os.path.abspath(path)))
+    data = normalize_lab_info(data)
+    with exclusive_file_lock(lock_path("lab_info", os.path.dirname(os.path.abspath(path)))):
+        preserve_corrupt_lab_info(path)
+        write_json_atomic(path, data, prefix=".lab_info-")
+    return path
+
+
+def _looks_v0_lab_info(data):
+    """True for an old-layout lab_info dict (labs keyed by id, a database block,
+    an admin block or default_lab)."""
+    if not isinstance(data, dict):
+        return False
+    return (isinstance(data.get("labs"), dict) or "database" in data
+            or "admin" in data or "default_lab" in data)
+
+
+def normalize_stored_lab(raw):
+    """One lab of lab_info.json in its stored (schema 1) shape."""
+    raw = raw or {}
+    lab_id = str(raw.get("id", "") or "").strip()
+    seats = raw.get("seats", [])
+    if isinstance(seats, (list, tuple)):
+        seats = [str(s).strip() for s in seats if str(s).strip()]
+    else:
+        seats = parse_seat_list(seats)
+    geo = str(raw.get("geometry", "") or "")
+    if geo not in LAB_GEOMETRIES:
+        geo = LAB_GEO_GRID
+    try:
+        cols = max(0, int(raw.get("cols", 0) or 0))
+    except (TypeError, ValueError):
+        cols = 0
+    map_field = raw.get("map")
+    entry = {
+        "id": lab_id,
+        "name": str(raw.get("name", "") or "").strip() or lab_id,
+        "host": str(raw.get("host", raw.get("ip", "")) or "").strip(),
+        "seats": seats,
+        "geometry": geo,
+        "cols": cols,
+        "map": map_field.strip() if isinstance(map_field, str) else "",
+        "default_room": sanitize_room_name(raw.get("default_room")),
+        "shortcut_label": str(raw.get("shortcut_label", "") or "").strip(),
+        "deleted": bool(raw.get("deleted", False)),
+    }
+    suggested = raw.get("suggested_database")
+    if isinstance(suggested, dict) and str(suggested.get("db_name", "") or "").strip():
+        entry["suggested_database"] = {
+            "db_name": str(suggested.get("db_name", "")).strip(),
+            "db_user": str(suggested.get("db_user", "") or "").strip()}
+    return entry
+
+
+def normalize_lab_info(info):
+    """A schema-1 lab_info dict with every field in a known shape.
+
+    Unknown top-level keys are kept (a newer launcher may add some). A lab whose
+    ``map`` is an inline object gets that object moved into the ``maps`` table
+    under the lab's id."""
+    info = dict(info or {})
+    maps = info.get("maps")
+    maps = {str(k): v for k, v in maps.items() if isinstance(v, dict)} \
+        if isinstance(maps, dict) else {}
+    labs = []
+    seen = set()
+    raw_labs = info.get("labs")
+    if isinstance(raw_labs, dict):   # tolerate a hand-made dict keyed by id
+        raw_labs = [dict(v or {}, id=k) for k, v in raw_labs.items()]
+    for raw in (raw_labs if isinstance(raw_labs, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        entry = normalize_stored_lab(raw)
+        if not entry["id"] or entry["id"] in seen:
+            continue
+        if isinstance(raw.get("map"), dict):
+            name = _unique_key(entry["id"], maps)
+            maps[name] = raw["map"]
+            entry["map"] = name
+        seen.add(entry["id"])
+        labs.append(entry)
+    admin = info.get("default_admin")
+    if not isinstance(admin, dict):
+        admin = info.get("admin") if isinstance(info.get("admin"), dict) else {}
+    out = {"schema_version": SCHEMA_VERSION}
+    comment = info.get("_comment")
+    if comment:
+        out["_comment"] = comment
+    out["labs"] = labs
+    out["maps"] = maps
+    out["default_admin"] = {"username": str(admin.get("username", "") or "admin"),
+                            "password": str(admin.get("password", "") or "")}
+    for key, value in info.items():
+        if key in ("schema_version", "_comment", "labs", "maps", "default_admin",
+                   "admin", "default_lab", "database"):
+            continue
+        out[key] = value
+    return out
+
+
+def _unique_key(base, table):
+    """``base`` or ``base_2``/``base_3``... so it is not already a key of ``table``."""
+    base = str(base or "map")
+    if base not in table:
+        return base
+    n = 2
+    while "%s_%d" % (base, n) in table:
+        n += 1
+    return "%s_%d" % (base, n)
+
+
+def lab_info_labs(info=None):
+    """The stored labs (schema-1 entries, incl. soft-deleted) of a lab_info dict
+    (the live one by default)."""
+    info = LAB_INFO if info is None else info
+    if not isinstance(info, dict):
+        return []
+    if schema_version_of(info) == 0 and _looks_v0_lab_info(info):
+        info = lab_info_from_v0(info, None)
+    return normalize_lab_info(info)["labs"]
+
+
+def lab_info_maps(info=None):
+    """The inline maps table (name -> map object) of a lab_info dict."""
+    info = LAB_INFO if info is None else info
+    maps = (info or {}).get("maps")
+    return dict(maps) if isinstance(maps, dict) else {}
+
+
 def lab_info_example_path():
-    """Where the shipped lab_info.example.json lives: data/ at the repo root."""
-    return os.path.join(data_dir(), LAB_INFO_EXAMPLE_FILENAME)
+    """Where the shipped example lab_info.json lives: app/assets/."""
+    return os.path.join(assets_dir(), LAB_INFO_EXAMPLE_FILENAME)
 
 
 def load_example_lab_info():
-    """The committed lab_info.example.json as a dict, or None."""
+    """The shipped lab_info.example.json as a schema-1 dict, or None."""
     return load_lab_info(lab_info_example_path())
 
 
 def example_lab_info_to_save():
     """The example as a lab_info dict ready for "Use example values", or None.
-
-    Drops the ``_comment`` and the GitHub Organisation Sync placeholders (off /
-    empty), so a sync setting chosen before the wizard ran (held in ui_prefs.json)
-    still migrates in instead of being outranked by the example's defaults."""
+    Drops the ``_comment`` and the GitHub Organisation Sync placeholders."""
     example = load_example_lab_info()
     if example is None:
         return None
@@ -353,12 +634,14 @@ def example_lab_info_to_save():
 
 
 def available_maps():
-    """Sorted names of the map files in the maps/ folder (bare stems), so a
-    setup wizard can offer them for a lab to reference."""
+    """Sorted names of the maps a lab may reference: the live lab_info.json
+    ``maps`` table plus the shipped example maps (app/assets/maps/)."""
+    names = set(lab_info_maps().keys())
     try:
-        names = [f[:-5] for f in os.listdir(maps_dir()) if f.endswith(".json")]
+        names.update(f[:-5] for f in os.listdir(os.path.join(assets_dir(), "maps"))
+                     if f.endswith(".json"))
     except OSError:
-        names = []
+        pass
     return sorted(names)
 
 
@@ -366,15 +649,9 @@ def validate_wizard_labs(labs):
     """Validate a wizard's list of labs with the SAME rule the Lab Settings path
     uses (:func:`validate_lab_preset_fields`): each lab needs a name, a non-empty
     Host/IP and at least one valid, non-duplicate seat label; and no two labs may
-    resolve to the same id. Returns ``(ok, message)``.
-
-    Both wizard faces (the Tk FirstRunWizard and the web setup wizard) call this
-    before writing lab_info.json, so the first-run path can no longer save a lab
-    with an EMPTY host -- which used to render ``<host>`` in the participant links
-    and then hide the wizard on every future start. There is deliberately ONE
-    validator (this delegates to ``validate_lab_preset_fields``); the wizards do
-    not invent their own.
-    """
+    resolve to the same id. Returns ``(ok, message)``. Both wizard faces call
+    this before writing lab_info.json (ONE validator; the wizards do not invent
+    their own)."""
     labs = labs or []
     if not labs:
         return False, "Add at least one lab first."
@@ -395,75 +672,68 @@ def validate_wizard_labs(labs):
     return True, ""
 
 
-def build_lab_info(labs, database, admin, default_lab=None):
-    """Assemble a lab_info dict from wizard inputs.
+def build_lab_info(labs, database=None, admin=None, default_lab=None, maps=None):
+    """Assemble a schema-1 lab_info dict from wizard inputs.
 
-    ``labs`` is a list of {"id"?, "name", "host", "seats": [...], "map": <name or "">}.
-    A blank id is slugified from the name. ``database`` and ``admin`` are dicts.
+    ``labs`` is a list of {"id"?, "name", "host", "seats": [...], "map": <name or
+    "">, "default_room"?, "shortcut_label"?, "suggested_database"?}. A blank id is
+    slugified from the name. ``admin`` is the default oTree admin login
+    ({username, password}). ``database`` is optional: only its name and user are
+    used, as the ``suggested_database`` of ``default_lab`` (or the first lab) when
+    that lab has none -- a database password never goes into lab_info.json.
+    Each referenced map is copied into the inline ``maps`` table (from ``maps``,
+    the live lab_info or the shipped examples).
 
-    Each lab is checked with the shared :func:`validate_lab_preset_fields` rule
-    (the same one the Lab Settings path uses); a lab that fails it -- an empty
-    Host/IP, no/invalid seats, or a duplicate id -- is SKIPPED rather than written
-    as a broken default. Callers should gate the save on
-    :func:`validate_wizard_labs` so a rejection is a clear error, not a silent
-    drop, but this is the backstop that keeps a broken lab out of the file.
+    A lab that fails :func:`validate_lab_preset_fields` (empty Host/IP, no or
+    invalid seats, a duplicate id) is SKIPPED rather than written as a broken
+    default; callers gate on :func:`validate_wizard_labs` first.
     """
-    out_labs = {}
-    first_id = None
-    for raw in labs:
+    admin = admin or {}
+    maps = dict(maps or {})
+    out_labs = []
+    table = {}
+    for raw in labs or []:
         name = str(raw.get("name") or "")
         host = str(raw.get("host") or "")
         seats = raw.get("seats") or []
         ok, _message, parsed = validate_lab_preset_fields(name, host, seats)
         if not ok:
-            # Skip invalid labs (empty host / bad or missing seats): never write a
-            # broken default. The wizard front-ends validate first, so a valid run
-            # never reaches this branch.
             continue
         lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(name)
-        if not lab_id or lab_id in out_labs:
+        if not lab_id or any(l["id"] == lab_id for l in out_labs):
             continue
-        entry = {
-            "name": name.strip() or lab_id,
-            "host": host.strip(),
-            "seats": [str(s) for s in parsed],
-            # Per-lab default room (missing/blank -> "study"); drives the built-in
-            # Lab default config + new configs on this machine.
-            "default_room": sanitize_room_name(raw.get("default_room")),
-        }
-        if str(raw.get("map") or "").strip():
-            entry["map"] = str(raw["map"]).strip()
-        # Optional: the human name the participant-PC desktop shortcuts are saved
-        # as, shown in the launch briefing. Only written when set.
-        if str(raw.get("shortcut_label") or "").strip():
-            entry["shortcut_label"] = str(raw["shortcut_label"]).strip()
-        out_labs[lab_id] = entry
-        if first_id is None:
-            first_id = lab_id
-    data = {
-        "default_lab": default_lab or first_id or "",
+        entry = normalize_stored_lab(dict(raw, id=lab_id, name=name.strip() or lab_id,
+                                          host=host.strip(), seats=[str(s) for s in parsed]))
+        map_name = entry["map"]
+        if map_name:
+            obj = maps.get(map_name) or load_map_file(map_name)
+            if isinstance(obj, dict):
+                table[map_name] = obj
+            else:
+                entry["map"] = ""
+        out_labs.append(entry)
+    target = str(default_lab or "").strip() or (out_labs[0]["id"] if out_labs else "")
+    db_name = str((database or {}).get("db_name", "") or "").strip()
+    if db_name:
+        for entry in out_labs:
+            if entry["id"] == target and "suggested_database" not in entry:
+                entry["suggested_database"] = {
+                    "db_name": db_name,
+                    "db_user": str((database or {}).get("db_user", "") or "").strip()}
+    return normalize_lab_info({
         "labs": out_labs,
-        "database": {
-            "db_name": str(database.get("db_name", "otree")),
-            "db_user": str(database.get("db_user", "otree")),
-            "db_password": str(database.get("db_password", "")),
-            "db_host": str(database.get("db_host", "localhost")),
-            "db_port": str(database.get("db_port", "5432")),
-        },
-        "admin": {
-            "username": str(admin.get("username", "admin")),
-            "password": str(admin.get("password", "")),
-        },
-    }
-    return data
+        "maps": table,
+        "default_admin": {"username": str(admin.get("username", "") or "admin"),
+                          "password": str(admin.get("password", "") or "")},
+    })
 
 
-# Loaded once at import. The launcher re-reads via load_lab_info() after the
-# wizard writes the file, so a first run does not need a restart.
-LAB_INFO = load_lab_info()
+# The live, module-level lab and machine state. Filled by reload_lab_info() at the
+# END of this module (the loaders need helpers defined further down) and again
+# whenever the files change, so every reader sees the current files.
+LAB_INFO = None
 
-# Safe placeholders, used ONLY until lab_info.json exists. Real values always
-# come from the file.
+# Safe placeholders, used only while this PC has no database at all.
 _DUMMY_DB = {
     "db_name": "otree", "db_user": "otree", "db_password": "",
     "db_host": "localhost", "db_port": "5432",
@@ -471,50 +741,43 @@ _DUMMY_DB = {
 
 
 def lab_db_from_info(info):
-    """The database credentials dict for a lab_info dict (placeholders if None)."""
+    """Back-compat: the ``database`` block of an OLD (v0) lab_info dict, or the
+    placeholders. Schema-1 lab_info.json has no database (databases are per PC,
+    in machine.json)."""
     out = dict(_DUMMY_DB)
     db = (info or {}).get("database") or {}
-    for key in _DUMMY_DB:
-        if db.get(key) is not None:
-            out[key] = str(db[key])
+    if isinstance(db, dict):
+        for key in _DUMMY_DB:
+            if db.get(key) is not None:
+                out[key] = str(db[key])
     return out
 
 
 def wizard_lab_db():
-    """The IMMUTABLE lab-shared credentials from the setup wizard (lab_info.json).
-
-    This is the original wizard-time database. It is the fallback for the
-    lab-shared default when no other database has been promoted, and it stays
-    fixed regardless of which database is currently chosen as the default (unlike
-    :data:`LAB_DB`, which reflects the *current* default). Keeping the two apart
-    is what lets the default-database picker offer the wizard DB as a stable
-    choice even after a custom database has been made the default.
-    """
-    return lab_db_from_info(LAB_INFO)
+    """Back-compat alias: this PC's default database connection (the
+    placeholders when it has none)."""
+    return dict(LAB_DB)
 
 
-# LAB_DB holds the RESOLVED lab-shared database credentials: what DB_MODE_LAB
-# ("Lab shared database (Postgres)") resolves to right now. On a fresh import it
-# is the setup-wizard DB from lab_info.json; once a store is loaded both UIs call
-# apply_default_database(extra), which re-points LAB_DB at whichever database the
-# store's default_database reference names (the wizard DB, or any custom DB
-# promoted to default via Lab Settings). Everything downstream -- normalize_config,
-# build_database_url, build_env, the built-in lab picker entry, database_config_fields
-# -- reads this live module attribute, so promoting a custom database to default
-# transparently redirects every DB_MODE_LAB launch to it.
-LAB_DB = lab_db_from_info(LAB_INFO)
+# LAB_DB holds the connection of THIS PC's default database (machine.json
+# default_database), or the placeholders when it has none. It is what a config
+# that follows the PC default (db_mode "lab", database_id "") resolves to; every
+# downstream reader (normalize_config, build_env, ...) reads this live attribute.
+LAB_DB = dict(_DUMMY_DB)
 
-_admin_info = (LAB_INFO or {}).get("admin") or {}
-DEFAULT_ADMIN_USERNAME = str(_admin_info.get("username") or "admin")
-DEFAULT_ADMIN_PASSWORD = str(_admin_info.get("password") or "")
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = ""
 
+# db_mode is DERIVED from a config's database_id by normalize_config and is never
+# stored (1.5.0): "lab" = follow this PC's default database (only the generated
+# Lab default does), "custom" = one database of this PC's list, "none" = SQLite.
 DB_MODE_LAB = "lab"
 DB_MODE_CUSTOM = "custom"
 DB_MODE_NONE = "none"
 
 DB_MODE_LABELS = {
-    DB_MODE_LAB: "Lab shared database (Postgres)",
-    DB_MODE_CUSTOM: "My own Postgres database",
+    DB_MODE_LAB: "This computer's default database",
+    DB_MODE_CUSTOM: "A database on this computer",
     DB_MODE_NONE: "No lab database (oTree SQLite)",
 }
 DB_MODE_BY_LABEL = {v: k for k, v in DB_MODE_LABELS.items()}
@@ -531,15 +794,18 @@ LOCAL_HOST = "localhost"
 LOCAL_LAB_LABEL = "Local (this computer)"
 
 
-def _default_lab_id_from_info(info):
-    chosen = str((info or {}).get("default_lab") or "").strip()
-    if chosen:
-        return chosen
-    labs = (info or {}).get("labs") or {}
-    return next(iter(labs), "lab")
+def _default_lab_id_from_info(info, machine=None):
+    """The lab new configs and the generated Lab default use: this PC's home lab
+    when it names a lab, else the first lab that is not deleted, else "lab"."""
+    labs = [l for l in lab_info_labs(info or {}) if not l.get("deleted")]
+    ids = [l["id"] for l in labs]
+    home = str((machine if machine is not None else MACHINE).get("home_lab") or "").strip()
+    if home and home in ids:
+        return home
+    return ids[0] if ids else "lab"
 
 
-DEFAULT_LAB_ID = _default_lab_id_from_info(LAB_INFO)
+DEFAULT_LAB_ID = "lab"
 
 AUTH_LEVELS = ["STUDY", "DEMO", "none"]
 
@@ -583,6 +849,12 @@ MASKED_PASSWORD = MASK_CHAR * 8
 
 DEFAULT_CONFIG = {
     "project_path": "",
+    # The database a config uses, by REFERENCE: an id from this PC's database
+    # list (machine.json), "otree_default" for oTree's own SQLite, or "" = follow
+    # this PC's default database (only the generated Lab default does that; a
+    # saved config always pins an id). The db_* fields below are DERIVED from it
+    # by normalize_config and are never stored.
+    "database_id": "",
     "db_mode": DB_MODE_LAB,
     "db_name": LAB_DB["db_name"],
     "db_user": LAB_DB["db_user"],
@@ -679,8 +951,7 @@ def normalize_config(cfg):
 
     if out["db_mode"] not in (DB_MODE_LAB, DB_MODE_CUSTOM, DB_MODE_NONE):
         out["db_mode"] = DEFAULT_CONFIG["db_mode"]
-    if out["db_mode"] == DB_MODE_LAB:
-        out.update(LAB_DB)
+    _resolve_config_database(out)
     # `lab` is a lab-preset id (or the two built-in ids, or "custom"). It used
     # to be one of a fixed three; now that new labs are added as presets the id
     # can be any non-empty string, so only a blank value falls back to default.
@@ -697,6 +968,52 @@ def normalize_config(cfg):
     out["seat_excluded"] = sorted(set(out["seat_excluded"]))
     if not out["room_name"].strip():
         out["room_name"] = DEFAULT_ROOM_NAME
+    return out
+
+
+def _resolve_config_database(out):
+    """Fill a normalized config's db_mode + connection from its database_id,
+    in place, against THIS PC's live database list (see apply_default_database).
+
+      * "otree_default" (or db_mode none)  -> SQLite, no connection
+      * a known id                          -> that database's connection
+      * an unknown id                       -> this PC's default database (or
+        SQLite when it has none); the id is KEPT so the reference survives, and
+        :func:`config_database_note` says what happened
+      * ""                                  -> follow this PC's default database
+        (db_mode "lab"); a config that carries its own connection with no id
+        (an old in-memory dict) keeps it as-is
+    """
+    db_id = str(out.get("database_id", "") or "").strip()
+    out["database_id"] = db_id
+    if db_id == DB_BUILTIN_SQLITE or (not db_id and out["db_mode"] == DB_MODE_NONE):
+        out["db_mode"] = DB_MODE_NONE
+        out["database_id"] = DB_BUILTIN_SQLITE
+        return out
+    if db_id:
+        entry = _DB_REGISTRY.get(db_id)
+        if entry is not None:
+            out["db_mode"] = DB_MODE_CUSTOM
+            for key in DATABASE_CONN_KEYS:
+                out[key] = str(entry.get(key, "") or "")
+            return out
+        default = _DB_REGISTRY.get(_DEFAULT_DB_ID)
+        if default is None:
+            out["db_mode"] = DB_MODE_NONE
+            return out
+        out["db_mode"] = DB_MODE_CUSTOM
+        for key in DATABASE_CONN_KEYS:
+            out[key] = str(default.get(key, "") or "")
+        return out
+    if out["db_mode"] == DB_MODE_CUSTOM:
+        return out   # an old in-memory config carrying its own connection
+    if _DEFAULT_DB_ID not in _DB_REGISTRY:
+        # This PC has no database set up (setup skipped): oTree's own SQLite.
+        out["db_mode"] = DB_MODE_NONE
+        out["database_id"] = DB_BUILTIN_SQLITE
+        return out
+    out["db_mode"] = DB_MODE_LAB
+    out.update(LAB_DB)
     return out
 
 
@@ -727,13 +1044,49 @@ def build_database_url(cfg):
     c = normalize_config(cfg)
     if c["db_mode"] == DB_MODE_NONE:
         return None
-    return "postgres://{user}:{password}@{host}:{port}/{name}".format(
-        user=_urlquote(c["db_user"]),
-        password=_urlquote(c["db_password"]),
+    # A BLANK password (a Postgres user with no password: Postgres.app on a Mac,
+    # a trust login) leaves the ":password" part out entirely, so the URL is
+    # postgres://user@host:port/db -- never a dangling "user:@".
+    userinfo = _urlquote(c["db_user"])
+    if c["db_password"]:
+        userinfo += ":" + _urlquote(c["db_password"])
+    return "postgres://{userinfo}@{host}:{port}/{name}".format(
+        userinfo=userinfo,
         host=c["db_host"],
         port=c["db_port"],
         name=c["db_name"],
     )
+
+
+# The grey hint under every Postgres password field (both faces): the password
+# may be left blank, and a blank one is used as "no password" end to end.
+PG_BLANK_PASSWORD_HINT = ("Leave blank if this Postgres user has no password (e.g. "
+                          "Postgres.app on a Mac, or a trust login).")
+
+
+# The hint under the NEW database user's password (create dialog, wizard
+# database cards). A blank password there only works where this Postgres lets
+# users in without one (trust, e.g. Postgres.app); a standard Windows install
+# (scram-sha-256 in pg_hba.conf) refuses it.
+PG_NEW_USER_PASSWORD_HINT = ("Optional. Leave blank only if this Postgres lets users "
+                             "in without a password (e.g. Postgres.app on a Mac); on a "
+                             "standard Windows install, set one.")
+# Shown (as a warning, the database is KEPT) when the login check right after a
+# create / register is refused for a user with a blank password.
+BLANK_PASSWORD_CREATED_WARNING = ("Created, but this Postgres will not let the new user "
+                                  "log in without a password; set a password (Edit "
+                                  "database) or use one next time.")
+BLANK_PASSWORD_REGISTERED_WARNING = ("Registered, but this Postgres will not let %s log "
+                                     "in without a password; set a password (Edit "
+                                     "database).")
+
+
+def pg_password_arg(password):
+    """The ``password`` argument for psycopg2.connect: None for a blank password,
+    so psycopg2 leaves it out of the connection string altogether (libpq then
+    connects with no password, as a trust / peer login expects)."""
+    password = "" if password is None else str(password)
+    return password or None
 
 
 def _urlquote(text):
@@ -1613,34 +1966,162 @@ def find_app_packages(path):
 
 
 def config_dir():
-    """The directory where presets.json and seats/ live: the app's data/ folder."""
+    """The directory where saved_configs.json and seats/ live: the data/ folder."""
     return data_dir()
 
 
-def presets_path():
+def saved_configs_path():
+    """Where saved_configs.json lives. OTREE_LAB_LAUNCHER_PRESETS overrides it
+    (the historical variable name, kept so existing shortcuts/tests work)."""
     override = os.environ.get("OTREE_LAB_LAUNCHER_PRESETS")
     if override:
         return override
-    return os.path.join(config_dir(), PRESETS_FILENAME)
+    return os.path.join(config_dir(), SAVED_CONFIGS_FILENAME)
 
 
-# --- Per-user UI preferences (theme) ---------------------------------------
-# A tiny, CREDENTIAL-FREE prefs file in data/, separate from presets.json (which
-# carries DB/admin passwords). It persists ONLY the light/dark theme so the choice
-# survives a restart: in browser mode the page's localStorage is tied to the
-# server PORT, which changes on the next launch, so a file on disk is the only
-# durable per-user store. (GitHub Organisation Sync used to live here too; it is
-# a LAB setting now, in lab_info.json -- see below.) Everything here is
-# FAIL-SOFT: a missing or corrupt file just yields the "dark" default and a write
-# error is swallowed.
-UI_PREFS_FILENAME = "ui_prefs.json"
+# Back-compat alias: both faces call presets_path() for the config store.
+presets_path = saved_configs_path
 
 
-def ui_prefs_path():
-    override = os.environ.get("OTREE_LAB_UI_PREFS")
+# ---------------------------------------------------------------------------
+# machine.json (THIS PC only, never copied between PCs). Schema 1:
+#   {schema_version, home_lab, shown_labs: [lab ids], theme,
+#    pg_admin: {admin_username, admin_password, admin_host, admin_port},
+#    databases: [{id, title, researcher, postgres_user, db_name, db_user,
+#                 db_password, db_host, db_port, created, deleted,
+#                 created_on: {hostname, ip, home_lab, when}}],
+#    default_database, migrations: {...}, notices: [...]}
+# Every write is a locked read-modify-write (update_machine) that only touches
+# the keys it owns, so the theme, the home lab and the database list can be saved
+# from different places without clobbering each other.
+# ---------------------------------------------------------------------------
+
+
+def machine_path():
+    """Where machine.json lives. OTREE_LAB_MACHINE overrides it."""
+    override = os.environ.get("OTREE_LAB_MACHINE")
     if override:
         return override
-    return os.path.join(config_dir(), UI_PREFS_FILENAME)
+    return os.path.join(data_dir(), MACHINE_FILENAME)
+
+
+def default_machine():
+    """An empty machine.json (a PC that has not run the setup wizard yet)."""
+    return {"schema_version": SCHEMA_VERSION, "home_lab": "", "shown_labs": None,
+            "theme": "dark", "pg_admin": {}, "databases": [], "default_database": "",
+            "migrations": {}, "notices": []}
+
+
+def normalize_machine(raw):
+    """A machine dict with every known key present and well-typed. Unknown keys
+    (a newer launcher's) are kept."""
+    out = default_machine()
+    raw = raw if isinstance(raw, dict) else {}
+    for key, value in raw.items():
+        if key not in out:
+            out[key] = value
+    out["home_lab"] = str(raw.get("home_lab", "") or "").strip().lower()
+    shown = raw.get("shown_labs")
+    out["shown_labs"] = ([str(s).strip() for s in shown if str(s).strip()]
+                         if isinstance(shown, list) else None)
+    out["theme"] = normalize_theme(raw.get("theme"))
+    admin = raw.get("pg_admin")
+    out["pg_admin"] = ({k: str(admin.get(k, "") or "") for k in PG_ADMIN_KEYS}
+                       if isinstance(admin, dict) and admin else {})
+    dbs = raw.get("databases")
+    out["databases"] = [normalize_database_entry(d) for d in dbs
+                        if isinstance(d, dict)] if isinstance(dbs, list) else []
+    out["default_database"] = str(raw.get("default_database", "") or "").strip()
+    out["migrations"] = dict(raw.get("migrations") or {}) \
+        if isinstance(raw.get("migrations"), dict) else {}
+    out["notices"] = [n for n in (raw.get("notices") or []) if isinstance(n, dict)] \
+        if isinstance(raw.get("notices"), list) else []
+    out["schema_version"] = max(SCHEMA_VERSION, schema_version_of(raw))
+    return out
+
+
+def load_machine(path=None):
+    """This PC's machine.json as a normalized dict (never None).
+
+    Absent: for the default location with old (v0) files still in place (the
+    migration could not run), an in-memory conversion of them (fail-soft);
+    otherwise an empty machine (the setup wizard fills it)."""
+    default = path is None
+    path = path or machine_path()
+    status, data = _read_json(path)
+    if status != "ok" or not isinstance(data, dict):
+        if default:
+            legacy = _legacy_view()
+            if legacy is not None:
+                return normalize_machine(copy.deepcopy(legacy["machine"]))
+        return default_machine()
+    return normalize_machine(data)
+
+
+def save_machine(machine, path=None):
+    """Write machine.json (schema 1) atomically, owner-only. Refuses a newer
+    file. Returns the path."""
+    path = path or machine_path()
+    data = normalize_machine(machine)
+    data["schema_version"] = SCHEMA_VERSION
+    write_json_atomic(path, data, prefix=".machine-")
+    return path
+
+
+def update_machine(mutate, path=None):
+    """Locked read-modify-write of machine.json: ``mutate(machine)`` changes the
+    dict in place (and may return a value, which is returned). The live
+    :data:`MACHINE` is refreshed afterwards."""
+    global MACHINE
+    target = path or machine_path()
+    with exclusive_file_lock(lock_path("machine", os.path.dirname(os.path.abspath(target)))):
+        machine = load_machine(path)
+        result = mutate(machine)
+        save_machine(machine, target)
+    if path is None or os.path.abspath(target) == os.path.abspath(machine_path()):
+        MACHINE = load_machine()
+    return result
+
+
+def current_pc_stamp(home_lab=None, when=None):
+    """``{hostname, ip, home_lab, when}`` describing THIS computer now: recorded as
+    a database's ``created_on``. The IP is best effort ("" when unknown); nothing
+    is sent over the network."""
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = ""
+    return {"hostname": hostname, "ip": _local_ip(),
+            "home_lab": str(home_lab if home_lab is not None else
+                            (MACHINE.get("home_lab") or "")),
+            "when": when or now_iso()}
+
+
+def _local_ip():
+    """This computer's LAN address, best effort, "" when unknown. A UDP
+    "connect" only picks a route; no packet is sent."""
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.255.255.255", 1))
+            ip = probe.getsockname()[0]
+        finally:
+            probe.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        return "" if ip.startswith("127.") else ip
+    except Exception:
+        return ""
+
+
+# --- Theme (machine.json) ----------------------------------------------------
+# The light/dark theme is a per-PC preference kept in machine.json (it used to
+# be ui_prefs.json, and the web page also kept a copy in localStorage; both are
+# gone). Fail-soft: a missing file yields "dark" and a write error is swallowed.
 
 
 def normalize_theme(theme):
@@ -1649,46 +2130,19 @@ def normalize_theme(theme):
     return "light" if str(theme or "").strip().lower() == "light" else "dark"
 
 
-def load_ui_prefs(path=None):
-    """The per-user UI prefs dict, or {} when absent/corrupt (fail-soft)."""
-    path = path or ui_prefs_path()
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _write_ui_prefs(prefs, path):
-    """Atomically write the prefs dict. Returns True on success; never raises."""
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(prefs, handle, indent=2)
-        os.replace(tmp, path)
-        return True
-    except OSError:
-        return False
-
-
 def load_ui_theme(path=None):
     """The saved light/dark theme, defaulting to 'dark' when nothing is stored."""
-    return normalize_theme(load_ui_prefs(path).get("theme"))
+    return normalize_theme(load_machine(path).get("theme"))
 
 
 def save_ui_theme(theme, path=None):
-    """Persist the light/dark theme into the prefs file (created if needed),
-    preserving any other keys. Returns the normalised theme actually stored. Never
-    raises: a write failure is swallowed (the UI has already updated in place)."""
-    path = path or ui_prefs_path()
+    """Persist the light/dark theme into machine.json. Returns the normalised
+    theme. Never raises (the UI has already updated in place)."""
     value = normalize_theme(theme)
-    prefs = load_ui_prefs(path)
-    prefs["theme"] = value
-    _write_ui_prefs(prefs, path)  # fail-soft: the on-screen theme already changed
+    try:
+        update_machine(lambda m: m.__setitem__("theme", value), path)
+    except Exception:
+        pass
     return value
 
 
@@ -1697,22 +2151,12 @@ def save_ui_theme(theme, path=None):
 # GitHub organisation git setup so an experimenter can clone/update a study repo
 # without touching a terminal. It works ONLY when the lab manager has already set
 # up git and a read-only GitHub organisation credential ON THIS lab experimenter
-# PC (the PC signed in read-only to the org). The launcher never stores or
-# handles any token itself -- it relies entirely on the machine's pre-stored git
-# credential. Two things persist, as top-level keys of the data folder's
-# lab_info.json (the same file the Lab Settings Database section writes, so
-# each data folder -- data/, data_CREED_large/, data_CREED_small/ -- carries its
-# own): the tick-box state and the organisation name (so the clone target is
-# <org>/<repo> and the org is NOT hardcoded). Both are fail-soft: a missing or
-# corrupt file yields the OFF default and an empty org.
-#
-# Two edge cases:
-#   * No readable lab_info.json yet (first run): a save must NEVER create one --
-#     that would make the app think setup is done and skip the first-run wizard.
-#     The values are held in ui_prefs.json until lab_info.json exists.
-#   * Older installs kept both keys in ui_prefs.json. The first load after
-#     lab_info.json exists moves them over (a value already in lab_info.json
-#     wins) and strips them from ui_prefs.json, leaving only the theme there.
+# PC. The launcher never stores or handles any token itself. Two things persist,
+# as top-level keys of lab_info.json (so they travel with the lab file): the
+# tick-box state and the organisation name (the clone target is <org>/<repo>).
+# Both are fail-soft: a missing or corrupt file yields OFF and an empty org. A
+# save never CREATES lab_info.json (that would skip the setup wizard); the old
+# ui_prefs.json copies are moved into lab_info.json by the 1.5.0 migration.
 GITHUB_SYNC_ENABLED_KEY = "github_sync_enabled"
 GITHUB_ORG_KEY = "github_org"
 _GITHUB_SYNC_KEYS = (GITHUB_SYNC_ENABLED_KEY, GITHUB_ORG_KEY)
@@ -1724,99 +2168,48 @@ def _github_sync_values(source):
             "org": str(source.get(GITHUB_ORG_KEY, "") or "").strip()}
 
 
-def _set_live_lab_info_keys(path, values):
-    """Keep the in-memory LAB_INFO in step when the default lab_info.json changed."""
-    if isinstance(LAB_INFO, dict) and os.path.abspath(path) == os.path.abspath(lab_info_path()):
-        LAB_INFO.update(values)
-
-
-def migrate_github_sync_prefs(path=None, prefs_path=None):
-    """One-time move of the GitHub Organisation Sync keys from ui_prefs.json into
-    lab_info.json. Copies each key lab_info.json lacks, then removes both keys from
-    ui_prefs.json (lab_info.json wins if it already had them). Does nothing while
-    there is no readable lab_info.json. Returns True when ui_prefs.json was
-    changed. Never raises."""
-    path = path or lab_info_path()
-    prefs_path = prefs_path or ui_prefs_path()
-    prefs = load_ui_prefs(prefs_path)
-    if not any(key in prefs for key in _GITHUB_SYNC_KEYS):
-        return False
+def _set_lab_info_keys(values, path=None):
+    """Store top-level keys in lab_info.json (other keys kept) and refresh the
+    live LAB_INFO. False when there is no lab_info.json (nothing is created)."""
+    target = path or lab_info_path()
     info = load_lab_info(path)
     if info is None:
         return False
-    missing = {key: prefs[key] for key in _GITHUB_SYNC_KEYS
-               if key in prefs and key not in info}
-    if missing:
-        info.update(missing)
-        try:
-            save_lab_info(info, path)
-        except Exception:
-            return False  # keep ui_prefs.json as-is; retry on the next load
-        _set_live_lab_info_keys(path, missing)
-    for key in _GITHUB_SYNC_KEYS:
-        prefs.pop(key, None)
-    return _write_ui_prefs(prefs, prefs_path)
+    info.update(values)
+    save_lab_info(info, target)
+    if path is None or os.path.abspath(target) == os.path.abspath(lab_info_path()):
+        if isinstance(LAB_INFO, dict):
+            LAB_INFO.update(values)
+    return True
 
 
 def load_github_sync(path=None, prefs_path=None):
     """The saved GitHub Organisation Sync settings as ``{"enabled", "org"}``.
-
-    Reads lab_info.json (running the one-time ui_prefs.json migration first).
-    Before lab_info.json exists, falls back to values held in ui_prefs.json.
-    Default OFF with an empty org (fail-soft)."""
-    path = path or lab_info_path()
-    prefs_path = prefs_path or ui_prefs_path()
-    try:
-        migrate_github_sync_prefs(path, prefs_path)
-    except Exception:
-        pass
-    info = load_lab_info(path)
-    if info is None:
-        return _github_sync_values(load_ui_prefs(prefs_path))
-    return _github_sync_values(info)
+    Default OFF with an empty org (fail-soft). ``prefs_path`` is ignored (kept
+    for old callers; ui_prefs.json is gone)."""
+    return _github_sync_values(load_lab_info(path))
 
 
 def load_github_sync_enabled(path=None, prefs_path=None):
     """The saved GitHub Organisation Sync opt-in flag. Default OFF (False)."""
-    return load_github_sync(path, prefs_path)["enabled"]
+    return load_github_sync(path)["enabled"]
 
 
 def load_github_org(path=None, prefs_path=None):
-    """The saved GitHub organisation name, or '' when nothing is stored. This is
-    the <org> in the clone target https://github.com/<org>/<repo>; it is a
-    configured value, never hardcoded (fail-soft)."""
-    return load_github_sync(path, prefs_path)["org"]
+    """The saved GitHub organisation name, or '' when nothing is stored."""
+    return load_github_sync(path)["org"]
 
 
 def save_github_sync_settings(enabled, org, path=None, prefs_path=None):
-    """Persist the GitHub Organisation Sync opt-in flag AND the organisation name
-    into lab_info.json, preserving every other key. With no readable
-    lab_info.json yet they go to ui_prefs.json instead (never creating
-    lab_info.json, which would skip the first-run wizard) and are migrated later.
-    Returns the stored ``{"enabled": bool, "org": str}``. Never raises: a write
-    failure is swallowed (the UI has already updated in place)."""
-    path = path or lab_info_path()
-    prefs_path = prefs_path or ui_prefs_path()
+    """Persist the GitHub Organisation Sync flag AND organisation name into
+    lab_info.json, keeping every other key. With no lab_info.json nothing is
+    written. Returns the ``{"enabled", "org"}`` just chosen. Never raises."""
     values = {GITHUB_SYNC_ENABLED_KEY: bool(enabled),
               GITHUB_ORG_KEY: str(org or "").strip()}
-    info = load_lab_info(path)
-    if info is None:
-        prefs = load_ui_prefs(prefs_path)
-        prefs.update(values)
-        _write_ui_prefs(prefs, prefs_path)
-    else:
-        info.update(values)
-        try:
-            save_lab_info(info, path)
-            _set_live_lab_info_keys(path, values)
-        except Exception:
-            pass  # fail-soft: the on-screen state already changed
-        # Drop any stale pre-migration copies so ui_prefs.json holds only the theme.
-        prefs = load_ui_prefs(prefs_path)
-        if any(key in prefs for key in _GITHUB_SYNC_KEYS):
-            for key in _GITHUB_SYNC_KEYS:
-                prefs.pop(key, None)
-            _write_ui_prefs(prefs, prefs_path)
+    try:
+        _set_lab_info_keys(values, path)
+    except Exception:
+        pass  # fail-soft: the on-screen state already changed
     return _github_sync_values(values)
 
 
@@ -1833,7 +2226,7 @@ LOCALHOST_ONLY_LABEL = "Databases on this computer only (localhost)"
 
 def load_databases_localhost_only(path=None):
     """The saved "Databases on this computer only" lab setting. Default ON."""
-    info = load_lab_info(path or lab_info_path())
+    info = load_lab_info(path)
     if not isinstance(info, dict) or DB_LOCALHOST_ONLY_KEY not in info:
         return True
     return bool(info.get(DB_LOCALHOST_ONLY_KEY))
@@ -1843,15 +2236,9 @@ def save_databases_localhost_only(enabled, path=None):
     """Store the setting in lab_info.json (other keys kept) and return the value
     now in effect. With no readable lab_info.json nothing is written and the
     default (on) stays in effect. Never raises."""
-    path = path or lab_info_path()
-    info = load_lab_info(path)
-    if info is None:
-        return True
-    values = {DB_LOCALHOST_ONLY_KEY: bool(enabled)}
-    info.update(values)
     try:
-        save_lab_info(info, path)
-        _set_live_lab_info_keys(path, values)
+        if not _set_lab_info_keys({DB_LOCALHOST_ONLY_KEY: bool(enabled)}, path):
+            return True
     except Exception:
         return load_databases_localhost_only(path)
     return bool(enabled)
@@ -1887,72 +2274,49 @@ def new_database_host_defaults(admin, localhost_only=None):
     return {"host": host, "port": port, "editable": True}
 
 
-# --- Per-machine lab identity (lab.local) ----------------------------------
-# Each lab PC carries a gitignored one-word marker file, `lab.local`, next to
-# the launcher, saying which lab it is ("large" or "small"). The launcher reads
-# it at startup to configure the built-in Lab default's lab, and writes it
-# ONCE from a first-launch operator choice. It is never auto-rewritten after
-# that, so the choice can only be changed by hand-editing the file.
+# --- This PC's lab (machine.json home_lab) ----------------------------------
+# Which lab this computer is. Chosen in step 1 of the setup wizard (or Lab
+# Settings "which lab is this computer"), stored as machine.json ``home_lab``
+# (1.5.0; it used to be the one-word lab.local file). It drives the generated Lab
+# default (its lab + that lab's default room) and is always shown in the lab
+# selector. The function names below are kept from the lab.local days so both
+# faces keep calling the same API.
 
 
 def lab_marker_path():
-    """Where lab.local lives. OTREE_LAB_MARKER overrides it (used by tests)."""
-    override = os.environ.get("OTREE_LAB_MARKER")
-    if override:
-        return override
-    return os.path.join(data_dir(), LAB_MARKER_FILENAME)
+    """Back-compat: the file that records this PC's lab (machine.json now)."""
+    return machine_path()
 
 
 def read_lab_marker(path=None):
-    """This machine's lab id, or None when unset.
-
-    Historically the marker held only "large"/"small"; it now holds ANY lab
-    preset id (a lowercase slug), so a machine can be identified as a lab the
-    operator added on the Lab Settings page. The stored word is returned as-is
-    (stripped, lower-cased), so "large"/"small" still resolve to the two
-    built-in labs. An empty or missing file means "unset", first launch, where
-    the operator is asked to choose.
-    """
-    path = path or lab_marker_path()
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            word = handle.read().strip().lower()
-    except OSError:
-        return None
+    """This PC's lab id (machine.json ``home_lab``), or None when unset."""
+    word = str(load_machine(path).get("home_lab") or "").strip().lower()
     return word or None
 
 
 def set_lab_marker(lab_id, path=None):
-    """Record this machine's lab id, OVERWRITING any existing marker.
-
-    This is the UI-settable path (the first-run chooser and the Lab Settings
-    "which lab is this computer" control), so the operator never has to
-    hand-edit lab.local to change which lab the machine is. Accepts any non-empty
-    lab id. Returns the id written.
-    """
+    """Record this PC's lab, OVERWRITING any earlier choice (the Lab Settings
+    change path). The lab is added to the shown labs. Returns the id written."""
     lab_id = str(lab_id or "").strip().lower()
     if not lab_id:
         raise ValueError("lab_id must be a non-empty lab id")
-    path = path or lab_marker_path()
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(lab_id + "\n")
+
+    def _apply(machine):
+        machine["home_lab"] = lab_id
+        shown = machine.get("shown_labs")
+        if isinstance(shown, list) and lab_id not in shown:
+            shown.append(lab_id)
+
+    update_machine(_apply, path)
     return lab_id
 
 
 def write_lab_marker(lab, path=None):
-    """First-run write: record the lab id only if no valid marker exists yet.
-
-    Returns True if written, False if refused because a marker already exists,
-    so a first-run choice can never silently revert a machine that is already
-    identified. Accepts any non-empty lab id (not only large/small). To CHANGE
-    an existing identity from the UI use set_lab_marker, which overwrites.
-    """
+    """First-run write: record this PC's lab only if none is set yet. Returns
+    True if written, False if refused (use :func:`set_lab_marker` to change)."""
     lab = str(lab or "").strip().lower()
     if not lab:
         raise ValueError("lab must be a non-empty lab id")
-    path = path or lab_marker_path()
     if read_lab_marker(path) is not None:
         return False
     set_lab_marker(lab, path)
@@ -1963,18 +2327,12 @@ _MARKER_UNSET = object()
 
 
 def apply_lab_marker(presets, marker=_MARKER_UNSET, lab_presets=None):
-    """Point the built-in Lab default's lab at this machine's lab, in place.
+    """Point the generated Lab default's lab at this PC's lab, in place.
 
-    The built-in default is app-owned, so its lab tracks lab.local. User configs
-    are never touched. A no-op when the marker is unset (first launch), which
-    leaves the built-in on its code default. Any non-empty lab id is honoured,
-    so a machine identified as an added lab points the default there too.
-
-    When ``lab_presets`` is given, the built-in default's ``room_name`` is also
-    re-derived from that lab's ``default_room`` (the LIVE source of truth, so a
-    room edited in Lab Settings updates the Lab default at once). Without
-    ``lab_presets`` the room is left as :func:`default_preset` set it.
-    """
+    User configs are never touched. A no-op when this PC has no lab yet. When
+    ``lab_presets`` is given the default's ``room_name`` is re-derived from that
+    lab's ``default_room`` (so a room edited in Lab Settings updates the Lab
+    default at once)."""
     if marker is _MARKER_UNSET:
         marker = read_lab_marker()
     if not marker:
@@ -1989,13 +2347,11 @@ def apply_lab_marker(presets, marker=_MARKER_UNSET, lab_presets=None):
 
 
 def apply_lab_identity(lab_presets, lab_id):
-    """Make ``lab_id`` this machine's single lab: display only it, hide the rest.
+    """Make ``lab_id`` this PC's single shown lab: show only it, hide the rest.
 
-    The machine's lab is a UI choice recorded in lab.local; this reflects that
-    choice in the existing per-preset display toggles so the main lab selector
-    collapses to the one lab (and cannot pick a wrong one). Returns
-    (ok, message, new_list); refuses when no preset carries that id.
-    """
+    Only the per-PC display flags change (they are saved as machine.json
+    ``shown_labs``, never into the shared lab list). Returns (ok, message,
+    new_list); refuses when no lab carries that id."""
     presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
     if find_lab_preset(lab_id, presets) is None:
         return False, "No lab preset with that id.", presets
@@ -2005,26 +2361,30 @@ def apply_lab_identity(lab_presets, lab_id):
 
 
 def default_preset():
+    """The built-in "Lab default" config, GENERATED (1.5.0: never stored).
+
+    Built from the code defaults + lab_info.json (this PC's lab's default room,
+    the lab's default oTree admin login) + machine.json (this PC's lab, its
+    default database). It follows the PC default database (``database_id`` "")
+    when this PC has one, else oTree's own SQLite."""
     preset = dict(DEFAULT_CONFIG)
+    preset["seat_excluded"] = []
     preset["name"] = "Lab default"
     preset["created"] = now_iso()
     preset["last_run"] = None
     # author/builtin are metadata (like name/created/last_run), NOT config fields
-    # in FIELD_KEYS, so they never enter the config-equality comparison that
-    # guards immutability. The shipped default is built-in and built in.
+    # in FIELD_KEYS, so they never enter the config-equality comparison.
     preset["author"] = "builtin"
     preset["builtin"] = True
-    # This machine's lab identity (from lab.local) configures the built-in
-    # default's lab, so on a lab PC the default already points at the right lab.
-    # Any non-empty id is honoured; unset (first launch) leaves the code default.
+    preset["project_path"] = ""
+    preset["database_id"] = "" if _DEFAULT_DB_ID in _DB_REGISTRY else DB_BUILTIN_SQLITE
+    preset["db_mode"] = DB_MODE_LAB if _DEFAULT_DB_ID in _DB_REGISTRY else DB_MODE_NONE
+    preset["admin_username"] = DEFAULT_ADMIN_USERNAME
+    preset["admin_password"] = DEFAULT_ADMIN_PASSWORD
     marker = read_lab_marker()
-    if marker:
-        preset["lab"] = marker
-        # ...and the default config's room follows THAT lab's default_room, so on
-        # a lab PC the Lab default opens the room the lab actually uses (falls
-        # back to "study"). The base is lab_info.json; a room later edited in Lab
-        # Settings is re-applied live via apply_lab_marker(..., lab_presets=...).
-        preset["room_name"] = lab_default_room(default_lab_presets(), marker)
+    lab = marker or DEFAULT_LAB_ID
+    preset["lab"] = lab
+    preset["room_name"] = lab_default_room(default_lab_presets(), lab)
     return preset
 
 
@@ -2060,103 +2420,214 @@ def clear_builtin_project_path(presets):
     return presets
 
 
+#
+# THE STORE FACADE. Both faces work on ``(presets, extra)``: ``presets`` is the
+# config list (the generated Lab default first) and ``extra`` a dict of the
+# global collections. Behind it sit three files:
+#   saved_configs.json  the configs + researchers + last_author (+ unknown keys)
+#   machine.json        pg_admin, databases, default_database, shown_labs
+#   lab_info.json       the labs (``extra["lab_presets"]``, a composite view)
+# load_store composes ``extra``; save_store splits it back and writes each file
+# only when its part changed, merging into what is on disk.
+_MACHINE_EXTRA_KEYS = ("pg_admin", "databases", "default_database")
+_LAB_EXTRA_KEY = "lab_presets"
+_NOT_SAVED_KEYS = ("configs", "presets", "version", "schema_version", "last_project",
+                   _LAB_EXTRA_KEY) + _MACHINE_EXTRA_KEYS
+# Config fields DERIVED from database_id (never stored).
+CONFIG_DB_FIELDS = ("db_mode", "db_name", "db_user", "db_password", "db_host", "db_port")
+
+
+def config_for_storage(preset):
+    """A config as saved_configs.json stores it: the database is a REFERENCE
+    (``database_id``), the derived db_* fields are dropped, everything else --
+    its own oTree admin login included -- is kept."""
+    preset = dict(preset or {})
+    n = normalize_config(preset)
+    out = {k: v for k, v in preset.items() if k not in CONFIG_DB_FIELDS}
+    db_id = str(preset.get("database_id", "") or "").strip()
+    if db_id:
+        out["database_id"] = db_id
+    elif n["db_mode"] == DB_MODE_NONE:
+        out["database_id"] = DB_BUILTIN_SQLITE
+    elif n["db_mode"] == DB_MODE_LAB:
+        out["database_id"] = _DEFAULT_DB_ID if _DEFAULT_DB_ID in _DB_REGISTRY \
+            else DB_BUILTIN_SQLITE
+    else:
+        match = find_database_by_connection(n)
+        if match is not None:
+            out["database_id"] = match["id"]
+        else:
+            # A connection no database on this PC matches (an old in-memory
+            # config): keep it inline rather than lose it.
+            out["database_id"] = ""
+            for key in CONFIG_DB_FIELDS:
+                out[key] = n[key]
+    return out
+
+
 def load_store(path=None, default_factory=None):
-    """Read the presets file.
+    """Read the config store. Returns ``(presets, extra)``.
 
-    Returns (presets, extra) where `presets` is the list of stored records
-    exactly as they were written (unknown keys included) and `extra` holds any
-    top-level keys of the file this version does not know about.  A file that
-    cannot be parsed is moved aside rather than overwritten.
-
-    ``default_factory`` builds the fallback "Lab default" record used when the
-    file is absent, unreadable, or empty. It defaults to :func:`default_preset`;
-    the Tk launcher passes its own so it keeps its own default (e.g. its
-    browser-open delay) while sharing this one parse/backup implementation.
-    """
+    ``presets`` = the generated Lab default (``default_factory``, default
+    :func:`default_preset`) followed by the saved configs exactly as stored
+    (unknown keys kept; the database is an id, resolved by normalize_config).
+    ``extra`` = saved_configs.json's other keys + this PC's ``pg_admin``,
+    ``databases``, ``default_database`` (machine.json) + ``lab_presets`` (the labs
+    of lab_info.json with this PC's shown flags). A file that cannot be parsed is
+    copied aside (``.broken-<stamp>``) rather than overwritten. An old-layout file
+    (presets.json content) is read too."""
     make_default = default_factory or default_preset
-    path = path or presets_path()
-    if not os.path.exists(path):
-        return [make_default()], {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
+    default = path is None
+    path = path or saved_configs_path()
+    status, data = _read_json(path)
+    if status == "missing" and default:
+        legacy = _legacy_view()
+        if legacy is not None:
+            data, status = copy.deepcopy(legacy["saved"]), "ok"
+    elif status == "malformed":
         backup = path + ".broken-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         try:
             shutil.copy2(path, backup)
         except OSError:
             pass
-        return [make_default()], {}
-
-    extra = {}
+        data = None
+    saved_extra = {}
     if isinstance(data, list):
         raw = data
     elif isinstance(data, dict):
-        raw = data.get("presets", [])
-        extra = {k: v for k, v in data.items() if k not in ("presets", "version")}
+        raw = data.get("configs")
+        if not isinstance(raw, list):
+            raw = data.get("presets", [])
+        saved_extra = {k: v for k, v in data.items() if k not in _NOT_SAVED_KEYS}
     else:
         raw = []
-
-    presets = [item for item in raw if isinstance(item, dict)]
+    configs = [dict(item) for item in (raw if isinstance(raw, list) else [])
+               if isinstance(item, dict) and not is_builtin(item)]
     # A record without a usable name still belongs to somebody, so keep it
     # rather than dropping it silently.
-    for index, item in enumerate(presets):
+    for index, item in enumerate(configs):
         if not str(item.get("name", "")).strip():
             item["name"] = "Unnamed config %d" % (index + 1)
-    if not presets:
-        presets = [make_default()]
-    return presets, extra
+    extra = dict(saved_extra)
+    machine = load_machine()
+    extra["pg_admin"] = dict(machine.get("pg_admin") or {})
+    extra["databases"] = copy.deepcopy(machine.get("databases") or [])
+    extra["default_database"] = machine.get("default_database", "")
+    extra[_LAB_EXTRA_KEY] = default_lab_presets()
+    return [make_default()] + configs, extra
 
 
 def save_store(presets, extra=None, path=None):
-    """Write the presets file atomically.
+    """Write the store atomically, split over its three files.
 
-    The new content goes to a temporary file in the same directory, is flushed
-    to disk, and only then replaces the old file, so an interrupted write can
-    never leave a half-written presets.json behind.
-
-    The whole write is wrapped in a best-effort CROSS-PROCESS file lock on a
-    sibling ``.lock`` file, so two launcher instances sharing one data dir (e.g.
-    a GUI and the headless one-click shortcut) serialise their writes instead of
-    racing os.replace. The in-process store lock each face holds guards threads
-    within one process; this guards separate processes. It degrades to a no-op
-    where OS locking is unavailable (the atomic temp-file + os.replace is still
-    correct on its own -- see :func:`exclusive_file_lock`).
-    """
-    path = path or presets_path()
-    folder = os.path.dirname(path) or "."
-    os.makedirs(folder, exist_ok=True)
-    payload = dict(extra or {})
-    payload["version"] = STORAGE_VERSION
-    payload["presets"] = presets
-    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
-
-    with exclusive_file_lock(path + ".lock"):
-        handle = tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=folder, prefix=".presets-", suffix=".tmp", delete=False
-        )
-        tmp_name = handle.name
-        try:
-            # presets.json carries DB creds, custom-DB creds and Postgres-admin creds,
-            # so lock it down to owner-only (0o600) on POSIX, including the temp file,
-            # before it is fsync'd and replaced into place. See secure_chmod (Windows
-            # ACLs are not hardened here).
-            secure_chmod(tmp_name)
-            handle.write(text)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-            handle.close()
-            os.replace(tmp_name, path)
-        except Exception:
-            handle.close()
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
-    secure_chmod(path)
+    saved_configs.json always (the configs, never a built-in, each with its
+    database as an id); machine.json and lab_info.json only when the part of
+    ``extra`` they own changed. Each write is atomic (temp file + os.replace),
+    owner-only, refuses a newer-schema file and holds a cross-process lock in
+    data/locks/ (removed after use). Afterwards the live lab/machine state is
+    refreshed from disk."""
+    extra = dict(extra or {})
+    path = path or saved_configs_path()
+    folder = os.path.dirname(os.path.abspath(path))
+    payload = {"schema_version": SCHEMA_VERSION,
+               "configs": [config_for_storage(p) for p in (presets or [])
+                           if not is_builtin(p)]}
+    for key, value in extra.items():
+        if key not in _NOT_SAVED_KEYS:
+            payload[key] = value
+    with exclusive_file_lock(lock_path("saved_configs", folder)):
+        write_json_atomic(path, payload, prefix=".saved_configs-")
+    _save_machine_part(extra)
+    _save_lab_part(extra)
+    _refresh_live_state()
     return path
+
+
+def _save_machine_part(extra):
+    """Write pg_admin / databases / default_database / shown_labs to machine.json
+    when they differ from what is on disk."""
+    updates = {}
+    for key in _MACHINE_EXTRA_KEYS:
+        if key in extra:
+            updates[key] = copy.deepcopy(extra[key])
+    lab_presets = extra.get(_LAB_EXTRA_KEY)
+    if isinstance(lab_presets, list) and lab_presets:
+        updates["shown_labs"] = [p["id"] for p in (normalize_lab_preset(x) for x in lab_presets)
+                                 if p["display"] and not p["deleted"] and p["id"]]
+    if not updates:
+        return
+    current = load_machine()
+    candidate = normalize_machine(dict(current, **updates))
+    if "shown_labs" in updates and current.get("shown_labs") is None:
+        visible = [l["id"] for l in lab_info_labs() if not l.get("deleted")]
+        if sorted(candidate["shown_labs"] or []) == sorted(visible):
+            candidate["shown_labs"] = None   # still "all shown": keep it open-ended
+    if all(candidate.get(k) == current.get(k) for k in updates):
+        return
+
+    def _apply(machine):
+        for key in updates:
+            machine[key] = candidate[key]
+
+    update_machine(_apply)
+
+
+def _save_lab_part(extra):
+    """Write the labs of ``extra["lab_presets"]`` into lab_info.json when they
+    differ from what is on disk (never creates lab_info.json for no labs)."""
+    lab_presets = extra.get(_LAB_EXTRA_KEY)
+    if not isinstance(lab_presets, list) or not lab_presets:
+        return
+    info = load_lab_info()
+    labs, maps = stored_labs_from_presets(lab_presets, info)
+    if info is not None and labs == lab_info_labs(info) and maps == lab_info_maps(info):
+        return
+    info = dict(info or {})
+    info["labs"] = labs
+    info["maps"] = maps
+    save_lab_info(info)
+
+
+def stored_labs_from_presets(lab_presets, info=None):
+    """``(labs, maps)`` for lab_info.json from a composite lab-preset list.
+
+    Every lab keeps its map NAME (``map_name``); a lab that only carries a map
+    object gets it added to the maps table under its id. Labs present in
+    ``info`` but missing from ``lab_presets`` (another process added them) are
+    kept, so nothing is lost; removing a lab is a soft delete (``deleted``)."""
+    existing = {l["id"]: l for l in lab_info_labs(info or {})}
+    maps = lab_info_maps(info or {})
+    out = []
+    seen = set()
+    for raw in lab_presets or []:
+        p = normalize_lab_preset(raw)
+        if not p["id"] or p["id"] in seen:
+            continue
+        base = existing.get(p["id"], {})
+        map_name = str(p.get("map_name") or "").strip() or base.get("map", "")
+        if isinstance(p.get("map"), dict):
+            if not map_name:
+                map_name = _unique_key(p["id"], maps)
+            if not isinstance(maps.get(map_name), dict):
+                maps[map_name] = p["map"]
+        entry = {"id": p["id"], "name": p["name"], "host": p["ip"], "seats": p["seats"],
+                 "geometry": p["geometry"], "cols": p["cols"], "map": map_name,
+                 "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
+                 "deleted": p["deleted"]}
+        suggested = p.get("suggested_database") or base.get("suggested_database")
+        if suggested:
+            entry["suggested_database"] = suggested
+        out.append(normalize_stored_lab(entry))
+        seen.add(p["id"])
+    for lab_id, entry in existing.items():
+        if lab_id not in seen:
+            out.append(entry)
+    return out, maps
+
+
+def _refresh_live_state():
+    """Re-read lab_info.json + machine.json into the live module state."""
+    reload_lab_info()
 
 
 def merge_store_from_disk(mem_presets, mem_extra, disk_presets, disk_extra):
@@ -2310,6 +2781,12 @@ def unique_name(name, presets):
 
 def preset_from_fields(name, fields, created=None, author=None):
     preset = normalize_config(fields)
+    # A saved config always PINS its database by id (1.5.0): "follow this PC's
+    # default" is only for the generated Lab default.
+    if not preset["database_id"] and preset["db_mode"] == DB_MODE_LAB:
+        preset["database_id"] = (_DEFAULT_DB_ID if _DEFAULT_DB_ID in _DB_REGISTRY
+                                 else DB_BUILTIN_SQLITE)
+        preset = normalize_config(preset)
     preset["name"] = name.strip()
     preset["created"] = created or now_iso()
     preset["last_run"] = None
@@ -2351,25 +2828,26 @@ def format_last_run(stamp):
 # ---------------------------------------------------------------------------
 
 
-def sessions_path():
-    """Where the launch history log lives. OTREE_LAB_SESSIONS overrides it
-    (used by tests). It sits in data/, never in a researcher's project."""
+def launch_history_path():
+    """Where the launch history log lives (data/launch_history.jsonl; it was
+    sessions.jsonl before 1.5.0). OTREE_LAB_SESSIONS overrides it (tests)."""
     override = os.environ.get("OTREE_LAB_SESSIONS")
     if override:
         return override
-    return os.path.join(data_dir(), SESSIONS_FILENAME)
+    return os.path.join(data_dir(), LAUNCH_HISTORY_FILENAME)
+
+
+# Back-compat alias: callers and tests use sessions_path().
+sessions_path = launch_history_path
 
 
 def _session_database_label(cfg):
-    """A short, human database label for one session-log line (no secrets)."""
+    """A short, human database label for one history line (no secrets): the
+    database's nickname on this PC."""
     c = normalize_config(cfg)
-    mode = c["db_mode"]
-    if mode == DB_MODE_NONE:
+    if c["db_mode"] == DB_MODE_NONE:
         return "SQLite (no lab DB)"
-    name = (c.get("db_name") or "otree").strip() or "otree"
-    if mode == DB_MODE_LAB:
-        return "Lab shared Postgres (%s)" % name
-    return "Custom Postgres (%s)" % name
+    return database_summary_label(c)
 
 
 def build_session_entry(cfg, config_name="", author="", outcome="ok",
@@ -2413,7 +2891,7 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
 def record_session(cfg, config_name="", author="", outcome="ok",
                    server_ready_seconds=None, resetdb=None, lab_presets=None,
                    path=None):
-    """Append ONE JSON line to data/sessions.jsonl for a launch.
+    """Append ONE JSON line to data/launch_history.jsonl for a launch.
 
     FAIL-SOFT by contract: every error (a bad path, a full disk, a serialisation
     quirk) is swallowed so logging can NEVER break or delay a launch. Returns the
@@ -2440,7 +2918,7 @@ def record_session(cfg, config_name="", author="", outcome="ok",
 
 
 def read_sessions(limit=50, path=None):
-    """The most recent launches from data/sessions.jsonl, NEWEST FIRST.
+    """The most recent launches from data/launch_history.jsonl, NEWEST FIRST.
 
     Read-only and fail-soft: an absent or unreadable file returns []; malformed
     lines are skipped. ``limit`` None returns every entry. The file is written in
@@ -2730,17 +3208,24 @@ def is_git_install(repo=None):
     return result.returncode == 0
 
 
-# App-owned template files that SHIP in data/ (repo-relative, forward slashes).
-# The in-app Update may put these back to the shipped version when local edits to
-# them are the ONLY thing blocking the pull (a lab data folder copied over data/
-# marks them changed). Deliberately explicit: never lab_info.json, presets.json,
-# lab.local or anything else the lab writes (those are gitignored anyway).
+# App-owned template files (repo-relative, forward slashes). The in-app Update
+# may put these back to the shipped version when local edits to them are the ONLY
+# thing blocking the pull. Up to 1.4.x they shipped in data/ (a lab data folder
+# copied over data/ marked them changed; the 1.5.0 pull deletes them, which a
+# local edit also blocks); since 1.5.0 they live in app/assets/. Deliberately
+# explicit: never lab_info.json, machine.json or anything else the lab writes
+# (data/ is gitignored as a whole).
 SHIPPED_TEMPLATE_FILES = (
     "data/README.md",
     "data/lab_info.example.json",
     "data/maps/README.md",
     "data/maps/example_large.json",
     "data/maps/example_small.json",
+    "app/assets/data_folder_README.md",
+    "app/assets/lab_info.example.json",
+    "app/assets/maps/README.md",
+    "app/assets/maps/example_large.json",
+    "app/assets/maps/example_small.json",
 )
 
 
@@ -3303,6 +3788,164 @@ def clone_repo_name(repo):
     return repo.rsplit("/", 1)[-1].strip()
 
 
+# ---------------------------------------------------------------------------
+# GitHub login / token, handed to the SYSTEM credential store
+# ---------------------------------------------------------------------------
+# The launcher never keeps a GitHub token: git's own credential helper (Git
+# Credential Manager -> Windows Credential Manager, osxkeychain -> the macOS
+# Keychain) stores it. These helpers only feed that helper through
+# ``git credential approve`` / ``reject`` on stdin. The token never goes on a
+# command line, into a launcher file, the activity log or a returned message.
+
+GITHUB_CREDENTIAL_HOST = "github.com"
+GITHUB_LOGIN_ACTION_LABEL = "Use a different GitHub login or token"
+GITHUB_FORGET_LABEL = "Forget GitHub login"
+GITHUB_NO_LOGIN_HINT = ("If the name is right, add a login with \"%s\"."
+                        % GITHUB_LOGIN_ACTION_LABEL)
+# Shown in the login dialog (both faces).
+GITHUB_LOGIN_DIALOG_NOTE = (
+    "Saved in this computer's own credential store (Windows Credential Manager or "
+    "the macOS Keychain), never in a launcher file. Use a lab account that is a "
+    "member of the organisation, and a read-only token as the password.")
+GITHUB_MAC_NOTE = (
+    "On a Mac the launcher runs git without a terminal, so git cannot ask for a "
+    "login: with none stored, a clone fails with a login error. Add one here (or "
+    "run gh auth login in Terminal).")
+GITHUB_WINDOWS_NOTE = (
+    "On Windows, Git Credential Manager may show its own GitHub sign-in window the "
+    "first time (browser or token).")
+
+
+def github_platform_note(platform=None):
+    """The one platform-specific sentence for the login dialog ("" on Linux)."""
+    platform = sys.platform if platform is None else platform
+    if platform == "darwin":
+        return GITHUB_MAC_NOTE
+    if platform.startswith("win"):
+        return GITHUB_WINDOWS_NOTE
+    return ""
+
+
+def _credential_payload(fields):
+    """``key=value`` lines + the blank line that ends a git credential request."""
+    return "".join("%s=%s\n" % (key, value) for key, value in fields) + "\n"
+
+
+def _run_git_credential(action, fields, runner=None, timeout=30):
+    """Run ``git credential <action>`` with ``fields`` on stdin.
+
+    Returns ``(returncode, output)``. Prompts are switched off
+    (GIT_TERMINAL_PROMPT=0) and no console window opens on Windows. Raises what
+    subprocess raises; the callers turn that into a result."""
+    run = runner if runner is not None else subprocess.run
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    result = run(["git", "credential", action],
+                 input=_credential_payload(fields).encode("utf-8"),
+                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                 env=env, timeout=timeout, creationflags=_no_window_flags())
+    output = getattr(result, "stdout", b"") or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    return getattr(result, "returncode", 1), output
+
+
+def git_credential_helpers(runner=None):
+    """The credential helpers git is configured with (``credential.helper``,
+    every config level), or None when git cannot be run."""
+    try:
+        code, output = _run_git(["config", "--get-all", "credential.helper"],
+                                runner=runner, timeout=15)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if code not in (0, 1):   # 1 = the key is simply not set
+        return None
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def _scrub(text, secret):
+    """``text`` with every copy of ``secret`` replaced (defence in depth)."""
+    text = str(text or "")
+    if secret:
+        text = text.replace(secret, "********")
+    return text
+
+
+def github_forget_login(runner=None):
+    """Forget the stored github.com login (``git credential reject``).
+
+    Returns ``{"ok", "status", "message"}``; ``status`` is ok / no_git / error."""
+    fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST)]
+    try:
+        code, output = _run_git_credential("reject", fields, runner=runner)
+    except FileNotFoundError:
+        return {"ok": False, "status": "no_git",
+                "message": "git is not installed on this computer."}
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return {"ok": False, "status": "error",
+                "message": "Could not run git: %s" % error}
+    if code != 0:
+        return {"ok": False, "status": "error",
+                "message": "git could not forget the GitHub login: %s"
+                           % (output.strip() or "exit code %s" % code)}
+    return {"ok": True, "status": "ok",
+            "message": "Forgot the GitHub login stored on this computer. The next "
+                       "clone or Git Pull needs a login again."}
+
+
+def github_save_login(username, token, runner=None):
+    """Hand a GitHub username + token to the system credential store.
+
+    First ``git credential reject`` (forget the old github.com login), then
+    ``git credential approve`` with protocol=https, host=github.com, the
+    username and the token as the password -- all on stdin. Nothing is written
+    to any launcher file and the token is never part of the returned result.
+
+    Returns ``{"ok", "status", "message"}``; ``status`` is ok / missing /
+    bad_input / no_git / no_helper / error. ``no_helper``: git has no
+    credential helper configured, so it could not remember a login at all."""
+    username = str(username or "").strip()
+    token = str(token or "").strip()
+    if not username or not token:
+        return {"ok": False, "status": "missing",
+                "message": "Enter the GitHub username and the token."}
+    if any(ch in value for value in (username, token) for ch in "\r\n\0"):
+        return {"ok": False, "status": "bad_input",
+                "message": "The username or token contains a line break. Paste it "
+                           "again as one line."}
+    helpers = git_credential_helpers(runner=runner)
+    if helpers is None:
+        return {"ok": False, "status": "no_git",
+                "message": "git is not installed on this computer (or could not "
+                           "be run)."}
+    if not helpers:
+        return {"ok": False, "status": "no_helper",
+                "message": "Not saved: git on this computer has no credential store "
+                           "set up, so it cannot remember a login. Install Git for "
+                           "Windows (with Git Credential Manager) or use the Mac's "
+                           "own git, then try again."}
+    forgot = github_forget_login(runner=runner)
+    if not forgot["ok"] and forgot["status"] == "no_git":
+        return forgot
+    fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST),
+              ("username", username), ("password", token)]
+    try:
+        code, output = _run_git_credential("approve", fields, runner=runner)
+    except FileNotFoundError:
+        return {"ok": False, "status": "no_git",
+                "message": "git is not installed on this computer."}
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return {"ok": False, "status": "error",
+                "message": _scrub("Could not run git: %s" % error, token)}
+    if code != 0:
+        return {"ok": False, "status": "error",
+                "message": _scrub("git could not store the login: %s"
+                                  % (output.strip() or "exit code %s" % code), token)}
+    return {"ok": True, "status": "ok",
+            "message": "Saved the GitHub login for %s in this computer's credential "
+                       "store. Try the clone again." % username}
+
+
 def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
                        on_phase=None):
     """Check, then clone, ``https://github.com/<org>/<repo>`` into a new
@@ -3359,18 +4002,17 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
     def git_failure(output):
         why = classify_git_error(output)
         if why["code"] == "not_found":
+            # GitHub answers "not found" for a private repo this login cannot
+            # see too, so the message names both; the dialog offers
+            # GITHUB_LOGIN_ACTION_LABEL next to it.
             return outcome("not_found",
-                           "No repository called '%s' found in %s, or this "
-                           "computer's GitHub login cannot see it. Check the "
-                           "name." % (name, org), "", output)
+                           "No repository called '%s' found in %s, or this login "
+                           "has no access to it." % (name, org), "", output)
         if why["code"] == "auth":
             return outcome("auth",
                            "Could not open %s/%s: GitHub asked for a login this "
                            "computer does not have (or did not accept)."
-                           % (org, name),
-                           "Check the repository name. If it is right, ask the lab "
-                           "manager to check the read-only GitHub login on this "
-                           "computer.", output)
+                           % (org, name), GITHUB_NO_LOGIN_HINT, output)
         if why["code"] == "network":
             return outcome("network", "Could not reach GitHub.",
                            "Check that this computer is online, then try again.",
@@ -3415,6 +4057,42 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
                                 "missing.", "", output)
     return outcome("ok", "Cloned %s/%s into %s." % (org, name, target),
                    output=output, path=target)
+
+
+# ---------------------------------------------------------------------------
+# "See the activity log" -> a button (both faces)
+# ---------------------------------------------------------------------------
+
+# Label of the button both faces put next to a message that points at the
+# in-app activity log panel (not a file). Clicking it reveals the panel:
+# expanded, scrolled to the latest lines, briefly highlighted.
+ACTIVITY_LOG_BUTTON_LABEL = "See activity log"
+
+# A TRAILING pointer to the log: "See the activity log.", ": see the activity
+# log.", "See the log above.", "See the activity log for both paths." ...
+# The web page mirrors this pattern in JS (ACTIVITY_LOG_HINT_RE); a test keeps
+# the two in step.
+ACTIVITY_LOG_HINT_PATTERN = (r"[\s:;,.\-]*\b(?:see|check) the (?:activity )?log"
+                             r"(?: above| below)?(?: for [^.!?]{1,40})?\s*[.!]?\s*$")
+_ACTIVITY_LOG_HINT_RE = re.compile(ACTIVITY_LOG_HINT_PATTERN, re.IGNORECASE)
+
+
+def split_activity_log_hint(message):
+    """Split a trailing "See the activity log." off a UI message.
+
+    Returns ``(text, has_hint)``. With a hint, ``text`` is the message without
+    it (ending in a full stop), and the face renders a
+    :data:`ACTIVITY_LOG_BUTTON_LABEL` button right after it instead of the
+    sentence. Without one the message comes back unchanged. The activity log
+    itself keeps the full sentence (a button there would point at itself)."""
+    text = "" if message is None else str(message)
+    match = _ACTIVITY_LOG_HINT_RE.search(text)
+    if not match:
+        return text, False
+    head = text[:match.start()].rstrip(" \t:;,-")
+    if head and not head.endswith((".", "!", "?")):
+        head += "."
+    return head, True
 
 
 def version_footer_lines():
@@ -3565,7 +4243,11 @@ def export_bat_text(cfg, name="config"):
             "set DB_PASSWORD=%s" % c["db_password"],
             "set DB_HOST=%s" % c["db_host"],
             "set DB_PORT=%s" % c["db_port"],
-            "set DATABASE_URL=postgres://%DB_USER%:%DB_PASSWORD%@%DB_HOST%:%DB_PORT%/%DB_NAME%",
+            # A blank password: "set DB_PASSWORD=" UNSETS the variable, so
+            # %DB_PASSWORD% would stay literal text. Leave it out of the URL.
+            ("set DATABASE_URL=postgres://%DB_USER%:%DB_PASSWORD%@%DB_HOST%:%DB_PORT%/%DB_NAME%"
+             if c["db_password"] else
+             "set DATABASE_URL=postgres://%DB_USER%@%DB_HOST%:%DB_PORT%/%DB_NAME%"),
             "",
         ]
 
@@ -3786,41 +4468,43 @@ LAB_GEOMETRIES = (LAB_GEO_SMALL, LAB_GEO_LARGE, LAB_GEO_GRID)
 # own maps/<name>.json and point a lab at it.
 
 MAPS_DIRNAME = "maps"
-_MAP_FILE_CACHE = {}
 
 
 def maps_dir():
-    return os.path.join(data_dir(), MAPS_DIRNAME)
+    """The shipped example maps: app/assets/maps/ (read-only). A lab's own maps
+    live inline in lab_info.json ``maps`` (1.5.0; data/maps/ is retired)."""
+    return os.path.join(assets_dir(), MAPS_DIRNAME)
+
+
+def _read_map_file(folder, name):
+    """The map dict in <folder>/<name>.json, or None (basename guards escapes)."""
+    try:
+        with open(os.path.join(folder, os.path.basename(name) + ".json"),
+                  "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def load_map_file(name):
-    """The map dict in maps/<name>.json, or None. Cached; name is a bare stem."""
+    """The map called ``name``: the live lab_info.json ``maps`` table first, then
+    the shipped examples (app/assets/maps/<name>.json). None when unknown."""
     name = str(name or "").strip()
     if not name:
         return None
-    if name in _MAP_FILE_CACHE:
-        return _MAP_FILE_CACHE[name]
-    # basename guards against a reference trying to escape the maps/ folder.
-    path = os.path.join(maps_dir(), os.path.basename(name) + ".json")
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        data = None
-    data = data if isinstance(data, dict) else None
-    _MAP_FILE_CACHE[name] = data
-    return data
+    table = lab_info_maps()
+    if isinstance(table.get(name), dict):
+        return table[name]
+    return _read_map_file(maps_dir(), name)
 
 
 def resolve_lab_map(map_field, maps_table=None):
     """A lab's spatial map object, or None.
 
-    ``map_field`` is either a full map dict (inline in the lab's entry, the
-    optional fallback) or a string naming a map. A named map resolves against an
-    optional inline ``maps`` table first (if the file supplies one) and then
-    against the maps/ folder as maps/<name>.json (the primary, documented path),
-    so a real lab can say ``"map": "example_large"`` and inherit that geometry.
-    """
+    ``map_field`` is either a full map dict (inline) or a string naming a map.
+    A named map resolves against ``maps_table`` (a lab_info ``maps`` table)
+    first, then :func:`load_map_file`."""
     if isinstance(map_field, dict):
         return map_field
     if isinstance(map_field, str) and map_field.strip():
@@ -3832,54 +4516,58 @@ def resolve_lab_map(map_field, maps_table=None):
 
 
 def default_lab_presets():
-    """The built-in labs, seeded from lab_info.json.
+    """The labs of lab_info.json as lab presets (the composite the faces use).
 
-    Empty when lab_info.json is absent (first run), the launcher runs its setup
-    wizard in that case. Each lab's map is resolved here (a maps/<name>.json
-    reference, or an inline object) so callers just read preset["map"].
-    """
+    Each carries its resolved ``map`` object (plus ``map_name``), its
+    ``suggested_database``, and ``display`` from THIS PC's machine.json
+    ``shown_labs`` (all shown when the PC never narrowed them; the home lab is
+    always shown). Empty when there is no lab_info.json (first run)."""
     info = LAB_INFO or {}
-    labs = info.get("labs") or {}
-    maps_table = info.get("maps") or {}   # optional inline table, still honoured
+    maps_table = lab_info_maps(info)
+    shown = MACHINE.get("shown_labs")
+    home = str(MACHINE.get("home_lab") or "")
     presets = []
-    for lab_id, raw in labs.items():
-        raw = raw or {}
+    for raw in lab_info_labs(info):
+        display = True if shown is None else (raw["id"] in shown)
+        if raw["id"] == home:
+            display = True
         presets.append(normalize_lab_preset({
-            "id": lab_id,
-            "name": raw.get("name") or str(lab_id).title(),
-            "ip": raw.get("host", ""),
-            "seats": list(raw.get("seats", [])),
-            "display": raw.get("display", True),
-            "geometry": raw.get("geometry", LAB_GEO_GRID),
-            "map": resolve_lab_map(raw.get("map"), maps_table),
-            "default_room": raw.get("default_room"),
-            "shortcut_label": raw.get("shortcut_label", ""),
-            "builtin": True,
+            "id": raw["id"],
+            "name": raw["name"],
+            "ip": raw["host"],
+            "seats": list(raw["seats"]),
+            "display": display,
+            "geometry": raw["geometry"],
+            "cols": raw["cols"],
+            "map": resolve_lab_map(raw["map"], maps_table),
+            "map_name": raw["map"],
+            "default_room": raw["default_room"],
+            "shortcut_label": raw["shortcut_label"],
+            "deleted": raw["deleted"],
+            "suggested_database": raw.get("suggested_database"),
+            "builtin": False,
         }))
     return presets
 
 
 def reload_lab_info(path=None):
-    """Re-read lab_info.json and refresh the module-level defaults.
+    """Re-read lab_info.json AND machine.json and refresh the module-level state:
+    LAB_INFO, MACHINE, this PC's database list + default (LAB_DB), the default
+    oTree admin login, the default lab and the DEFAULT_CONFIG seeds.
 
-    Called after the first-run wizard writes the file, so the app picks up the
-    new labs/credentials without a restart.
-    """
-    global LAB_INFO, LAB_DB, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, DEFAULT_LAB_ID
-    # A map added or edited while the app runs would otherwise need a restart
-    # because load_map_file caches by name; clear the cache so a reload picks up
-    # new/edited maps/<name>.json immediately.
-    _MAP_FILE_CACHE.clear()
+    Called at startup, after the setup wizard writes the files and after every
+    store save, so the app picks changes up without a restart."""
+    global LAB_INFO, MACHINE, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, DEFAULT_LAB_ID
     LAB_INFO = load_lab_info(path)
-    LAB_DB = lab_db_from_info(LAB_INFO)
-    admin = (LAB_INFO or {}).get("admin") or {}
+    MACHINE = load_machine()
+    admin = (LAB_INFO or {}).get("default_admin") or {}
     DEFAULT_ADMIN_USERNAME = str(admin.get("username") or "admin")
     DEFAULT_ADMIN_PASSWORD = str(admin.get("password") or "")
-    DEFAULT_LAB_ID = _default_lab_id_from_info(LAB_INFO)
+    DEFAULT_LAB_ID = _default_lab_id_from_info(LAB_INFO, MACHINE)
+    _publish_databases(MACHINE.get("databases"), MACHINE.get("default_database"),
+                       MACHINE.get("pg_admin"))
     DEFAULT_CONFIG.update({
-        "db_name": LAB_DB["db_name"], "db_user": LAB_DB["db_user"],
-        "db_password": LAB_DB["db_password"], "db_host": LAB_DB["db_host"],
-        "db_port": LAB_DB["db_port"], "admin_username": DEFAULT_ADMIN_USERNAME,
+        "admin_username": DEFAULT_ADMIN_USERNAME,
         "admin_password": DEFAULT_ADMIN_PASSWORD, "lab": DEFAULT_LAB_ID,
     })
     return LAB_INFO
@@ -3957,6 +4645,16 @@ def normalize_lab_preset(preset):
     # Optional human name of the participant-PC desktop shortcuts (e.g.
     # "Experiment"). Surfaced only in the launch briefing; blank is fine.
     out["shortcut_label"] = str(out.get("shortcut_label", "") or "").strip()
+    # The NAME of the lab's map in lab_info.json ``maps`` ("" = none), kept next
+    # to the resolved ``map`` object so a save writes the name back.
+    out["map_name"] = str(out.get("map_name", "") or "").strip()
+    # The database name the setup wizard suggests on a new PC of this lab.
+    suggested = out.get("suggested_database")
+    out["suggested_database"] = (
+        {"db_name": str(suggested.get("db_name", "") or "").strip(),
+         "db_user": str(suggested.get("db_user", "") or "").strip()}
+        if isinstance(suggested, dict) and str(suggested.get("db_name", "") or "").strip()
+        else None)
     return out
 
 
@@ -4217,12 +4915,15 @@ def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, displ
 
 
 def set_lab_display(lab_presets, lab_id, display):
-    """Show or hide one preset in the lab selector. Guarded so the selector is
-    never left with nothing to show."""
+    """Show or hide one preset in the lab selector (a per-PC choice, saved as
+    machine.json ``shown_labs``). Guarded so the selector is never left with
+    nothing to show, and this PC's own lab always stays shown."""
     presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
     target = find_lab_preset(lab_id, presets)
     if target is None:
         return False, "No lab preset with that id.", presets
+    if not display and str(lab_id) == (read_lab_marker() or ""):
+        return False, "This computer's own lab is always shown.", presets
     if not display:
         others = [p for p in presets if p["id"] != str(lab_id) and p["display"]]
         if not others:
@@ -4334,14 +5035,21 @@ def database_host_note(entry):
 
 
 def database_summary_label(cfg):
-    """The Database card's one-line name for this config. A custom database on
-    another host drops the "on HOST" part, which :func:`database_host_note`
-    shows next to it instead."""
+    """The Database card's one-line name for this config: the database's
+    nickname (its title) on this PC. A database on another host is named
+    without "on HOST", which :func:`database_host_note` shows next to it."""
     c = normalize_config(cfg)
-    if c["db_mode"] == DB_MODE_LAB:
-        return DB_BUILTIN_LAB_TITLE
     if c["db_mode"] == DB_MODE_NONE:
         return DB_BUILTIN_SQLITE_TITLE
+    entry = None
+    if c["database_id"]:
+        entry = _DB_REGISTRY.get(c["database_id"]) or _DB_REGISTRY.get(_DEFAULT_DB_ID)
+    elif c["db_mode"] == DB_MODE_LAB:
+        entry = _DB_REGISTRY.get(_DEFAULT_DB_ID)
+    if entry is None and c["db_mode"] == DB_MODE_CUSTOM:
+        entry = find_database_by_connection(c)
+    if entry is not None:
+        return "%s (Postgres)" % (entry.get("title") or entry.get("db_name") or "database")
     name = c["db_name"].strip() or "custom database"
     host = c["db_host"].strip() or "localhost"
     if not is_local_host(host):
@@ -4350,7 +5058,7 @@ def database_summary_label(cfg):
 
 
 def pg_admin_from_store(extra):
-    """The Postgres admin config for this store, with sane host/port defaults."""
+    """The Postgres admin config (machine.json), with sane host/port defaults."""
     raw = (extra or {}).get("pg_admin") or {}
     return {
         "admin_username": str(raw.get("admin_username", "")),
@@ -4361,41 +5069,77 @@ def pg_admin_from_store(extra):
 
 
 def pg_admin_ready(admin):
-    """Which required admin fields are still blank (empty list means ready)."""
+    """Which required admin fields are still blank (empty list means ready).
+    The password is NOT required: a Postgres user may have none (Postgres.app,
+    a trust login), see :data:`PG_BLANK_PASSWORD_HINT`."""
     admin = admin or {}
     missing = []
-    labels = {"admin_username": "username", "admin_password": "password",
-              "admin_host": "host", "admin_port": "port"}
+    labels = {"admin_username": "username", "admin_host": "host", "admin_port": "port"}
     for key in PG_ADMIN_KEYS:
+        if key == "admin_password":
+            continue
         if not str(admin.get(key, "")).strip():
             missing.append(labels[key])
     return missing
 
 
 # ---------------------------------------------------------------------------
-# Known-databases registry + researcher roster (Round 3). Both are GLOBAL,
-# passive collections stored in the store's `extra` dict next to lab_presets /
-# pg_admin, so every config sees them (exactly like lab presets). The registry
-# NEVER connects to Postgres by itself: only create_database() does, and its
-# caller then calls register_database() with the confirmed result. See the API
-# index at the top of this module and _ai/CORE_DB_API.md.
+# THIS PC's database list (machine.json ``databases``) + researcher roster.
+# Every database this PC uses is a normal entry with its own connection and
+# password; which one is the PC default is a REFERENCE (machine.json
+# ``default_database``). Configs reference databases by id. The registry NEVER
+# connects to Postgres by itself: only create_database() does, and its caller
+# then calls register_database() with the confirmed result. The store facade
+# carries the list as ``extra["databases"]`` / ``extra["default_database"]``.
 # ---------------------------------------------------------------------------
 
-# Stable ids of the two always-present built-in databases.
+# The id of the one always-present built-in database: oTree's own SQLite.
 DB_BUILTIN_SQLITE = "otree_default"
+# RETIRED in 1.5.0: the old "Lab shared database" (the lab_info.json database
+# block). The migration turns it into a normal database of this PC; the id is
+# kept only so old references can be recognised.
 DB_BUILTIN_LAB = "lab_shared"
 
-# The store `extra` key that holds WHICH database is the lab-shared default, as a
-# REFERENCE (a database id), not a copy of its credentials. See the "default
-# database" section further down (default_database_id / set_default_database /
-# apply_default_database). Absent -> the lab built-in (the setup-wizard DB).
 DEFAULT_DATABASE_KEY = "default_database"
 
 DB_BUILTIN_SQLITE_TITLE = "oTree default (SQLite)"
-DB_BUILTIN_LAB_TITLE = "Lab shared database (Postgres)"
+# Kept for old callers; the picker no longer has a "lab shared" entry.
+DB_BUILTIN_LAB_TITLE = "This computer's default database"
 
-# The connection fields a custom entry carries (kept separate from the person).
+# The connection fields a database entry carries (kept separate from the person).
 DATABASE_CONN_KEYS = ("db_name", "db_user", "db_password", "db_host", "db_port")
+
+# The live registry normalize_config resolves ``database_id`` against: id ->
+# entry (not soft-deleted), plus the id of the PC default. Published by
+# _publish_databases (from machine.json at load, or from a store ``extra`` via
+# apply_default_database after any change).
+_DB_REGISTRY = {}
+_DEFAULT_DB_ID = ""
+
+
+def _publish_databases(databases, default_id, pg_admin=None):
+    """Make ``databases`` (a machine.json-style list) + ``default_id`` the live
+    registry, and point LAB_DB / the DEFAULT_CONFIG db seeds at the default.
+    A ``uses_admin_login`` entry gets this PC's ``pg_admin`` login filled in
+    here (in memory only), so a launch always uses the CURRENT admin login."""
+    global _DB_REGISTRY, _DEFAULT_DB_ID, LAB_DB
+    registry = {}
+    for raw in databases or []:
+        if isinstance(raw, dict):
+            entry = resolve_admin_login(normalize_database_entry(raw), pg_admin)
+            if entry["id"] and not entry["deleted"]:
+                registry[entry["id"]] = entry
+    _DB_REGISTRY = registry
+    _DEFAULT_DB_ID = str(default_id or "").strip()
+    default = registry.get(_DEFAULT_DB_ID)
+    LAB_DB = ({key: str(default.get(key, "") or "") for key in DATABASE_CONN_KEYS}
+              if default is not None else dict(_DUMMY_DB))
+    DEFAULT_CONFIG.update({
+        "db_name": LAB_DB["db_name"], "db_user": LAB_DB["db_user"],
+        "db_password": LAB_DB["db_password"], "db_host": LAB_DB["db_host"],
+        "db_port": LAB_DB["db_port"],
+    })
+    return LAB_DB
 
 
 def _slugify_db_id(title):
@@ -4405,7 +5149,7 @@ def _slugify_db_id(title):
 
 def _unique_db_id(title, existing_ids):
     """A registry id derived from the title, unique among existing ids and never
-    colliding with the two reserved built-in ids."""
+    colliding with the reserved built-in ids."""
     base = _slugify_db_id(title)
     reserved = set(existing_ids) | {DB_BUILTIN_SQLITE, DB_BUILTIN_LAB}
     candidate = base
@@ -4431,9 +5175,6 @@ def slugify_pg_dbname(name):
     Examples: ``"My Lab-Study 2" -> "my_lab_study_2"``; ``"2024data" -> "_2024data"``.
     """
     text = str(name or "").lower()
-    # Everything outside the Postgres identifier set (letters/digits/_/$) -- which
-    # includes spaces and hyphens -- becomes an underscore. We lowercased first,
-    # so the surviving letters are a-z.
     text = re.sub(r"[^a-z0-9_$]+", "_", text)
     text = re.sub(r"_+", "_", text).strip("_")
     if not text or text[0].isdigit():
@@ -4441,14 +5182,24 @@ def slugify_pg_dbname(name):
     return text
 
 
-def normalize_database_entry(raw):
-    """One custom registry entry as a normalized dict.
+def normalize_created_on(raw):
+    """A database's ``created_on`` stamp ({hostname, ip, home_lab, when}), or {}."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {key: str(raw.get(key, "") or "").strip()
+           for key in ("hostname", "ip", "home_lab", "when")}
+    if raw.get("migrated"):
+        out["migrated"] = True
+    return out if any(out.get(k) for k in ("hostname", "ip", "home_lab", "when")) else {}
 
-    Every field is a string; the connection keys are always present; the
-    creator ``researcher`` (a person) is kept distinct from ``postgres_user``
-    (the database credential). ``db_mode`` is always ``custom`` for a registry
-    entry (the two built-ins are synthesized by ``builtin_databases``).
-    """
+
+def normalize_database_entry(raw):
+    """One database of this PC as a normalized dict.
+
+    Every field is a string; the connection keys are always present; the creator
+    ``researcher`` (a person) is kept distinct from ``postgres_user`` (the
+    credential). ``title`` is the nickname shown everywhere. ``created_on`` says
+    which computer it was created/registered on."""
     raw = raw or {}
     entry = {
         "id": str(raw.get("id", "")).strip(),
@@ -4459,64 +5210,95 @@ def normalize_database_entry(raw):
         "created": str(raw.get("created", "") or ""),
         "builtin": False,
         "db_mode": DB_MODE_CUSTOM,
-        # Soft-delete flag: a deleted entry stays in the store JSON (recoverable
-        # by hand-editing) but is hidden from every app UI list. It NEVER means
-        # the underlying Postgres database was touched -- only the launcher's
-        # record of it is hidden. See soft_delete_database.
+        # Soft-delete flag: a deleted entry stays in machine.json (recoverable by
+        # hand-editing) but is hidden from every app UI list. It NEVER means the
+        # underlying Postgres database was touched.
         "deleted": bool(raw.get("deleted", False)),
+        "created_on": normalize_created_on(raw.get("created_on")),
     }
     for key in DATABASE_CONN_KEYS:
         entry[key] = str(raw.get(key, "") or "")
+    # uses_admin_login: the database connects as THIS PC's Postgres admin login
+    # (machine.json pg_admin), by REFERENCE. The stored form never holds a copy
+    # of the admin user/password; resolve_admin_login fills them in live.
+    entry["uses_admin_login"] = bool(raw.get("uses_admin_login", False))
+    if entry["uses_admin_login"]:
+        entry["db_user"] = ""
+        entry["db_password"] = ""
+        entry["postgres_user"] = ""
     if not entry["title"]:
         entry["title"] = entry["db_name"] or "custom database"
     return entry
 
 
-def known_databases_from_store(extra):
-    """The custom databases saved in the store (the append-only registry),
-    normalized and in registry (insertion) order. Never includes the built-ins.
+# A database with no user of its own connects as this computer's Postgres admin.
+ADMIN_LOGIN_NOTE = "Uses the Postgres admin login from this computer."
+ADMIN_LOGIN_MISSING = ("This database uses the Postgres admin login from this "
+                       "computer, but no admin login is stored. Add it in Settings > "
+                       "Postgres admin.")
 
-    Soft-deleted entries (``deleted`` True) are skipped, so they vanish from
-    every UI list and picker while remaining in the store JSON (recoverable by
-    hand-editing). See soft_delete_database.
-    """
+
+def resolve_admin_login(entry, pg_admin):
+    """A copy of a database ``entry`` with its login resolved: for a
+    ``uses_admin_login`` entry, ``db_user``/``db_password`` come from
+    ``pg_admin`` (the CURRENT machine login, so a changed admin login is
+    followed) and ``login_missing`` is True when no admin username is stored
+    (the entry is then unusable, see :data:`ADMIN_LOGIN_MISSING`). Other
+    entries come back unchanged (as a copy). Never meant to be saved."""
+    out = dict(entry or {})
+    out["login_missing"] = False
+    if not out.get("uses_admin_login"):
+        return out
+    admin = pg_admin or {}
+    user = str(admin.get("admin_username", "") or "").strip()
+    out["db_user"] = user
+    out["db_password"] = str(admin.get("admin_password", "") or "") if user else ""
+    out["postgres_user"] = user
+    out["login_missing"] = not user
+    return out
+
+
+def known_databases_from_store(extra):
+    """This PC's databases (the store's ``extra["databases"]``), normalized, in
+    list order, soft-deleted ones skipped. Never includes the SQLite built-in."""
     raw = (extra or {}).get("databases")
     if not isinstance(raw, list):
         return []
+    admin = (extra or {}).get("pg_admin")
     out = []
     for item in raw:
         if isinstance(item, dict):
-            entry = normalize_database_entry(item)
+            entry = resolve_admin_login(normalize_database_entry(item), admin)
             if entry["id"] and not entry["deleted"]:
                 out.append(entry)
     return out
 
 
 def builtin_databases():
-    """The two always-present built-in database entries: the oTree default
-    (SQLite) and the lab shared database (Postgres). Synthesized, never stored.
-    The lab entry reflects the live LAB_DB credentials."""
+    """The always-present built-in database entries: only oTree's own SQLite
+    (1.5.0: the "Lab shared database" is a normal database of this PC now)."""
     sqlite = {"id": DB_BUILTIN_SQLITE, "title": DB_BUILTIN_SQLITE_TITLE,
               "researcher": "", "postgres_user": "", "database_url": "",
-              "created": "", "builtin": True, "db_mode": DB_MODE_NONE}
-    lab = {"id": DB_BUILTIN_LAB, "title": DB_BUILTIN_LAB_TITLE,
-           "researcher": "", "postgres_user": str(LAB_DB.get("db_user", "")),
-           "database_url": "", "created": "", "builtin": True, "db_mode": DB_MODE_LAB}
+              "created": "", "builtin": True, "db_mode": DB_MODE_NONE,
+              "deleted": False, "created_on": {}}
     for key in DATABASE_CONN_KEYS:
         sqlite[key] = ""
-        lab[key] = str(LAB_DB.get(key, ""))
-    return [sqlite, lab]
+    return [sqlite]
 
 
 def list_databases(extra):
-    """The full database picker list, in order: the SQLite built-in, the lab
-    shared built-in, then every custom database in the registry. Every UI shows
-    the SAME global list (anybody may use anybody else's database)."""
-    return builtin_databases() + known_databases_from_store(extra)
+    """The full database picker list: the SQLite built-in, then this PC's
+    databases (the default one carries ``is_default`` True)."""
+    default = default_database_id(extra)
+    out = builtin_databases()
+    for entry in known_databases_from_store(extra):
+        entry["is_default"] = (entry["id"] == default)
+        out.append(entry)
+    return out
 
 
 def find_database(extra, db_id):
-    """A database entry by id, across built-ins + the registry, or None."""
+    """A database entry by id (the SQLite built-in or one of this PC's), or None."""
     db_id = str(db_id or "").strip()
     if not db_id:
         return None
@@ -4526,37 +5308,129 @@ def find_database(extra, db_id):
     return None
 
 
+def find_database_by_connection(conn, databases=None):
+    """The database (of ``databases``, or the live registry) whose name, host,
+    port and user match ``conn``, or None. Passwords are not compared."""
+    def key(d):
+        return (str(d.get("db_name", "") or "").strip(),
+                (str(d.get("db_host", "") or "").strip() or "localhost").lower(),
+                str(d.get("db_port", "") or "").strip() or "5432",
+                str(d.get("db_user", "") or "").strip())
+    wanted = key(conn or {})
+    pool = databases if databases is not None else list(_DB_REGISTRY.values())
+    for entry in pool:
+        if isinstance(entry, dict) and not entry.get("deleted") and key(entry) == wanted:
+            return entry
+    return None
+
+
 def database_config_fields(entry):
-    """The config field overrides that selecting this database applies: always
-    ``db_mode``, plus the live lab credentials for the lab built-in, or the
-    stored connection fields for a custom database. Selecting the SQLite
-    built-in only sets ``db_mode`` to none."""
+    """The config field overrides that selecting this database applies: its
+    ``database_id`` (the reference that is saved) plus the derived ``db_mode``
+    and connection. The SQLite built-in only sets db_mode "none"."""
     entry = entry or {}
-    mode = entry.get("db_mode", DB_MODE_CUSTOM)
-    if mode == DB_MODE_NONE:
-        return {"db_mode": DB_MODE_NONE}
-    if mode == DB_MODE_LAB:
-        fields = {"db_mode": DB_MODE_LAB}
-        fields.update(LAB_DB)
-        return fields
-    fields = {"db_mode": DB_MODE_CUSTOM}
+    if entry.get("db_mode") == DB_MODE_NONE or entry.get("id") == DB_BUILTIN_SQLITE:
+        return {"db_mode": DB_MODE_NONE, "database_id": DB_BUILTIN_SQLITE}
+    fields = {"db_mode": DB_MODE_CUSTOM, "database_id": str(entry.get("id", "") or "")}
     for key in DATABASE_CONN_KEYS:
         fields[key] = str(entry.get(key, "") or "")
     return fields
 
 
+def config_database_login_problem(cfg):
+    """:data:`ADMIN_LOGIN_MISSING` when the database this config uses connects
+    as the Postgres admin login and this PC has none stored, else ""."""
+    entry = _DB_REGISTRY.get(current_database_id(cfg))
+    if entry is not None and entry.get("login_missing"):
+        return ADMIN_LOGIN_MISSING
+    return ""
+
+
+def current_database_id(cfg):
+    """The id of the database a config uses right now (for a picker to tick):
+    its own id, the PC default for a config that follows it, the SQLite id, or
+    "" when nothing on this PC matches."""
+    c = normalize_config(cfg)
+    if c["db_mode"] == DB_MODE_NONE and c["database_id"] in ("", DB_BUILTIN_SQLITE):
+        return DB_BUILTIN_SQLITE
+    if c["database_id"] and c["database_id"] in _DB_REGISTRY:
+        return c["database_id"]
+    if c["database_id"]:
+        return _DEFAULT_DB_ID if _DEFAULT_DB_ID in _DB_REGISTRY else DB_BUILTIN_SQLITE
+    if c["db_mode"] == DB_MODE_LAB:
+        return _DEFAULT_DB_ID
+    match = find_database_by_connection(c)
+    return match["id"] if match else ""
+
+
+def config_database_note(cfg):
+    """"" normally; a plain sentence when the config's database is not on this
+    PC and the PC default (or SQLite) is used instead. Shown by both faces and
+    logged by the headless run."""
+    db_id = str((cfg or {}).get("database_id", "") or "").strip()
+    if not db_id or db_id == DB_BUILTIN_SQLITE or db_id in _DB_REGISTRY:
+        return ""
+    default = _DB_REGISTRY.get(_DEFAULT_DB_ID)
+    if default is not None:
+        return ("This config's database (%s) is not set up on this computer, so it "
+                "uses this computer's default database, %s." % (db_id, default["title"]))
+    return ("This config's database (%s) is not set up on this computer, and this "
+            "computer has no default database, so it uses oTree's own SQLite."
+            % db_id)
+
+
+def database_created_on_line(entry):
+    """The grey line under a database's title: where and when it was created
+    (or registered), e.g. "Created on LAB-PC-7 (10.0.0.7), Large lab, 2026-09-23".
+    "" when unknown."""
+    stamp = normalize_created_on((entry or {}).get("created_on"))
+    if not stamp:
+        return ""
+    where = stamp.get("hostname") or "an unknown computer"
+    if stamp.get("ip"):
+        where += " (%s)" % stamp["ip"]
+    parts = [("Recorded on %s" if stamp.get("migrated") else "Created on %s") % where]
+    if stamp.get("home_lab"):
+        lab = find_lab_preset(stamp["home_lab"], default_lab_presets())
+        parts.append(lab["name"] if lab else stamp["home_lab"])
+    if stamp.get("when"):
+        parts.append(stamp["when"][:10])
+    return ", ".join(parts)
+
+
+def database_location_warning(entry, hostname=None):
+    """A warning when a LOCALHOST database was created on a different computer
+    than this one: "localhost" here is a different Postgres, so a database of the
+    same name here is not the same data. "" otherwise."""
+    entry = entry or {}
+    if entry.get("db_mode") == DB_MODE_NONE or entry.get("id") == DB_BUILTIN_SQLITE:
+        return ""
+    if not is_local_host(entry.get("db_host", "")):
+        return ""
+    stamp = normalize_created_on(entry.get("created_on"))
+    created_host = stamp.get("hostname", "")
+    if hostname is None:
+        try:
+            hostname = socket.gethostname()
+        except Exception:
+            hostname = ""
+    if not created_host or not hostname or created_host.lower() == str(hostname).lower():
+        return ""
+    return ("%s was created on %s. On this computer (%s), localhost is a different "
+            "Postgres: a database with the same name here is NOT the same data."
+            % (entry.get("title") or entry.get("db_name") or "This database",
+               created_host, hostname))
+
+
 def register_database(extra, title, researcher, connection=None,
-                      postgres_user="", database_url="", created=None):
-    """Append a custom database to the registry (append-only) and record its
-    creator in the researcher roster.
+                      postgres_user="", database_url="", created=None, created_on=None):
+    """Append a database to this PC's list (append-only), stamp where it was
+    created (``created_on``), record its creator in the researcher roster, and
+    make it the PC default when the PC has none yet.
 
     Mutates ``extra`` in place and returns the new, normalized entry.
     ``connection`` is a dict of the ``db_*`` connection keys, so a
-    ``create_database`` result's ``fields`` dict can be passed straight in. The
-    Postgres ``user`` (a credential) is kept distinct from ``researcher`` (the
-    person); when ``postgres_user`` is omitted it defaults to the connection's
-    ``db_user``.
-    """
+    ``create_database`` result's ``fields`` dict can be passed straight in."""
     if extra is None:
         raise ValueError("register_database needs a store `extra` dict to write into")
     connection = dict(connection or {})
@@ -4566,75 +5440,50 @@ def register_database(extra, title, researcher, connection=None,
         "postgres_user": str(postgres_user or connection.get("db_user", "")).strip(),
         "database_url": str(database_url or ""),
         "created": created or now_iso(),
+        "created_on": created_on or current_pc_stamp(),
     }
     for key in DATABASE_CONN_KEYS:
         raw[key] = str(connection.get(key, "") or "")
-    existing = known_databases_from_store(extra)
-    raw["id"] = _unique_db_id(raw["title"] or raw["db_name"], [e["id"] for e in existing])
-    entry = normalize_database_entry(raw)
+    # A database with no user of its own references the admin login (stored
+    # without a copy of it: normalize_database_entry blanks user + password).
+    raw["uses_admin_login"] = bool(connection.get("uses_admin_login", False))
     stored = extra.get("databases")
     if not isinstance(stored, list):
         stored = []
+    ids = [str(d.get("id", "")) for d in stored if isinstance(d, dict)]
+    raw["id"] = _unique_db_id(raw["title"] or raw["db_name"], ids)
+    entry = normalize_database_entry(raw)
     stored.append(entry)
     extra["databases"] = stored
     if entry["researcher"]:
         add_researcher(extra, entry["researcher"])
-    return entry
+    if find_database(extra, extra.get(DEFAULT_DATABASE_KEY)) is None:
+        extra[DEFAULT_DATABASE_KEY] = entry["id"]
+    apply_default_database(extra)
+    return resolve_admin_login(entry, extra.get("pg_admin"))
 
 
 def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
                   db_user=None, db_password=None, db_host=None, db_port=None,
                   postgres_user=None):
-    """Edit an EXISTING database entry in place and persist the change.
-
-    Works for BOTH a custom registry entry AND the lab-shared built-in
-    (:data:`DB_BUILTIN_LAB`) -- the lab-shared database used to be read-only, and
-    making it editable here is the point of this function. Only the fields passed
-    (non-None) are changed; the rest keep their current values.
-
-      * A custom registry entry is updated in place in ``extra["databases"]``
-        (its id, so any default-database reference to it, is preserved). The
-        caller then saves presets.json as usual.
-      * The lab-shared built-in has no registry row -- it IS the lab_info.json
-        ``database`` block -- so its edit is written straight into lab_info.json
-        (:func:`save_lab_info` + :func:`reload_lab_info`) and the live
-        :data:`LAB_DB` is re-resolved via :func:`apply_default_database`, so every
-        DB_MODE_LAB launch immediately follows the change.
-      * The oTree default (SQLite) built-in has nothing to edit -> ``ValueError``.
-
-    ``postgres_user`` is an alias for the connection ``db_user`` (the two are the
-    same Postgres role); passing either updates it. Mutates ``extra`` in place and
-    returns the updated, normalized entry.
-    """
+    """Edit one of this PC's databases in place (by id; its id, and so every
+    config referencing it, is kept). Only the fields passed (non-None) change.
+    The SQLite built-in has nothing to edit and the retired "lab shared" id no
+    longer exists -> ``ValueError``. ``postgres_user`` is an alias for
+    ``db_user``. A ``db_user`` of "" means "use this PC's Postgres admin login"
+    (``uses_admin_login``, stored without a copy of it); a non-blank one gives
+    the database its own user. Mutates ``extra`` in place and returns the
+    updated entry (login resolved)."""
     if extra is None:
         raise ValueError("edit_database needs a store `extra` dict to write into")
     db_id = str(db_id or "").strip()
     if db_id == DB_BUILTIN_SQLITE:
         raise ValueError("The oTree default (SQLite) database has nothing to edit.")
-
-    # The connection updates, keyed by the DATABASE_CONN_KEYS. postgres_user is a
-    # synonym for db_user; an explicit db_user wins when both are given.
     conn_updates = {"db_name": db_name, "db_user": db_user,
                     "db_password": db_password, "db_host": db_host,
                     "db_port": db_port}
     if postgres_user is not None and db_user is None:
         conn_updates["db_user"] = postgres_user
-
-    if db_id == DB_BUILTIN_LAB:
-        info = load_lab_info() or {}
-        # Seed from the current resolved wizard credentials so a partial edit
-        # (say just the host) keeps the other fields intact.
-        block = dict(lab_db_from_info(info))
-        _refuse_new_remote_host(block.get("db_host", ""), db_host)
-        for key, value in conn_updates.items():
-            if value is not None:
-                block[key] = str(value)
-        info["database"] = block
-        save_lab_info(info)
-        reload_lab_info()
-        apply_default_database(extra)
-        return find_database(extra, DB_BUILTIN_LAB)
-
     stored = extra.get("databases")
     if not isinstance(stored, list):
         stored = []
@@ -4645,7 +5494,6 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
             break
     if target_index is None:
         raise ValueError("No database with id %r to edit." % (db_id,))
-
     entry = normalize_database_entry(stored[target_index])
     _refuse_new_remote_host(entry.get("db_host", ""), db_host)
     if title is not None:
@@ -4657,20 +5505,17 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
     for key, value in conn_updates.items():
         if value is not None:
             entry[key] = str(value)
-    # Keep the recorded Postgres user aligned with db_user when only db_user was
-    # given (they name the same role), unless postgres_user was set explicitly.
     if db_user is not None and postgres_user is None:
         entry["postgres_user"] = str(db_user).strip()
+    if conn_updates["db_user"] is not None:
+        entry["uses_admin_login"] = not str(conn_updates["db_user"]).strip()
     entry = normalize_database_entry(entry)
     stored[target_index] = entry
     extra["databases"] = stored
     if researcher is not None and entry["researcher"]:
         add_researcher(extra, entry["researcher"])
-    # If this custom database is the one currently promoted to the lab-shared
-    # default, its connection just changed, so re-resolve the live LAB_DB.
-    if default_database_id(extra) == entry["id"]:
-        apply_default_database(extra)
-    return entry
+    apply_default_database(extra)
+    return resolve_admin_login(entry, extra.get("pg_admin"))
 
 
 def _refuse_new_remote_host(current, new):
@@ -4687,18 +5532,11 @@ def _refuse_new_remote_host(current, new):
 
 
 def soft_delete_database(extra, db_id):
-    """Soft-delete a custom database: hide it from the app but KEEP it in the
-    store JSON (recoverable by hand-editing).
-
-    Sets ``deleted`` on the matching registry entry in ``extra["databases"]``,
-    so every UI list (which reads :func:`known_databases_from_store`) skips it.
-    It does NOT touch Postgres or any real database -- it only hides the
-    launcher's record of it. The two built-ins (SQLite / lab-shared) have no
-    registry row, so they cannot be soft-deleted. If the hidden database was the
-    lab-shared default, the default reference is reset to the lab built-in so
-    nothing points at a hidden entry. Mutates ``extra`` in place and returns
-    (ok, message).
-    """
+    """Soft-delete one of this PC's databases: hide it from the app but KEEP it in
+    machine.json (recoverable by hand-editing). It does NOT touch Postgres. The
+    SQLite built-in cannot be deleted. If it was the PC default, the next
+    remaining database becomes the default (or none). Mutates ``extra`` in place
+    and returns (ok, message)."""
     if extra is None:
         raise ValueError("soft_delete_database needs a store `extra` dict to write into")
     db_id = str(db_id or "").strip()
@@ -4714,113 +5552,65 @@ def soft_delete_database(extra, db_id):
             title = str(item.get("title", "") or item.get("db_name", "") or db_id)
             item["deleted"] = True
             extra["databases"] = stored
-            # Never leave the lab-shared default pointing at a hidden entry.
-            if default_database_id(extra) == db_id:
-                set_default_database(extra, DB_BUILTIN_LAB)
+            if str(extra.get(DEFAULT_DATABASE_KEY, "") or "") == db_id:
+                remaining = known_databases_from_store(extra)
+                extra[DEFAULT_DATABASE_KEY] = remaining[0]["id"] if remaining else ""
+            apply_default_database(extra)
             return True, "Hid the database %r." % title
     return False, "No database with that id."
 
 
-# -- The lab-shared DEFAULT database (a reference into the one list) ---------
+# -- This PC's DEFAULT database (a reference into the one list) --------------
 #
-# The "default" (lab shared) database is NOT a special, wizard-time database any
-# more: it is simply WHICH entry of the one database list is currently chosen as
-# the lab-shared one. The choice is stored as a REFERENCE -- the entry's id, in
-# ``extra["default_database"]`` (DEFAULT_DATABASE_KEY) -- next to lab_presets /
-# databases / researchers, so it persists in presets.json exactly like the rest
-# of the registry. Storing an id (not a credentials copy) is what makes "switch
-# which database is the default" a one-line change and keeps a single source of
-# truth for each database's connection details.
-#
-# Backward compatibility: an old store / the baked lab_info.json carries no
-# explicit reference, so default_database_id() falls back to the lab built-in
-# (DB_BUILTIN_LAB), whose credentials ARE the lab_info.json database block. So
-# DB_MODE_LAB keeps resolving to the same wizard credentials as before with no
-# migration, and the baked lab_info.json database is, in effect, the seeded
-# default. A custom database created AFTER the wizard can be promoted to default
-# by pointing the reference at its id -- the bug this refactor fixes.
+# The default is simply WHICH of this PC's databases a config that follows the
+# PC default (the generated Lab default) uses, stored as its id in machine.json
+# ``default_database``. "" / an id that no longer resolves = no default: such a
+# config falls back to oTree's own SQLite, and saying so is the caller's job.
 
 
 def default_database_id(extra):
-    """The id of the database chosen as the lab-shared default.
-
-    Falls back to the lab built-in (:data:`DB_BUILTIN_LAB`) when the store has no
-    explicit reference, so an old store and the baked lab_info.json keep
-    resolving the lab-shared database to the setup-wizard credentials.
-    """
-    value = str((extra or {}).get(DEFAULT_DATABASE_KEY, "")).strip()
-    return value or DB_BUILTIN_LAB
+    """The id of this PC's default database, or "" when it has none."""
+    value = str((extra or {}).get(DEFAULT_DATABASE_KEY, "") or "").strip()
+    if value and any(e["id"] == value for e in known_databases_from_store(extra)):
+        return value
+    return ""
 
 
 def resolve_default_database(extra):
-    """The database entry currently chosen as the lab-shared default.
-
-    Returns the entry the stored reference names (a custom DB, or the lab
-    built-in), falling back to the lab built-in when the reference is unset or no
-    longer resolves (e.g. it named a custom database that was later removed).
-    """
-    entry = find_database(extra, default_database_id(extra))
-    if entry is None:
-        entry = find_database(extra, DB_BUILTIN_LAB)
-    return entry
+    """This PC's default database entry, or None."""
+    db_id = default_database_id(extra)
+    return find_database(extra, db_id) if db_id else None
 
 
 def lab_shared_db_fields(extra):
-    """The connection dict the lab-shared default resolves to right now.
-
-    For the lab built-in (or an unset/unresolved reference, or -- defensively --
-    an old store that pointed the default at SQLite) this is the immutable
-    setup-wizard credentials from lab_info.json; for a custom database promoted
-    to default it is that database's stored connection fields. The result is what
-    :func:`apply_default_database` publishes as the live :data:`LAB_DB`.
-    """
+    """The connection of this PC's default database (placeholders when none)."""
     entry = resolve_default_database(extra)
-    if entry is None or entry.get("db_mode") != DB_MODE_CUSTOM:
-        return dict(wizard_lab_db())
+    if entry is None:
+        return dict(_DUMMY_DB)
     return {key: str(entry.get(key, "") or "") for key in DATABASE_CONN_KEYS}
 
 
 def apply_default_database(extra):
-    """Re-point the live lab-shared credentials at the store's chosen default.
-
-    Sets the module :data:`LAB_DB` (and the DEFAULT_CONFIG db_* seeds) to the
-    connection the ``default_database`` reference resolves to. Both UIs call this
-    right after loading the store and again whenever the default is changed, so
-    every DB_MODE_LAB code path -- normalize_config, build_database_url,
-    build_env, the built-in lab picker entry -- follows the chosen default with
-    no other change. Returns the resolved credentials dict.
-    """
-    global LAB_DB
-    LAB_DB = dict(lab_shared_db_fields(extra))
-    DEFAULT_CONFIG.update({
-        "db_name": LAB_DB["db_name"], "db_user": LAB_DB["db_user"],
-        "db_password": LAB_DB["db_password"], "db_host": LAB_DB["db_host"],
-        "db_port": LAB_DB["db_port"],
-    })
-    return LAB_DB
+    """Publish ``extra``'s database list + default as the live registry that
+    normalize_config resolves against (and LAB_DB = the default's connection).
+    Both faces call this after loading the store and after every database
+    change. Returns the default's connection dict."""
+    return _publish_databases((extra or {}).get("databases"),
+                              default_database_id(extra),
+                              (extra or {}).get("pg_admin"))
 
 
 def default_database_options(extra):
-    """The databases selectable as the lab-shared default, in picker order.
-
-    The lab-shared database is a Postgres database, so this offers the lab
-    built-in (the setup-wizard DB) plus every custom database in the registry,
-    and excludes the SQLite built-in (which is the separate "oTree default
-    (SQLite)" / no-database run-config choice, not a shared lab database).
-    """
+    """The databases selectable as this PC's default: all of its databases
+    (never the SQLite built-in)."""
     return [entry for entry in list_databases(extra)
             if entry.get("db_mode") != DB_MODE_NONE]
 
 
 def set_default_database(extra, db_id):
-    """Choose which known database is the lab-shared default, by reference.
-
-    Validates that ``db_id`` names a real Postgres database (built-in lab or a
-    custom in the registry), stores its id in ``extra[DEFAULT_DATABASE_KEY]``, and
-    re-resolves the live :data:`LAB_DB` via :func:`apply_default_database`.
-    Mutates ``extra`` in place and returns the chosen entry. Raises ``ValueError``
-    for an unknown id or the SQLite built-in (which cannot be a shared lab DB).
-    """
+    """Make one of this PC's databases the default, by reference. Raises
+    ``ValueError`` for an unknown id or the SQLite built-in. Mutates ``extra`` in
+    place, republishes the live registry and returns the chosen entry."""
     if extra is None:
         raise ValueError("set_default_database needs a store `extra` dict to write into")
     entry = find_database(extra, db_id)
@@ -4828,7 +5618,7 @@ def set_default_database(extra, db_id):
         raise ValueError("No database with id %r to make the default." % (db_id,))
     if entry.get("db_mode") == DB_MODE_NONE:
         raise ValueError(
-            "The lab shared database must be a Postgres database, not the oTree "
+            "The default database must be a Postgres database, not the oTree "
             "default (SQLite).")
     extra[DEFAULT_DATABASE_KEY] = entry["id"]
     apply_default_database(extra)
@@ -5480,7 +6270,11 @@ def launch_briefing(cfg, lab_presets=None):
             return base
         return base + "?participant_label=%s&%s" % (seat, WELCOME_FLAG)
 
-    caution = (c["db_mode"] == DB_MODE_LAB)
+    # The caution bar: this run uses this PC's DEFAULT database (the shared one
+    # that may be reset between sessions), followed or picked explicitly.
+    caution = (c["db_mode"] == DB_MODE_LAB
+               or (c["db_mode"] == DB_MODE_CUSTOM and bool(_DEFAULT_DB_ID)
+                   and current_database_id(c) == _DEFAULT_DB_ID))
     # A room with participant PC links has a lab desktop shortcut (which encodes
     # both the room and which server); the briefing names that shortcut instead
     # of a raw link. A room without one has no shortcut, so the briefing gives
@@ -6050,6 +6844,16 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
 
     host = c["db_host"]
     port = c["db_port"]
+    problem = config_database_login_problem(c)
+    if problem:
+        # A database that connects as the admin login, with none stored on this
+        # PC: unusable until the admin login is added. Said plainly, no connect.
+        result = _preflight_result("database", False, problem,
+                                   "Lab Settings > Postgres admin is empty.")
+        result["db_mode"] = c["db_mode"]
+        result["is_default"] = (current_database_id(c) == _DEFAULT_DB_ID
+                                or c["db_mode"] == DB_MODE_LAB)
+        return result
     url = build_database_url(c)
 
     try:
@@ -6069,13 +6873,16 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
         result = _preflight_result(
             "database", False,
             "Could not connect to the %s database at %s:%s: %s"
-            % ("lab" if c["db_mode"] == DB_MODE_LAB else "chosen", host, port,
+            % ("default" if current_database_id(c) == _DEFAULT_DB_ID else "chosen",
+               host, port,
                _pg_error(error)),
             mask_database_url(url))
         # Carry the db_mode so issue_fix_for can offer "Use lab default instead"
         # only when it is a CUSTOM database that failed (switching to the lab
         # default is meaningless when the lab default is itself what failed).
         result["db_mode"] = c["db_mode"]
+        result["is_default"] = (current_database_id(c) == _DEFAULT_DB_ID
+                                or c["db_mode"] == DB_MODE_LAB)
         return result
     try:
         conn.close()
@@ -6083,7 +6890,7 @@ def preflight_check_database(config, timeout=PREFLIGHT_DB_TIMEOUT):
         pass
     return _preflight_result(
         "database", True,
-        "Connected to the lab database at %s:%s." % (host, port),
+        "Connected to the database at %s:%s." % (host, port),
         mask_database_url(url))
 
 
@@ -6499,22 +7306,24 @@ def issue_fix_for(failure):
     # A CUSTOM database that could not be connected to -> offer a one-click switch
     # to the lab shared (default) database so the user can re-launch at once. Not
     # offered for a failed LAB database (switching to it would change nothing).
-    if check == "database" and failure.get("db_mode") == DB_MODE_CUSTOM:
-        return {"fix": "use_lab_default", "fix_label": "Use lab default instead"}
+    if (check == "database" and failure.get("db_mode") == DB_MODE_CUSTOM
+            and not failure.get("is_default") and _DEFAULT_DB_ID in _DB_REGISTRY):
+        return {"fix": "use_lab_default", "fix_label": "Use this computer's default database"}
     return {}
 
 
 def switch_to_lab_default(cfg):
-    """Return a normalized copy of ``cfg`` switched to the lab shared database.
+    """Return a normalized copy of ``cfg`` switched to THIS PC's default database.
 
-    The switch behind the "Use lab default instead" recovery action both
-    launchers show when the chosen custom database cannot be connected to. It
-    flips ``db_mode`` to :data:`DB_MODE_LAB`; ``normalize_config`` then forces the
-    live :data:`LAB_DB` credentials in, so a re-launch runs against the lab shared
-    database. The single source of truth for that switch, shared by both UIs.
+    The switch behind the "Use this computer's default database" recovery action
+    both launchers show when the chosen database cannot be connected to. It pins
+    the config to the default's id (or SQLite when the PC has none). The single
+    source of truth for that switch, shared by both UIs.
     """
     out = dict(cfg or {})
-    out["db_mode"] = DB_MODE_LAB
+    out["database_id"] = (_DEFAULT_DB_ID if _DEFAULT_DB_ID in _DB_REGISTRY
+                          else DB_BUILTIN_SQLITE)
+    out["db_mode"] = DB_MODE_CUSTOM
     return normalize_config(out)
 
 
@@ -6598,6 +7407,9 @@ def existing_database_fields(admin, new_db, new_user="", new_password="",
         "db_password": (new_password or "") if user else a_pw,
         "db_host": host,
         "db_port": port,
+        # Blank user = connect as the admin login, by reference (the stored
+        # entry keeps no copy; see normalize_database_entry).
+        "uses_admin_login": not user,
     }
 
 
@@ -6685,7 +7497,8 @@ def create_database(admin, new_db, new_user="", new_password="", host=None, port
     # Connect as the admin, to the always-present "postgres" database, and turn
     # on AUTOCOMMIT because CREATE DATABASE cannot run inside a transaction.
     try:
-        conn = psycopg2.connect(dbname="postgres", user=a_user, password=a_pw,
+        conn = psycopg2.connect(dbname="postgres", user=a_user,
+                                password=pg_password_arg(a_pw),
                                 host=a_host, port=a_port, connect_timeout=8)
     except psycopg2.OperationalError as error:
         result["reason"] = "admin_connect_failed"
@@ -6710,8 +7523,16 @@ def create_database(admin, new_db, new_user="", new_password="", host=None, port
                 owner = new_user
                 if not role_existed:
                     try:
-                        cur.execute(sql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD {}").format(
-                            sql.Identifier(new_user), sql.Literal(new_password)))
+                        # A blank password creates the role WITHOUT one
+                        # (PASSWORD '' would only be turned into NULL with a
+                        # warning); it can then log in only where pg_hba.conf
+                        # trusts it, which is what "no password" means.
+                        if new_password:
+                            cur.execute(sql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD {}").format(
+                                sql.Identifier(new_user), sql.Literal(new_password)))
+                        else:
+                            cur.execute(sql.SQL("CREATE ROLE {} WITH LOGIN").format(
+                                sql.Identifier(new_user)))
                         result["created_role"] = True
                     except pgerrors.InsufficientPrivilege:
                         result["reason"] = "no_createrole"
@@ -6766,12 +7587,38 @@ def create_database(admin, new_db, new_user="", new_password="", host=None, port
         c_user, c_pw = new_user, new_password
     else:
         c_user, c_pw = a_user, a_pw
+    fields = {
+        "db_mode": DB_MODE_CUSTOM,
+        "db_name": new_db,
+        "db_user": c_user,
+        "db_password": c_pw,
+        "db_host": a_host,
+        "db_port": a_port,
+        # No new user: the database is owned by, and connects as, the admin
+        # login -- stored as a reference, never a copy of its password.
+        "uses_admin_login": not new_user,
+    }
     try:
-        vconn = psycopg2.connect(dbname=new_db, user=c_user, password=c_pw,
+        vconn = psycopg2.connect(dbname=new_db, user=c_user,
+                                 password=pg_password_arg(c_pw),
                                  host=a_host, port=a_port, connect_timeout=8)
         vconn.close()
         result["connect_ok"] = True
     except psycopg2.Error as error:
+        if new_user and not new_password:
+            # A NEW user with a blank password: Postgres refuses it unless
+            # pg_hba.conf trusts it (Postgres.app does, a standard Windows
+            # install does not). The database is real and useful, so keep it
+            # and register it, but say clearly what to fix.
+            result["ok"] = True
+            result["reason"] = "no_password_login"
+            result["fields"] = fields
+            result["warning"] = BLANK_PASSWORD_CREATED_WARNING
+            result["connect_error"] = _pg_error(error)
+            result["message"] = ("Created database %r, owned by %s role %r. %s"
+                                 % (new_db, "the existing" if role_existed else "the new",
+                                    new_user, BLANK_PASSWORD_CREATED_WARNING))
+            return result
         if new_user and role_existed:
             result["reason"] = "role_pw_mismatch"
             result["message"] = ("Database %r was created and owned by %r, but could not connect "
@@ -6785,14 +7632,7 @@ def create_database(admin, new_db, new_user="", new_password="", host=None, port
         return result
 
     result["ok"] = True
-    result["fields"] = {
-        "db_mode": DB_MODE_CUSTOM,
-        "db_name": new_db,
-        "db_user": c_user,
-        "db_password": c_pw,
-        "db_host": a_host,
-        "db_port": a_port,
-    }
+    result["fields"] = fields
     if new_user and role_existed:
         who = "owned by the existing role %r" % new_user
     elif new_user:
@@ -6822,7 +7662,7 @@ def test_database_connection(dbname, user, password, host, port, timeout=5):
         return result
     try:
         conn = psycopg2.connect(
-            dbname=dbname, user=user, password=password,
+            dbname=dbname, user=user, password=pg_password_arg(password),
             host=str(host or "").strip() or "localhost",
             port=str(port or "").strip() or "5432",
             connect_timeout=timeout)
@@ -6833,5 +7673,1022 @@ def test_database_connection(dbname, user, password, host, port, timeout=5):
     return result
 
 
+def registered_database_login_warning(fields, tester=None):
+    """The connection check after REGISTERING an existing database on this
+    computer (both faces). Tries to log in with the registered user/password;
+    returns "" when it worked (or psycopg2 is missing, so nothing was tried),
+    else a warning -- the registration itself is never undone. A refused login
+    with a BLANK password gets :data:`BLANK_PASSWORD_REGISTERED_WARNING`.
+    ``tester`` replaces :func:`test_database_connection` in tests."""
+    fields = fields or {}
+    tester = tester or test_database_connection
+    if fields.get("uses_admin_login") and not str(fields.get("db_user", "") or "").strip():
+        return ADMIN_LOGIN_MISSING
+    user = str(fields.get("db_user", "") or "")
+    password = str(fields.get("db_password", "") or "")
+    check = tester(str(fields.get("db_name", "") or ""), user, password,
+                   fields.get("db_host", ""), fields.get("db_port", ""))
+    if check.get("ok") or check.get("skipped"):
+        return ""
+    if not password:
+        return BLANK_PASSWORD_REGISTERED_WARNING % (user or "this user")
+    return ("Registered, but a test login as %s failed: %s. Check the name, user and "
+            "password (Edit database)." % (user or "this user",
+                                           check.get("error") or "unknown error"))
+
+
 # NOTE: pure logic, no tkinter. Shared by otree_lab_launcher.py (Tk UI) and
 # otree_launcher_web.py (pywebview UI).
+
+
+# ===========================================================================
+# 1.5.0 MIGRATION: the old (v0) data folder -> schema 1
+# ---------------------------------------------------------------------------
+# prepare_storage() runs at startup in BOTH faces and the headless --run, before
+# any UI. It is versioned (schema_version; missing = v0), holds a lock, is
+# idempotent (machine.json ``migrations`` records a finished run) and resumable
+# (an interrupted run leaves its backup, which the next run converts from),
+# refuses to touch a file with a newer schema, and is fail-soft: an error never
+# crashes the app and leaves the old files in place (the loaders then read them
+# through an in-memory conversion, see _legacy_view).
+#
+# Steps: 1 back up everything to retired/<date>-from-v0/backup-before-upgrade/;
+# 2 convert (convert_legacy_data, pure); 3 write machine.json, saved_configs.json,
+# launch_history.jsonl, lab_info.json; 4 move every retired original into
+# retired/<date>-from-v0/ + README.txt; 5 delete stale locks; 6 record the run +
+# queue the one-time banner; 7 drop the backup copy (the moved originals are the
+# backup from then on).
+# ===========================================================================
+
+MIGRATION_ID = "v0_to_v1"
+UPGRADE_NOTICE_ID = "upgrade_v1"
+UPGRADE_NOTICE_TEXT = ("Settings upgraded to the new format. The old files were moved "
+                       "to data/retired/ (safe to delete once the launcher works).")
+LAB_INFO_UPGRADE_NOTICE_TEXT = (
+    "lab_info.json was in the old format and has been upgraded. The old copy is in "
+    "data/retired/ (safe to delete once the launcher works).")
+RETIRED_README_TEXT = """These are the old-format files from before the oTree Lab Launcher
+1.5.0 settings upgrade ({date}).
+
+They are safe to delete once the launcher works.
+
+To go back to an older launcher version: copy these files back into data/
+and remove data/machine.json, data/saved_configs.json and
+data/launch_history.jsonl.
+
+Files in this folder:
+{files}
+"""
+BACKUP_DIRNAME = "backup-before-upgrade"
+_LEGACY_DATA_FILES = (PRESETS_FILENAME, LAB_MARKER_FILENAME, LEGACY_UI_PREFS_FILENAME,
+                      SESSIONS_FILENAME)
+# Old shipped files that lived in data/ (moved to app/assets/ in 1.5.0) and
+# leftovers of old saves: retired with the rest when still present.
+_LEGACY_LEFTOVER_FILES = ("README.md", LAB_INFO_EXAMPLE_FILENAME, "ui_prefs.json.tmp")
+_LEGACY_LEFTOVER_PATTERNS = (r"^presets\.json\.broken-.*$", r"^\.presets-.*\.tmp$",
+                             r"^\.lab_info-.*\.tmp$", r"^lab_info\.json\..*\.corrupt$")
+
+
+def _paths_for(folder=None):
+    """The data files of ``folder`` (the default data folder honours the
+    OTREE_LAB_* path overrides)."""
+    if folder is None or os.path.abspath(folder) == os.path.abspath(data_dir()):
+        return {"folder": data_dir(), "lab_info": lab_info_path(),
+                "machine": machine_path(), "saved": saved_configs_path(),
+                "history": launch_history_path()}
+    return {"folder": folder, "lab_info": os.path.join(folder, LAB_INFO_FILENAME),
+            "machine": os.path.join(folder, MACHINE_FILENAME),
+            "saved": os.path.join(folder, SAVED_CONFIGS_FILENAME),
+            "history": os.path.join(folder, LAUNCH_HISTORY_FILENAME)}
+
+
+def newer_schema_files(folder=None):
+    """``[(file name, version)]`` for data files a NEWER launcher wrote."""
+    out = []
+    paths = _paths_for(folder)
+    for key in ("lab_info", "machine", "saved"):
+        status, data = _read_json(paths[key])
+        if status == "ok" and schema_version_of(data) > SCHEMA_VERSION:
+            out.append((os.path.basename(paths[key]), schema_version_of(data)))
+    return out
+
+
+def migration_done(folder=None):
+    """True when machine.json records a finished v0 -> v1 migration."""
+    status, data = _read_json(_paths_for(folder)["machine"])
+    return (status == "ok" and isinstance(data, dict)
+            and MIGRATION_ID in (data.get("migrations") or {}))
+
+
+def _legacy_leftovers(folder):
+    """Top-level names in ``folder`` that belong to the old layout."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        full = os.path.join(folder, name)
+        if name in _LEGACY_DATA_FILES or name in _LEGACY_LEFTOVER_FILES:
+            out.append(name)
+        elif name == LEGACY_MAPS_DIRNAME and os.path.isdir(full):
+            out.append(name)
+        elif any(re.match(p, name) for p in _LEGACY_LEFTOVER_PATTERNS):
+            out.append(name)
+    return sorted(out)
+
+
+def _is_v0_lab_info_file(path):
+    status, data = _read_json(path)
+    return (status == "ok" and isinstance(data, dict) and schema_version_of(data) == 0
+            and _looks_v0_lab_info(data))
+
+
+def _legacy_source_present(folder, lab_info_file=None):
+    """True when ``folder`` holds old-layout data worth converting."""
+    lab_file = lab_info_file or os.path.join(folder, LAB_INFO_FILENAME)
+    if _is_v0_lab_info_file(lab_file):
+        return True
+    for name in _LEGACY_DATA_FILES:
+        if os.path.isfile(os.path.join(folder, name)):
+            return True
+    maps = os.path.join(folder, LEGACY_MAPS_DIRNAME)
+    try:
+        return any(f.endswith(".json") for f in os.listdir(maps))
+    except OSError:
+        return False
+
+
+def _pending_backup(folder):
+    """``(retired_dir, backup_dir)`` of an interrupted migration, or (None, None)."""
+    root = os.path.join(folder, RETIRED_DIRNAME)
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return None, None
+    for name in names:
+        backup = os.path.join(root, name, BACKUP_DIRNAME)
+        if "-from-v0" in name and os.path.isdir(backup):
+            return os.path.join(root, name), backup
+    return None, None
+
+
+def _new_retired_dir(folder, date, tag):
+    base = os.path.join(folder, RETIRED_DIRNAME, "%s-%s" % (date, tag))
+    candidate, n = base, 2
+    while os.path.exists(candidate):
+        candidate = "%s-%d" % (base, n)
+        n += 1
+    os.makedirs(candidate)
+    return candidate
+
+
+def _read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def _map_lookup(folder, info=None):
+    """A ``name -> map dict`` resolver for converting old files: an inline
+    ``maps`` table in ``info``, then <folder>/maps/<name>.json, then the shipped
+    examples."""
+    table = (info or {}).get("maps") if isinstance((info or {}).get("maps"), dict) else {}
+
+    def lookup(name):
+        name = str(name or "").strip()
+        if not name:
+            return None
+        if isinstance(table.get(name), dict):
+            return table[name]
+        if folder:
+            found = _read_map_file(os.path.join(folder, LEGACY_MAPS_DIRNAME), name)
+            if found is not None:
+                return found
+        return _read_map_file(maps_dir(), name)
+    return lookup
+
+
+def lab_info_from_v0(data, folder=None, maps_lookup=None):
+    """Convert ONE old-layout lab_info dict to schema 1 (file-only: no
+    presets.json overrides, no machine data). Labs become a list, each named map
+    is copied into the ``maps`` table, ``admin`` becomes ``default_admin``;
+    ``default_lab`` and the ``database`` block are dropped (they are per PC)."""
+    data = dict(data or {})
+    lookup = maps_lookup or _map_lookup(folder, data)
+    raw_labs = data.get("labs") or {}
+    if isinstance(raw_labs, dict):
+        raw_labs = [dict(v or {}, id=k) for k, v in raw_labs.items()]
+    labs, table = [], {}
+    for raw in raw_labs:
+        if not isinstance(raw, dict):
+            continue
+        entry = normalize_stored_lab(raw)
+        if not entry["id"]:
+            continue
+        field = raw.get("map")
+        if isinstance(field, dict):
+            name = _unique_key(entry["id"], table)
+            table[name] = field
+            entry["map"] = name
+        elif entry["map"]:
+            obj = lookup(entry["map"])
+            if isinstance(obj, dict):
+                table[entry["map"]] = obj
+            else:
+                entry["map"] = ""
+        labs.append(entry)
+    out = {k: v for k, v in data.items()
+           if k not in ("labs", "maps", "default_lab", "database", "admin", "_comment",
+                        "schema_version")}
+    out["labs"] = labs
+    out["maps"] = table
+    admin = data.get("admin") if isinstance(data.get("admin"), dict) else {}
+    out["default_admin"] = data.get("default_admin") or admin
+    return normalize_lab_info(out)
+
+
+def convert_legacy_data(source, now=None, pc=None):
+    """PURE conversion of an old-layout data folder ``source`` (read only).
+
+    Returns ``{"lab_info": dict or None, "machine": dict, "saved": dict,
+    "report": dict}``. The report holds counts and names only, never a password.
+    ``now`` (a datetime) and ``pc`` (a created_on stamp) make it deterministic in
+    tests. See _ai/storage_redesign_plan.md for the key-by-key mapping."""
+    now = now or _dt.datetime.now()
+    when = now.replace(microsecond=0).isoformat()
+    report = {"labs": {}, "maps": {}, "home_lab": {}, "theme": {}, "github": "",
+              "databases": {}, "default_database": "", "suggested_database": {},
+              "configs": {}, "researchers": 0, "dropped_keys": []}
+
+    _s, lab_raw = _read_json(os.path.join(source, LAB_INFO_FILENAME))
+    lab_raw = lab_raw if isinstance(lab_raw, dict) else None
+    _s, presets_raw = _read_json(os.path.join(source, PRESETS_FILENAME))
+    _s, prefs = _read_json(os.path.join(source, LEGACY_UI_PREFS_FILENAME))
+    prefs = prefs if isinstance(prefs, dict) else {}
+    marker = str(_read_text(os.path.join(source, LAB_MARKER_FILENAME)) or "").strip().lower()
+    store = presets_raw if isinstance(presets_raw, dict) else {}
+    lookup = _map_lookup(source, lab_raw)
+
+    # -- labs: lab_info labs, overridden by the presets.json lab_presets (which
+    #    carry every Lab Settings edit and the per-lab display flags) --------------
+    if lab_raw is not None and schema_version_of(lab_raw) >= 1:
+        base_labs = {l["id"]: l for l in normalize_lab_info(lab_raw)["labs"]}
+        base_maps = lab_info_maps(lab_raw)
+        base_display = {}
+    else:
+        raw = (lab_raw or {}).get("labs") or {}
+        if isinstance(raw, list):
+            raw = {str(x.get("id", "")): x for x in raw if isinstance(x, dict)}
+        base_labs, base_display = {}, {}
+        for lab_id, entry in raw.items():
+            entry = entry or {}
+            base_labs[str(lab_id)] = dict(entry, id=str(lab_id))
+            base_display[str(lab_id)] = bool(entry.get("display", True))
+        base_maps = {}
+    overrides = [p for p in (store.get("lab_presets") or []) if isinstance(p, dict)
+                 and str(p.get("id", "")).strip()]
+    over_by_id = {str(p["id"]).strip(): p for p in overrides}
+    order = [str(p["id"]).strip() for p in overrides]
+    order += [lab_id for lab_id in base_labs if lab_id not in over_by_id]
+    maps = dict(base_maps)
+    labs, display = [], {}
+    snapshot_used, missing_maps, renamed = [], [], []
+    map_files = {}
+    try:
+        for name in os.listdir(os.path.join(source, LEGACY_MAPS_DIRNAME)):
+            if name.endswith(".json"):
+                obj = _read_map_file(os.path.join(source, LEGACY_MAPS_DIRNAME), name[:-5])
+                if obj is not None:
+                    map_files[name[:-5]] = obj
+    except OSError:
+        pass
+    for lab_id in order:
+        if not lab_id or any(l["id"] == lab_id for l in labs):
+            continue
+        base = base_labs.get(lab_id, {})
+        over = over_by_id.get(lab_id)
+        merged = dict(base)
+        if over is not None:
+            merged.update({
+                "name": over.get("name") or base.get("name") or lab_id,
+                "host": over.get("ip", base.get("host", "")),
+                "seats": over.get("seats", base.get("seats", [])),
+                "geometry": over.get("geometry", base.get("geometry")),
+                "cols": over.get("cols", base.get("cols", 0)),
+                "default_room": over.get("default_room") or base.get("default_room"),
+                "shortcut_label": over.get("shortcut_label", base.get("shortcut_label", "")),
+                "deleted": bool(over.get("deleted", base.get("deleted", False))),
+            })
+            if base.get("name") and merged["name"] != base.get("name"):
+                renamed.append(lab_id)
+        entry = normalize_stored_lab(dict(merged, id=lab_id, map=""))
+        name = base.get("map") if isinstance(base.get("map"), str) else ""
+        name = str(name or "").strip()
+        snapshot = over.get("map") if over is not None and isinstance(over.get("map"), dict) \
+            else (base.get("map") if isinstance(base.get("map"), dict) else None)
+        if name:
+            found = maps.get(name) if isinstance(maps.get(name), dict) else lookup(name)
+            if snapshot is not None and snapshot != found:
+                maps[name] = snapshot
+                snapshot_used.append(name)
+            elif found is not None:
+                maps[name] = found
+            else:
+                missing_maps.append(name)
+                name = ""
+        elif snapshot is not None:
+            same = [n for n, obj in list(maps.items()) + list(map_files.items()) if obj == snapshot]
+            name = same[0] if same else _unique_key(lab_id, maps)
+            maps[name] = snapshot
+        entry["map"] = name
+        labs.append(entry)
+        display[lab_id] = bool(over.get("display", True)) if over is not None \
+            else base_display.get(lab_id, True)
+    # Every map file of the old maps/ folder is kept (the shipped examples only
+    # when a lab uses them), so no hand-made map is lost.
+    for name, obj in map_files.items():
+        if name not in maps and not name.startswith("example_"):
+            maps[name] = obj
+    lab_ids = [l["id"] for l in labs]
+    live_ids = [l["id"] for l in labs if not l["deleted"]]
+    report["labs"] = {"total": len(labs), "from_saved_settings": len(overrides),
+                      "lab_info_only": len([i for i in lab_ids if i not in over_by_id]),
+                      "deleted": len(lab_ids) - len(live_ids), "renamed": renamed,
+                      "rooms": {l["id"]: l["default_room"] for l in labs}}
+    report["maps"] = {"inlined": sorted(maps), "snapshot_used": snapshot_used,
+                      "missing": missing_maps}
+
+    # -- this PC: home lab, shown labs, theme --------------------------------
+    if marker and marker in lab_ids:
+        home, source_note = marker, "lab.local"
+    elif marker:
+        home, source_note = "", "lab.local names an unknown lab (%s); the wizard will ask" % marker
+    else:
+        home, source_note = "", "no lab.local; the setup wizard will ask"
+    report["home_lab"] = {"value": home, "source": source_note}
+    shown = [i for i in live_ids if display.get(i, True)]
+    if home and home not in shown:
+        shown.append(home)
+    theme_source = "ui_prefs.json" if "theme" in prefs else "default"
+    report["theme"] = {"value": normalize_theme(prefs.get("theme")), "source": theme_source}
+    stamp = dict(pc or current_pc_stamp(home_lab=home, when=when))
+    stamp["migrated"] = True
+
+    # -- this PC's databases -------------------------------------------------
+    dbs = []
+    for raw in store.get("databases") or []:
+        if isinstance(raw, dict) and str(raw.get("id", "")).strip():
+            entry = normalize_database_entry(raw)
+            if not entry["created_on"]:
+                entry["created_on"] = normalize_created_on(
+                    dict(stamp, when=entry["created"] or stamp.get("when", "")))
+            dbs.append(entry)
+    report["databases"]["from_saved_settings"] = len(dbs)
+    lab_db_id = ""
+    block = (lab_raw or {}).get("database") if lab_raw is not None else None
+    if isinstance(block, dict) and str(block.get("db_name", "") or "").strip():
+        conn = {"db_name": str(block.get("db_name", "")).strip(),
+                "db_user": str(block.get("db_user", "") or "").strip(),
+                "db_password": str(block.get("db_password", "") or ""),
+                "db_host": str(block.get("db_host", "") or "").strip() or "localhost",
+                "db_port": str(block.get("db_port", "") or "").strip() or "5432"}
+        match = find_database_by_connection(conn, dbs)
+        if match is not None:
+            lab_db_id = match["id"]
+            report["databases"]["lab_database"] = "matched an existing entry (%s)" % lab_db_id
+        else:
+            entry = normalize_database_entry(dict(
+                conn, id=_unique_db_id(conn["db_name"], [d["id"] for d in dbs]),
+                title=conn["db_name"], postgres_user=conn["db_user"], created="",
+                created_on=stamp))
+            dbs.append(entry)
+            lab_db_id = entry["id"]
+            report["databases"]["lab_database"] = "added as a normal database (%s)" % lab_db_id
+        if home:
+            for lab in labs:
+                if lab["id"] == home and "suggested_database" not in lab:
+                    lab["suggested_database"] = {"db_name": conn["db_name"],
+                                                 "db_user": conn["db_user"]}
+                    report["suggested_database"][home] = conn["db_name"]
+    else:
+        report["databases"]["lab_database"] = "none in the old lab_info.json"
+    live_db_ids = [d["id"] for d in dbs if not d["deleted"]]
+    old_default = str(store.get("default_database", "") or "").strip()
+    if old_default and old_default != DB_BUILTIN_LAB and old_default in live_db_ids:
+        default_id = old_default
+    else:
+        default_id = lab_db_id
+    report["default_database"] = default_id
+
+    # -- configs --------------------------------------------------------------
+    raw_configs = presets_raw if isinstance(presets_raw, list) else store.get("presets", [])
+    counts = {"total": 0, "sqlite": 0, "default": 0, "matched": 0, "created": 0,
+              "kept_id": 0, "password_differs": 0, "builtin_dropped": 0}
+    configs = []
+    for index, item in enumerate(raw_configs if isinstance(raw_configs, list) else []):
+        if not isinstance(item, dict):
+            continue
+        if is_builtin(item):
+            counts["builtin_dropped"] += 1
+            continue
+        cfg = {k: v for k, v in item.items() if k not in CONFIG_DB_FIELDS}
+        if not str(cfg.get("name", "")).strip():
+            cfg["name"] = "Unnamed config %d" % (index + 1)
+        mode = str(item.get("db_mode", DB_MODE_LAB) or DB_MODE_LAB)
+        kept = str(item.get("database_id", "") or "").strip()
+        conn = {"db_name": str(item.get("db_name", "") or "").strip(),
+                "db_user": str(item.get("db_user", "") or "").strip(),
+                "db_password": str(item.get("db_password", "") or ""),
+                "db_host": str(item.get("db_host", "") or "").strip() or "localhost",
+                "db_port": str(item.get("db_port", "") or "").strip() or "5432"}
+        if kept:
+            cfg["database_id"] = kept
+            counts["kept_id"] += 1
+        elif mode == DB_MODE_NONE:
+            cfg["database_id"] = DB_BUILTIN_SQLITE
+            counts["sqlite"] += 1
+        elif mode == DB_MODE_LAB and default_id:
+            cfg["database_id"] = default_id
+            counts["default"] += 1
+        elif conn["db_name"]:
+            match = find_database_by_connection(conn, dbs)
+            if match is not None:
+                cfg["database_id"] = match["id"]
+                counts["matched"] += 1
+                if match.get("db_password", "") != conn["db_password"]:
+                    counts["password_differs"] += 1
+            else:
+                entry = normalize_database_entry(dict(
+                    conn, id=_unique_db_id(conn["db_name"], [d["id"] for d in dbs]),
+                    title=conn["db_name"], postgres_user=conn["db_user"],
+                    researcher=str(item.get("author", "") or ""), created="",
+                    created_on=stamp))
+                dbs.append(entry)
+                cfg["database_id"] = entry["id"]
+                counts["created"] += 1
+        else:
+            cfg["database_id"] = DB_BUILTIN_SQLITE
+            counts["sqlite"] += 1
+        configs.append(cfg)
+    counts["total"] = len(configs)
+    report["configs"] = counts
+    report["databases"]["total"] = len(dbs)
+    report["databases"]["deleted"] = len([d for d in dbs if d["deleted"]])
+    if not default_id:
+        live = [d["id"] for d in dbs if not d["deleted"]]
+        report["default_database"] = ""
+        if live:
+            report["databases"]["note"] = "no default database (the old install had none)"
+
+    researchers = [str(r) for r in (store.get("researchers") or []) if str(r).strip()]
+    report["researchers"] = len(researchers)
+    saved = {"schema_version": SCHEMA_VERSION, "configs": configs}
+    if "researchers" in store:
+        saved["researchers"] = researchers
+    if "last_author" in store:
+        saved["last_author"] = str(store.get("last_author") or "")
+    dropped = []
+    for key, value in store.items():
+        if key in ("presets", "lab_presets", "pg_admin", "databases", "default_database",
+                   "researchers", "last_author", "version", "schema_version"):
+            continue
+        if key == "last_project":
+            dropped.append(key)
+            continue
+        saved[key] = value
+
+    machine = default_machine()
+    machine.update({"home_lab": home, "shown_labs": shown,
+                    "theme": normalize_theme(prefs.get("theme")),
+                    "databases": dbs, "default_database": default_id})
+    if isinstance(store.get("pg_admin"), dict) and store["pg_admin"]:
+        machine["pg_admin"] = {k: str(store["pg_admin"].get(k, "") or "") for k in PG_ADMIN_KEYS}
+    report["pg_admin"] = bool(machine["pg_admin"])
+
+    lab_info = None
+    if labs or lab_raw is not None:
+        info = {}
+        if lab_raw is not None:
+            info = {k: v for k, v in lab_raw.items()
+                    if k not in ("labs", "maps", "default_lab", "database", "admin",
+                                 "_comment", "schema_version")}
+            for key in ("default_lab", "database", "_comment"):
+                if key in lab_raw:
+                    dropped.append("lab_info.%s" % key)
+            admin = lab_raw.get("default_admin") or lab_raw.get("admin") or {}
+            info["default_admin"] = admin if isinstance(admin, dict) else {}
+        moved = []
+        for key in _GITHUB_SYNC_KEYS:
+            if key in prefs and key not in info:
+                info[key] = prefs[key]
+                moved.append(key)
+        report["github"] = ("moved from ui_prefs.json" if moved else "unchanged")
+        info["labs"] = labs
+        info["maps"] = maps
+        lab_info = normalize_lab_info(info)
+    report["dropped_keys"] = sorted(set(dropped))
+    return {"lab_info": lab_info, "machine": normalize_machine(machine),
+            "saved": saved, "report": report}
+
+
+_LEGACY_CACHE = {"key": None, "value": None}
+
+
+def _legacy_view(folder=None):
+    """FAIL-SOFT fallback: an in-memory conversion of the old files while the
+    migration has not (successfully) run, or None. Nothing is written."""
+    try:
+        folder = folder or data_dir()
+        if migration_done(folder):
+            return None
+        _retired, backup = _pending_backup(folder)
+        source = backup or folder
+        if not _legacy_source_present(source):
+            return None
+        stamps = []
+        for name in (LAB_INFO_FILENAME,) + _LEGACY_DATA_FILES:
+            try:
+                stamps.append(os.path.getmtime(os.path.join(source, name)))
+            except OSError:
+                stamps.append(None)
+        key = (os.path.abspath(source), tuple(stamps))
+        if _LEGACY_CACHE["key"] != key:
+            _LEGACY_CACHE["value"] = convert_legacy_data(source)
+            _LEGACY_CACHE["key"] = key
+        return _LEGACY_CACHE["value"]
+    except Exception:
+        return None
+
+
+def _backup_folder(folder, backup_dir):
+    """Copy every entry of ``folder`` (except locks/ and retired/) to backup_dir."""
+    os.makedirs(backup_dir, exist_ok=True)
+    for name in os.listdir(folder):
+        if name in (LOCKS_DIRNAME, RETIRED_DIRNAME):
+            continue
+        src = os.path.join(folder, name)
+        dst = os.path.join(backup_dir, name)
+        if os.path.isdir(src):
+            if not os.path.exists(dst):
+                shutil.copytree(src, dst)
+        elif os.path.isfile(src):
+            shutil.copy2(src, dst)
+
+
+def _delete_stale_locks(folder):
+    """Remove leftover lock files (locks/*.lock and old presets.json.lock). Only
+    called by the migration, under its own lock. Returns how many were removed."""
+    removed = 0
+    targets = []
+    locks = os.path.join(folder, LOCKS_DIRNAME)
+    try:
+        targets += [os.path.join(locks, n) for n in os.listdir(locks)
+                    if n.endswith(".lock") and n != "migration.lock"]
+    except OSError:
+        pass
+    old = os.path.join(folder, PRESETS_FILENAME + ".lock")
+    if os.path.isfile(old):
+        targets.append(old)
+    for path in targets:
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _write_text_atomic(path, text):
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=folder,
+                                         prefix=".history-", suffix=".tmp", delete=False)
+    try:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        os.replace(handle.name, path)
+    except Exception:
+        handle.close()
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+        raise
+
+
+def _merge_history(source_file, target_file):
+    """launch_history.jsonl = the old sessions.jsonl lines, then any lines already
+    in the target that are not among them. Returns the number of lines."""
+    old = [l for l in (_read_text(source_file) or "").splitlines() if l.strip()]
+    existing = [l for l in (_read_text(target_file) or "").splitlines() if l.strip()]
+    seen = set(old)
+    lines = old + [l for l in existing if l not in seen]
+    if lines:
+        _write_text_atomic(target_file, "\n".join(lines) + "\n")
+    return len(lines)
+
+
+def _add_notice(machine, notice_id, text):
+    notices = machine.setdefault("notices", [])
+    if not any(n.get("id") == notice_id and not n.get("shown") for n in notices):
+        notices.append({"id": notice_id, "text": text, "shown": False})
+
+
+def migrate_data_folder(folder=None, now=None, pc=None):
+    """Upgrade an old (v0) data folder to schema 1. See the section comment.
+
+    Returns ``{"ok", "migrated", "newer_schema", "message", "report",
+    "retired_dir", "moved", "locks_removed"}``. Never raises."""
+    now = now or _dt.datetime.now()
+    result = {"ok": True, "migrated": False, "newer_schema": False, "message": "",
+              "report": None, "retired_dir": "", "moved": [], "locks_removed": 0}
+    paths = _paths_for(folder)
+    folder = paths["folder"]
+    try:
+        newer = newer_schema_files(folder)
+        if newer:
+            result.update(ok=False, newer_schema=True, message=str(
+                NewerSchemaError(os.path.join(folder, newer[0][0]), newer[0][1])))
+            return result
+        if not os.path.isdir(folder):
+            return result
+        with exclusive_file_lock(lock_path("migration", folder)):
+            if migration_done(folder):
+                _finish_leftovers(folder, paths, now, result)
+                return result
+            retired_dir, backup_dir = _pending_backup(folder)
+            if backup_dir is None and not _legacy_source_present(folder, paths["lab_info"]):
+                return result
+            _full_migration(folder, paths, now, pc, retired_dir, backup_dir, result)
+    except NewerSchemaError as error:
+        result.update(ok=False, newer_schema=True, message=str(error))
+    except Exception as error:   # fail-soft: never crash the app
+        result.update(ok=False, message=(
+            "Could not upgrade the settings to the new format (%s: %s). The old "
+            "files were left in place and are still used." % (type(error).__name__, error)))
+    _LEGACY_CACHE.update(key=None, value=None)
+    return result
+
+
+def _full_migration(folder, paths, now, pc, retired_dir, backup_dir, result):
+    date = now.strftime("%Y-%m-%d")
+    if backup_dir is None:
+        retired_dir = _new_retired_dir(folder, date, "from-v0")
+        backup_dir = os.path.join(retired_dir, BACKUP_DIRNAME)
+        # The lab_info file may be an override path outside the folder.
+        _backup_folder(folder, backup_dir)
+        if os.path.dirname(os.path.abspath(paths["lab_info"])) != os.path.abspath(folder) \
+                and os.path.isfile(paths["lab_info"]):
+            shutil.copy2(paths["lab_info"], os.path.join(backup_dir, LAB_INFO_FILENAME))
+    conv = convert_legacy_data(backup_dir, now=now, pc=pc)
+    result["report"] = conv["report"]
+    result["retired_dir"] = retired_dir
+    # 3. the new files (machine.json WITHOUT the done-marker until the end)
+    machine = conv["machine"]
+    with exclusive_file_lock(lock_path("saved_configs", folder)):
+        write_json_atomic(paths["saved"], conv["saved"], prefix=".saved_configs-")
+    _merge_history(os.path.join(backup_dir, SESSIONS_FILENAME), paths["history"])
+    save_machine(machine, paths["machine"])
+    lab_was_v0 = _is_v0_lab_info_file(os.path.join(backup_dir, LAB_INFO_FILENAME))
+    if conv["lab_info"] is not None:
+        save_lab_info(conv["lab_info"], paths["lab_info"])
+    # 4. retire the originals
+    moved = []
+    for name in _legacy_leftovers(folder):
+        target = os.path.join(retired_dir, name)
+        if os.path.exists(target):
+            target = os.path.join(retired_dir, "%s.%s" % (name, now.strftime("%H%M%S")))
+        shutil.move(os.path.join(folder, name), target)
+        moved.append(name)
+    old_lab = os.path.join(backup_dir, LAB_INFO_FILENAME)
+    if lab_was_v0 and not os.path.exists(os.path.join(retired_dir, LAB_INFO_FILENAME)):
+        shutil.copy2(old_lab, os.path.join(retired_dir, LAB_INFO_FILENAME))
+        moved.append(LAB_INFO_FILENAME)
+    result["locks_removed"] = _delete_stale_locks(folder)
+    files = sorted(n for n in os.listdir(retired_dir) if n != BACKUP_DIRNAME)
+    with open(os.path.join(retired_dir, "README.txt"), "w", encoding="utf-8") as handle:
+        handle.write(RETIRED_README_TEXT.format(
+            date=date, files="\n".join("  " + f for f in files)))
+    # 6. record the run + the one-time banner
+    rel = os.path.relpath(retired_dir, folder).replace("\\", "/")
+
+    def _mark(m):
+        m.setdefault("migrations", {})[MIGRATION_ID] = {
+            "when": now.replace(microsecond=0).isoformat(), "retired": rel}
+        _add_notice(m, UPGRADE_NOTICE_ID, UPGRADE_NOTICE_TEXT)
+
+    update_machine(_mark, paths["machine"])
+    # 7. the moved originals are the backup from now on
+    shutil.rmtree(backup_dir, ignore_errors=True)
+    result.update(migrated=True, moved=sorted(moved),
+                  message=UPGRADE_NOTICE_TEXT)
+
+
+def _finish_leftovers(folder, paths, now, result):
+    """After a finished migration: drop a leftover backup, retire any old file
+    that reappeared, and upgrade an OLD lab_info.json copied in from another PC
+    (file-only; its database block becomes this PC's suggested database)."""
+    retired_dir, backup_dir = _pending_backup(folder)
+    if backup_dir is not None:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+    if not _is_v0_lab_info_file(paths["lab_info"]):
+        return
+    date = now.strftime("%Y-%m-%d")
+    retired_dir = _new_retired_dir(folder, date, "lab_info-from-v0")
+    shutil.copy2(paths["lab_info"], os.path.join(retired_dir, LAB_INFO_FILENAME))
+    old = load_lab_info_raw(paths["lab_info"])
+    info = lab_info_from_v0(old, folder)
+    home = str(load_machine(paths["machine"]).get("home_lab") or "")
+    block = old.get("database") if isinstance(old.get("database"), dict) else {}
+    if home and str(block.get("db_name", "") or "").strip():
+        for lab in info["labs"]:
+            if lab["id"] == home and "suggested_database" not in lab:
+                lab["suggested_database"] = {"db_name": str(block["db_name"]).strip(),
+                                             "db_user": str(block.get("db_user", "") or "")}
+    save_lab_info(info, paths["lab_info"])
+    with open(os.path.join(retired_dir, "README.txt"), "w", encoding="utf-8") as handle:
+        handle.write(RETIRED_README_TEXT.format(date=date, files="  " + LAB_INFO_FILENAME))
+    update_machine(lambda m: _add_notice(m, "lab_info_v0_" + date,
+                                         LAB_INFO_UPGRADE_NOTICE_TEXT), paths["machine"])
+    result.update(migrated=True, retired_dir=retired_dir, moved=[LAB_INFO_FILENAME],
+                  message=LAB_INFO_UPGRADE_NOTICE_TEXT)
+
+
+def prepare_storage(folder=None):
+    """The startup step both faces and the headless run call BEFORE any UI:
+    migrate an old data folder (fail-soft) and load the live state. Returns the
+    migrate_data_folder result; ``newer_schema`` True means the app must not
+    continue (a newer launcher wrote this data folder)."""
+    result = migrate_data_folder(folder)
+    try:
+        reload_lab_info()
+    except Exception:
+        pass
+    return result
+
+
+def take_notices():
+    """The one-time banners not shown yet (e.g. "Settings upgraded ..."), each
+    marked shown so it appears exactly once. Returns a list of texts. Fail-soft."""
+    texts = []
+
+    def _apply(machine):
+        for notice in machine.get("notices") or []:
+            if not notice.get("shown"):
+                texts.append(str(notice.get("text") or ""))
+                notice["shown"] = True
+    try:
+        if any(not n.get("shown") for n in (load_machine().get("notices") or [])):
+            update_machine(_apply)
+    except Exception:
+        return texts
+    return [t for t in texts if t]
+
+
+# ===========================================================================
+# SETUP WIZARD (per PC). Runs when lab_info.json has no labs or this PC has no
+# (valid) home lab. Steps: 1 which lab is this PC (from lab_info.json; with no
+# labs, create them as before); 2 Postgres on THIS computer (superuser,
+# password, port; host localhost; Test connection); 3 create databases (the
+# default one prefilled with the lab's suggested_database), add another / link
+# an existing one; 4 save to machine.json. Steps 2 and 3 may be skipped: then no
+# database can be created until a Postgres login is added in Lab Settings, and
+# launches use oTree's own SQLite. Both faces only render; the logic is here.
+# ===========================================================================
+
+WIZARD_STEPS = ("Lab", "Postgres", "Databases", "Save")
+WIZARD_NO_PG_NOTE = ("Without a Postgres login no databases can be created. Launches "
+                     "use oTree's own SQLite until a Postgres login is added in Lab "
+                     "Settings.")
+WIZARD_SKIPPED_NOTE = ("No Postgres database on this computer: launches use oTree's own "
+                       "SQLite until a Postgres login and a database are added in Lab "
+                       "Settings.")
+
+
+def setup_needed():
+    """True when this PC must run the setup wizard: lab_info.json has no lab, or
+    this PC's home lab is unset or not one of them."""
+    ids = [l["id"] for l in lab_info_labs() if not l.get("deleted")]
+    if not ids:
+        return True
+    return (read_lab_marker() or "") not in ids
+
+
+def suggested_database_name(lab_id):
+    """The database name the wizard prefills for ``lab_id``: the lab's
+    ``suggested_database`` or a name derived from the lab id."""
+    for lab in lab_info_labs():
+        if lab["id"] == lab_id and lab.get("suggested_database"):
+            return lab["suggested_database"]
+    return {"db_name": slugify_pg_dbname("otree_%s" % (lab_id or "lab")), "db_user": ""}
+
+
+def setup_state():
+    """Everything the wizard shows, for both faces (JSON-serialisable)."""
+    machine = load_machine()
+    labs = [l for l in lab_info_labs() if not l.get("deleted")]
+    dbs = [dict(d, created_on_line=database_created_on_line(d),
+                location_warning=database_location_warning(d))
+           for d in machine["databases"] if not d.get("deleted")]
+    for d in dbs:
+        d.pop("db_password", None)
+    admin = pg_admin_from_store(machine)
+    return {
+        "steps": list(WIZARD_STEPS),
+        "has_labs": bool(labs),
+        "labs": [{"id": l["id"], "name": l["name"], "host": l["host"],
+                  "seats": len(l["seats"]), "default_room": l["default_room"],
+                  "suggested_database": suggested_database_name(l["id"])} for l in labs],
+        "home_lab": machine.get("home_lab") or "",
+        "pg_admin": {"admin_username": admin["admin_username"],
+                     "admin_password": admin["admin_password"],
+                     "admin_host": "localhost", "admin_port": admin["admin_port"]},
+        "databases": dbs,
+        "default_database": machine.get("default_database") or "",
+        "maps": available_maps(),
+        "default_admin": dict((LAB_INFO or {}).get("default_admin") or
+                              {"username": "admin", "password": ""}),
+        "no_pg_note": WIZARD_NO_PG_NOTE,
+        "skipped_note": WIZARD_SKIPPED_NOTE,
+    }
+
+
+def wizard_pg_admin(admin):
+    """The wizard's Postgres login with the host fixed to this computer."""
+    admin = admin or {}
+    return {"admin_username": str(admin.get("admin_username", "") or "").strip(),
+            "admin_password": str(admin.get("admin_password", "") or ""),
+            "admin_host": "localhost",
+            "admin_port": str(admin.get("admin_port", "") or "").strip() or "5432"}
+
+
+def test_pg_admin_connection(admin):
+    """Step 2's Test connection: log in to this computer's Postgres (database
+    "postgres") with the superuser. Returns ``{"ok", "message", "skipped"}``."""
+    admin = wizard_pg_admin(admin)
+    # The password may be blank (a superuser with no password, e.g. Postgres.app).
+    if not admin["admin_username"]:
+        return {"ok": False, "skipped": False,
+                "message": "Enter the Postgres superuser."}
+    check = test_database_connection("postgres", admin["admin_username"],
+                                     admin["admin_password"], "localhost",
+                                     admin["admin_port"])
+    if check.get("ok"):
+        return {"ok": True, "skipped": False,
+                "message": "Connected to Postgres on this computer."}
+    return {"ok": False, "skipped": bool(check.get("skipped")),
+            "message": "Could not connect: %s" % (check.get("error") or "unknown error")}
+
+
+def finish_machine_setup(home_lab, pg_admin=None, databases=None, default_index=0,
+                         default_database_id=None, new_labs=None, default_admin=None,
+                         researcher="", creator=None, login_check=None):
+    """Step 4 of the wizard: make it so, then write machine.json.
+
+    ``new_labs`` (only when lab_info.json has no labs) are validated and written
+    to lab_info.json first, with ``default_admin`` as the default oTree login.
+    ``home_lab`` must name a lab. ``pg_admin`` None = the Postgres step was
+    skipped. ``databases`` is a list of ``{db_name, db_user, db_password, title?,
+    create: bool}``: create=True runs CREATE DATABASE (an existing one of that
+    name is simply linked), False links an existing one. ``default_index`` picks
+    the new PC default among them; ``default_database_id`` may instead name a
+    database this PC already has. Any failure returns ``ok`` False and writes
+    NOTHING to machine.json (a retry links what was already created).
+    ``creator`` replaces :func:`create_database` in tests; ``login_check``
+    replaces :func:`registered_database_login_warning` (the login check run on
+    every LINKED database; a created one was already checked by the create).
+
+    Returns ``{"ok", "message", "results": [...], "default_database",
+    "warnings": [...]}``; ``warnings`` are shown after a successful save (a
+    database whose user cannot log in is kept, with a clear warning)."""
+    creator = creator or create_database
+    login_check = login_check or registered_database_login_warning
+    out = {"ok": False, "message": "", "results": [], "default_database": "",
+           "warnings": []}
+    if new_labs:
+        if [l for l in lab_info_labs() if not l.get("deleted")]:
+            out["message"] = "lab_info.json already has labs; choose one of them."
+            return out
+        ok, message = validate_wizard_labs(new_labs)
+        if not ok:
+            out["message"] = message
+            return out
+        existing = load_lab_info() or {}
+        info = build_lab_info(new_labs, admin=default_admin or {"username": "admin"})
+        for key in (GITHUB_SYNC_ENABLED_KEY, GITHUB_ORG_KEY, DB_LOCALHOST_ONLY_KEY):
+            if key in existing:
+                info[key] = existing[key]
+        save_lab_info(info)
+        reload_lab_info()
+        if not home_lab and info["labs"]:
+            home_lab = info["labs"][0]["id"]
+    home_lab = str(home_lab or "").strip().lower()
+    ids = [l["id"] for l in lab_info_labs() if not l.get("deleted")]
+    if home_lab not in ids:
+        out["message"] = "Choose which lab this computer is."
+        return out
+    admin = wizard_pg_admin(pg_admin) if pg_admin else None
+    machine = load_machine()
+    extra = {"databases": copy.deepcopy(machine["databases"]),
+             "default_database": machine.get("default_database", ""),
+             "pg_admin": dict(machine.get("pg_admin") or {})}
+    stamp = current_pc_stamp(home_lab=home_lab)
+    created_ids = []
+    for index, raw in enumerate(databases or []):
+        name = str(raw.get("db_name", "") or "").strip()
+        if not name:
+            continue
+        want_create = bool(raw.get("create"))
+        if want_create and admin is None:
+            out["message"] = ("%s: %s" % (name, WIZARD_NO_PG_NOTE))
+            return out
+        if want_create:
+            res = creator(admin, name, raw.get("db_user", ""), raw.get("db_password", ""),
+                          host="localhost", port=admin["admin_port"])
+            if res.get("ok"):
+                fields = res.get("fields") or {}
+                outcome = "created"
+                if res.get("warning"):
+                    out["warnings"].append("%s: %s" % (name, res["warning"]))
+            elif res.get("reason") == "db_exists":
+                fields = existing_database_fields(admin, name, raw.get("db_user", ""),
+                                                  raw.get("db_password", ""),
+                                                  host="localhost", port=admin["admin_port"])
+                outcome = "exists"
+            else:
+                out["message"] = "%s: %s" % (name, res.get("message") or "could not create it.")
+                out["results"].append({"db_name": name, "outcome": "failed"})
+                return out
+        else:
+            fields = existing_database_fields(admin or {}, name, raw.get("db_user", ""),
+                                              raw.get("db_password", ""),
+                                              host="localhost",
+                                              port=(admin or {}).get("admin_port") or
+                                              str(raw.get("db_port", "") or "5432"))
+            outcome = "linked"
+            warning = login_check(fields)
+            if warning:
+                out["warnings"].append("%s: %s" % (name, warning))
+        match = find_database_by_connection(fields, known_databases_from_store(extra))
+        if match is not None:
+            entry = match
+            outcome += " (already on the list)"
+        else:
+            entry = register_database(extra, title=str(raw.get("title", "") or name),
+                                      researcher=researcher, connection=fields,
+                                      postgres_user=fields.get("db_user", ""),
+                                      created_on=dict(stamp))
+        created_ids.append(entry["id"])
+        out["results"].append({"db_name": name, "id": entry["id"], "outcome": outcome})
+    default_id = ""
+    if default_database_id and find_database(extra, default_database_id) is not None:
+        default_id = default_database_id
+    elif created_ids:
+        default_id = created_ids[min(max(int(default_index or 0), 0), len(created_ids) - 1)]
+    else:
+        default_id = extra.get("default_database", "")
+        if find_database(extra, default_id) is None:
+            default_id = ""
+    extra["default_database"] = default_id
+
+    def _apply(m):
+        m["home_lab"] = home_lab
+        m["shown_labs"] = [home_lab]
+        if admin is not None:
+            m["pg_admin"] = admin
+        m["databases"] = extra["databases"]
+        m["default_database"] = default_id
+
+    update_machine(_apply)
+    # A lab with no suggested database gets the one chosen here, so the next PC
+    # that copies lab_info.json is prefilled.
+    chosen = find_database(extra, default_id)
+    if chosen is not None:
+        info = load_lab_info() or {}
+        changed = False
+        for lab in info.get("labs", []):
+            if lab["id"] == home_lab and not lab.get("suggested_database"):
+                lab["suggested_database"] = {
+                    "db_name": chosen["db_name"],
+                    "db_user": "" if chosen.get("uses_admin_login") else chosen["db_user"]}
+                changed = True
+        if changed:
+            save_lab_info(info)
+    reload_lab_info()
+    out.update(ok=True, default_database=default_id,
+               message=("This computer is set up." if default_id else
+                        "This computer is set up. " + WIZARD_SKIPPED_NOTE))
+    return out
+
+
+# The module's live state is loaded LAST: the loaders use helpers defined above.
+MACHINE = default_machine()
+try:
+    reload_lab_info()
+except Exception:   # never let a bad data file break the import
+    pass

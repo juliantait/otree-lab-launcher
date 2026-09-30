@@ -244,6 +244,22 @@ def api_call(fn):
 # ---------------------------------------------------------------------------
 
 
+def _ui_text():
+    """UI wording that core owns, for the page (the JS keeps a fallback copy of
+    each so the static preview reads the same)."""
+    return {
+        "activity_log_button": core.ACTIVITY_LOG_BUTTON_LABEL,
+        "pg_blank_password_hint": core.PG_BLANK_PASSWORD_HINT,
+        "pg_new_user_password_hint": core.PG_NEW_USER_PASSWORD_HINT,
+        "admin_login_note": core.ADMIN_LOGIN_NOTE,
+        "admin_login_missing": core.ADMIN_LOGIN_MISSING,
+        "github_login_action": core.GITHUB_LOGIN_ACTION_LABEL,
+        "github_forget": core.GITHUB_FORGET_LABEL,
+        "github_login_note": core.GITHUB_LOGIN_DIALOG_NOTE,
+        "github_platform_note": core.github_platform_note(),
+    }
+
+
 def fields_to_config(fields):
     """Merge a partial field dict from the UI onto the defaults and normalize."""
     cfg = dict(core.DEFAULT_CONFIG)
@@ -267,6 +283,19 @@ def project_status(path):
         message = "Looks like an oTree project with settings.py and %d app package%s:" % (
             len(apps), "" if len(apps) == 1 else "s")
     return {"level": level, "message": message, "name": name, "apps": apps}
+
+
+def _db_row(entry):
+    """One database for a picker / Lab Settings list, with its grey host note,
+    grey "created on" line, warn-coloured location warning and default tag."""
+    return dict(entry, host_note=core.database_host_note(entry),
+                created_on_line=core.database_created_on_line(entry),
+                location_warning=core.database_location_warning(entry),
+                is_default=bool(entry.get("is_default")))
+
+
+def _db_rows(entries):
+    return [_db_row(e) for e in (entries or [])]
 
 
 def _lab_rows(presets):
@@ -538,8 +567,23 @@ def _native_save_dialog_subprocess(default_name, ext=".bat", helper=None,
 # ---------------------------------------------------------------------------
 
 
+# The startup storage result (core.prepare_storage), set by main() BEFORE the Api
+# exists, so the page can show the one-time upgrade banner, a fail-soft warning or
+# the blocking "newer launcher" message.
+STORAGE_RESULT = None
+
+
+def _storage_summary(result):
+    """The part of a core.prepare_storage result the page needs."""
+    result = result or {}
+    return {"ok": bool(result.get("ok", True)),
+            "newer_schema": bool(result.get("newer_schema", False)),
+            "message": str(result.get("message", "") or "")}
+
+
 class Api(object):
-    def __init__(self, store_path=None):
+    def __init__(self, store_path=None, storage=None):
+        self.storage = _storage_summary(storage if storage is not None else STORAGE_RESULT)
         self.store_path = store_path or core.presets_path()
         # ONE in-process lock for every read-modify-write-save of the store
         # (self.presets / self.store_extra). The UI (js_api) methods run on the
@@ -550,7 +594,7 @@ class Api(object):
         # another store-mutating method on the same thread does not deadlock.
         self._store_lock = threading.RLock()
         self.presets, self.store_extra = core.load_store(self.store_path)
-        # The presets.json mtime at load, so _mutate_store can tell when ANOTHER
+        # The saved_configs.json mtime at load, so _mutate_store can tell when ANOTHER
         # process (e.g. the headless one-click shortcut) wrote the store and merge
         # its change in before re-applying ours (cross-process lost-update guard).
         self._store_mtime = self._store_mtime_now()
@@ -559,7 +603,7 @@ class Api(object):
         # uses) points at the chosen database -- the setup-wizard DB by default, or
         # a custom DB promoted in Lab Settings. Mirrors the Tk app exactly.
         core.apply_default_database(self.store_extra)
-        # This machine's lab identity (lab.local) configures the built-in
+        # This PC's lab (machine.json home_lab) configures the built-in
         # default's lab AND its room (from that lab's default_room). Applied in
         # memory to the built-in only; user configs are untouched. A no-op on
         # first launch (marker unset).
@@ -572,10 +616,10 @@ class Api(object):
         # (the launcher opens selected on the built-in every start, Job 2).
         core.clear_builtin_project_path(self.presets)
         self.presets = core.order_presets_for_display(self.presets)
-        if not os.path.exists(self.store_path):
+        if not os.path.exists(self.store_path) and not self.storage.get("newer_schema"):
             try:
                 self._mutate_store(lambda: None)
-            except OSError:
+            except (OSError, core.NewerSchemaError):
                 pass
         self.window = None  # set by main() once the window exists
 
@@ -604,7 +648,7 @@ class Api(object):
             return result
 
     def _store_mtime_now(self):
-        """The presets.json modification time, or None when it does not exist."""
+        """The saved_configs.json modification time, or None when it does not exist."""
         try:
             return os.path.getmtime(self.store_path)
         except OSError:
@@ -739,7 +783,8 @@ class Api(object):
             for p in all_presets
         ]
         pg_admin = core.pg_admin_from_store(self.store_extra)
-        return {
+        setup_needed = core.setup_needed()
+        state = {
             "native": True,
             "presets_path": self.store_path,
             "configs": rows,
@@ -749,15 +794,17 @@ class Api(object):
             "settings": core.inspect_settings(
                 fields.get("project_path", ""),
                 core.lab_default_room(all_presets, fields.get("lab"))),
-            # False on first run (lab_info.json absent) → the UI shows the
-            # first-run setup WIZARD instead of an empty lab selector / seat map.
-            "lab_info_present": core.lab_info_present(),
-            # The map names the setup wizard offers for a lab to reference
-            # (same source the Tk FirstRunWizard uses). "" = plain grid.
-            "maps": core.available_maps(),
+            # The startup storage step (core.prepare_storage): newer_schema True
+            # means a newer launcher wrote this data folder -> the page blocks.
+            "storage": dict(self.storage),
+            # True -> the page opens the per-PC setup wizard (core decides).
+            "setup_needed": setup_needed,
+            "setup": core.setup_state() if setup_needed else None,
+            # One-time banners (e.g. "Settings upgraded ..."), each shown once.
+            "notices": self._take_notices(),
             "labs": labs,
-            # Save As prefill, and this machine's lab identity ("" when unset,
-            # which triggers the one-time first-launch chooser in the UI).
+            # Save As prefill, and this PC's lab (machine.json home_lab), which the
+            # Lab Settings "which lab is this computer" control shows/changes.
             "default_author": self._default_author(),
             "lab_marker": core.read_lab_marker() or "",
             "lab_presets": lab_presets,
@@ -765,14 +812,14 @@ class Api(object):
             # Round 3 database registry (global list + roster + default), read
             # from the store's extra through the shared core helpers so the web
             # picker, create dialog and Lab Settings match the Tk app exactly.
-            "databases": core.known_databases_from_store(self.store_extra),
+            "databases": self._db_list(),
             "researchers": core.list_researchers(self.store_extra, self.presets),
             # The lab-shared default is now a REFERENCE (an id) to one entry in the
             # one database list; default_db_options is the set a user may pick from
             # (the lab built-in + every custom DB; SQLite excluded).
             "default_database": core.default_database_id(self.store_extra),
-            "default_db_options": core.default_database_options(self.store_extra),
-            # The persisted light/dark theme (data/ui_prefs.json). In browser mode
+            "default_db_options": _db_rows(core.default_database_options(self.store_extra)),
+            # The persisted light/dark theme (machine.json). In browser mode
             # the served page already applied it pre-paint from an injected marker;
             # this lets the native pywebview path apply it right after boot too.
             "theme": core.load_ui_theme(),
@@ -781,7 +828,46 @@ class Api(object):
             # whether the page shows the GitHub Org. + Git update buttons.
             "github_sync": core.load_github_sync(),
             "databases_localhost_only": core.load_databases_localhost_only(),
+            # Wording owned by core so both faces say the same thing.
+            "ui_text": _ui_text(),
         }
+        state.update(self._db_card(fields))
+        return state
+
+    def _db_list(self):
+        """This PC's databases (no SQLite built-in) as list rows (see _db_row)."""
+        return _db_rows([e for e in core.list_databases(self.store_extra)
+                         if not e.get("builtin")])
+
+    def _take_notices(self):
+        """The one-time banners, never twice (core.take_notices). Suppressed
+        while the data folder belongs to a newer launcher (nothing may be written)."""
+        if self.storage.get("newer_schema"):
+            return []
+        try:
+            return core.take_notices()
+        except Exception:
+            return []
+
+    def _db_card(self, fields):
+        """The Database card extras for a config, computed by core: the one-line
+        label, the grey host note, the grey "created on" line of the database it
+        resolves to, the warn-coloured location warning and the note when its
+        database is not on this PC."""
+        cfg = fields_to_config(fields or {})
+        entry = core.find_database(self.store_extra, core.current_database_id(cfg))
+        return {"db_label": core.database_summary_label(cfg),
+                "db_host_note": core.database_host_note(cfg),
+                "db_created_on": core.database_created_on_line(entry) if entry else "",
+                "db_warning": core.database_location_warning(entry) if entry else "",
+                "db_note": core.config_database_note(cfg)}
+
+    @api_call
+    def database_card(self, fields=None):
+        """The Database card extras for the on-screen fields (see _db_card)."""
+        out = {"ok": True}
+        out.update(self._db_card(fields or {}))
+        return out
 
     @api_call
     def select_config(self, name):
@@ -789,7 +875,7 @@ class Api(object):
         if not preset:
             return {"ok": False, "message": "No config named %r." % name}
         fields = self._config_fields(preset)
-        return {
+        out = {
             "ok": True,
             "fields": fields,
             # The per-config selector tiles: displayed labs UNION this config's
@@ -800,6 +886,8 @@ class Api(object):
             "settings": core.inspect_settings(
                 fields.get("project_path", ""), self._lab_room_for(fields)),
         }
+        out.update(self._db_card(fields))
+        return out
 
     # -- native file dialogs ----------------------------------------------
 
@@ -954,7 +1042,7 @@ class Api(object):
                 "selected": self.presets[0].get("name")}
 
     def _apply_lab_identity(self, lab):
-        """BUG A: after lab.local is (re)written, collapse the DISPLAYED labs to
+        """BUG A: after this PC's lab is (re)written, collapse the DISPLAYED labs to
         ``lab`` and re-point the built-in Lab default at it, persisting both
         under the store lock. Mirrors the Tk ``_set_lab_identity`` display step
         (core.apply_lab_identity), which the web path used to skip. Returns the
@@ -1011,7 +1099,7 @@ class Api(object):
     def set_lab_marker(self, lab, current_config_name="", dirty=False):
         """First-launch operator choice of this machine's lab.
 
-        Writes lab.local ONCE. Refuses if a valid marker already exists, so the
+        Records this PC's lab (machine.json) ONCE. Refuses if a valid marker already exists, so the
         identity can never revert silently; changing it is a hand-edit of the
         file. ``lab`` is a lab id from the data-driven list (lab_info.json), so
         no small/large names are hardcoded. On success the built-in default's lab
@@ -1024,14 +1112,14 @@ class Api(object):
             return {"ok": False, "message": "Choose one of the available labs."}
         if core.read_lab_marker() is not None:
             return {"ok": False, "already": True,
-                    "message": "This machine's lab is already set in lab.local."}
+                    "message": "This computer's lab is already set."}
         try:
             written = core.write_lab_marker(lab)
         except OSError as error:
-            return {"ok": False, "message": "Could not write lab.local: %s" % error}
+            return {"ok": False, "message": "Could not save this computer's lab: %s" % error}
         if not written:
             return {"ok": False, "already": True,
-                    "message": "This machine's lab is already set in lab.local."}
+                    "message": "This computer's lab is already set."}
         # Collapse the displayed labs to the chosen one + re-point the default,
         # then hand the page refreshed rows/tiles to repaint (BUG A). The page's
         # current config + dirty flag are passed so unsaved on-screen edits survive.
@@ -1043,7 +1131,7 @@ class Api(object):
 
         Unlike ``set_lab_marker`` (the first-run, refuse-if-exists chooser), this
         is the change-it-later control: it calls ``core.set_lab_marker`` which
-        OVERWRITES lab.local, so a machine that already has an identity can be
+        OVERWRITES this PC's lab (machine.json), so a machine that already has an identity can be
         re-pointed at a different lab without hand-editing the file. It then
         re-applies the marker to the in-memory built-in default (under the store
         lock, persisted) and returns refreshed rows + selected so the page
@@ -1056,7 +1144,7 @@ class Api(object):
         try:
             core.set_lab_marker(lab)
         except (OSError, ValueError) as error:
-            return {"ok": False, "message": "Could not write lab.local: %s" % error}
+            return {"ok": False, "message": "Could not save this computer's lab: %s" % error}
         # OVERWRITE path: same as first-run once the marker is written -- collapse
         # the displayed labs to the chosen one, re-point the default, return the
         # refreshed rows/tiles so the selector shifts live (BUG A). The page's
@@ -1081,23 +1169,9 @@ class Api(object):
     # registry is passive (only create_database touches Postgres).
 
     def _current_database_id(self, cfg):
-        """The registry id of the database this config uses, for the picker to
-        tick (mirror of the Tk ``current_database_id``): the built-ins by mode,
-        a custom by its connection (name + host + user), or "" when nothing
-        matches."""
-        mode = cfg.get("db_mode")
-        if mode == core.DB_MODE_NONE:
-            return core.DB_BUILTIN_SQLITE
-        if mode == core.DB_MODE_LAB:
-            return core.DB_BUILTIN_LAB
-        name = (cfg.get("db_name") or "").strip()
-        host = (cfg.get("db_host") or "").strip()
-        user = (cfg.get("db_user") or "").strip()
-        for entry in core.known_databases_from_store(self.store_extra):
-            if (entry["db_name"] == name and entry["db_host"] == host
-                    and entry["db_user"] == user):
-                return entry["id"]
-        return ""
+        """The id of the database this config uses, for the picker to tick
+        (core.current_database_id: its own id, the PC default, or SQLite)."""
+        return core.current_database_id(cfg)
 
     @api_call
     def list_databases(self, fields=None):
@@ -1106,8 +1180,7 @@ class Api(object):
         registry. Each carries its creator ``researcher`` (grey in the UI).
         ``current_id`` ticks the database the on-screen config uses now."""
         cfg = fields_to_config(fields or {})
-        databases = [dict(entry, host_note=core.database_host_note(entry))
-                     for entry in core.list_databases(self.store_extra)]
+        databases = [_db_row(entry) for entry in core.list_databases(self.store_extra)]
         return {"ok": True,
                 "databases": databases,
                 "current_id": self._current_database_id(cfg)}
@@ -1220,17 +1293,15 @@ class Api(object):
 
     @api_call
     def get_theme(self):
-        """The persisted light/dark theme (data/ui_prefs.json). Fail-soft: a
+        """The persisted light/dark theme (machine.json). Fail-soft: a
         missing/broken file returns the 'dark' default."""
         return {"ok": True, "theme": core.load_ui_theme()}
 
     @api_call
     def set_theme(self, theme):
-        """Persist the chosen light/dark theme to a per-user prefs file in data/
-        (ui_prefs.json), so it survives a restart. Needed because in browser mode
-        the page's localStorage is tied to the server PORT, which changes on the
-        next launch; a file in data/ is the durable store. Fail-soft (never raises;
-        the UI has already updated instantly)."""
+        """Persist the chosen light/dark theme in this PC's machine.json (the only
+        store: the page keeps no copy of its own). Fail-soft (never raises; the UI
+        has already updated instantly)."""
         return {"ok": True, "theme": core.save_ui_theme(theme)}
 
     @api_call
@@ -1256,6 +1327,19 @@ class Api(object):
         The tick box only shows/hides the buttons; nothing runs here. Fail-soft."""
         stored = core.save_github_sync_settings(enabled, org)
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
+
+    @api_call
+    def github_save_login(self, username, token):
+        """Hand a GitHub username + token to the SYSTEM credential store
+        (core.github_save_login: git credential reject, then approve). The token
+        is never logged (api_call logs no arguments), never written to a
+        launcher file and never part of the result."""
+        return core.github_save_login(username, token)
+
+    @api_call
+    def github_forget_login(self):
+        """Forget the stored github.com login (git credential reject)."""
+        return core.github_forget_login()
 
     @api_call
     def git_update_study(self, project_path):
@@ -1372,12 +1456,10 @@ class Api(object):
 
     @api_call
     def save_default_db(self, db_id):
-        """Promote a database to the lab-shared default BY REFERENCE (its id) and
-        re-resolve core.LAB_DB, so every DB_MODE_LAB launch now uses it (Lab
-        Settings > Lab shared (default) database). The chosen database may be the
-        setup-wizard lab DB or any custom DB created later -- the latter is the bug
-        this fixes. Mirrors the Tk ``_save_default_db``."""
-        db_id = (db_id or "").strip() or core.DB_BUILTIN_LAB
+        """Make one of this PC's databases its DEFAULT, by reference (its id, in
+        machine.json). A config that follows the PC default (the generated Lab
+        default) then uses it. Mirrors the Tk ``_save_default_db``."""
+        db_id = (db_id or "").strip()
         try:
             self._mutate_store(
                 lambda: core.set_default_database(self.store_extra, db_id))
@@ -1386,7 +1468,9 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True,
-                "default_database": core.default_database_id(self.store_extra)}
+                "default_database": core.default_database_id(self.store_extra),
+                "databases": self._db_list(),
+                "default_db_options": _db_rows(core.default_database_options(self.store_extra))}
 
     @api_call
     def create_database(self, new_db, new_user="", new_password="", researcher="",
@@ -1432,7 +1516,10 @@ class Api(object):
                     self.store_extra, title=new_db, researcher=researcher,
                     connection=fields, postgres_user=fields.get("db_user", "")))
                 result["registered"] = entry
-                result["databases"] = core.known_databases_from_store(self.store_extra)
+                result["databases"] = self._db_list()
+                result["default_database"] = core.default_database_id(self.store_extra)
+                result["default_db_options"] = _db_rows(
+                    core.default_database_options(self.store_extra))
                 result["researchers"] = core.list_researchers(self.store_extra, self.presets)
             except Exception as error:   # registration must never lose the DB
                 result["register_error"] = str(error)
@@ -1459,6 +1546,12 @@ class Api(object):
             return {"ok": False,
                     "message": "Could not register the database: %s"
                                % result["register_error"]}
+        if core.is_local_host(fields.get("db_host", "")):
+            # The same login check a create gets: kept either way, but a refused
+            # login (e.g. a blank password on a password-only Postgres) is said.
+            warning = core.registered_database_login_warning(fields)
+            if warning:
+                result["warning"] = warning
         self._advise_remote_connection(fields, result)
         return result
 
@@ -1486,12 +1579,9 @@ class Api(object):
 
     @api_call
     def edit_database(self, db_id, fields):
-        """Edit an EXISTING database entry (Feature 2): a custom registry database
-        OR the lab shared built-in. All shaping/persistence is
-        ``core.edit_database`` -- a custom entry is written back to the store and a
-        lab-shared edit goes to lab_info.json (re-resolving the live LAB_DB).
-        Returns the refreshed registry + default lists so the page can repaint.
-        """
+        """Edit one of this PC's databases (Feature 2). All shaping/persistence
+        is ``core.edit_database`` (machine.json via the store). Returns the
+        refreshed database + default lists so the page can repaint."""
         fields = fields or {}
         updates = {}
         for key in ("title", "researcher", "db_name", "db_user", "db_password",
@@ -1506,19 +1596,17 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": True, "entry": entry,
-                "databases": core.known_databases_from_store(self.store_extra),
-                "default_db_options": core.default_database_options(self.store_extra),
+                "databases": self._db_list(),
+                "default_db_options": _db_rows(core.default_database_options(self.store_extra)),
                 "default_database": core.default_database_id(self.store_extra)}
 
     @api_call
     def delete_database(self, db_id):
         """Soft-delete a custom database from the Lab Settings custom-databases
-        list. Flags the registry entry ``deleted`` (core.soft_delete_database) so
-        it is hidden from every UI list but KEPT in presets.json (recoverable by
-        hand-editing). It never touches Postgres or any real database -- only the
-        launcher's record of it is hidden. If the database was the lab-shared
-        default, the default reference is reset to the lab built-in. Returns the
-        refreshed registry + default lists so the page can repaint."""
+        list. Flags the entry ``deleted`` (core.soft_delete_database) so it is
+        hidden from every UI list but KEPT in machine.json (recoverable by
+        hand-editing). It never touches Postgres. If it was this PC's default, the
+        next remaining database becomes the default. Returns the refreshed lists."""
         try:
             ok, message = self._mutate_store(
                 lambda: core.soft_delete_database(self.store_extra, db_id))
@@ -1527,25 +1615,31 @@ class Api(object):
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
         return {"ok": ok, "message": message,
-                "databases": core.known_databases_from_store(self.store_extra),
-                "default_db_options": core.default_database_options(self.store_extra),
+                "databases": self._db_list(),
+                "default_db_options": _db_rows(core.default_database_options(self.store_extra)),
                 "default_database": core.default_database_id(self.store_extra)}
 
     @api_call
     def save_pg_admin(self, fields):
         """Persist the Postgres admin config to the store's extra (Lab Settings).
 
-        Only used by Create-a-database, never as launch environment. Mirrors the
+        Used by Create-a-database, and as the LOGIN of every database that uses
+        the admin login (uses_admin_login, resolved live at launch). Mirrors the
         Tk Lab Settings auto-save.
         """
         fields = fields or {}
         admin = {k: str(fields.get(k, "") or "") for k in core.PG_ADMIN_KEYS}
+
+        def _set():
+            self.store_extra["pg_admin"] = admin
+            # Databases that use the admin login follow it live: republish.
+            core.apply_default_database(self.store_extra)
         try:
-            self._mutate_store(
-                lambda: self.store_extra.__setitem__("pg_admin", admin))
+            self._mutate_store(_set)
         except OSError as error:
             return {"ok": False, "message": "Could not save: %s" % error}
-        return {"ok": True, "pg_admin": core.pg_admin_from_store(self.store_extra)}
+        return {"ok": True, "pg_admin": core.pg_admin_from_store(self.store_extra),
+                "databases": self._db_list()}
 
     @api_call
     def test_database_connection(self, fields):
@@ -1573,7 +1667,10 @@ class Api(object):
                 researcher=researcher, connection=fields,
                 postgres_user=fields.get("db_user", "")))
             result["registered"] = entry
-            result["databases"] = core.known_databases_from_store(self.store_extra)
+            result["databases"] = self._db_list()
+            result["default_database"] = core.default_database_id(self.store_extra)
+            result["default_db_options"] = _db_rows(
+                core.default_database_options(self.store_extra))
             result["researchers"] = core.list_researchers(self.store_extra, self.presets)
         except Exception as error:   # registration must never lose the DB
             result["register_error"] = str(error)
@@ -1590,9 +1687,7 @@ class Api(object):
         work) and ``core.create_database`` runs. An already-existing database of
         that name is treated as SUCCESS and used (not a hard error). A real
         failure returns the create's own message so the UI can show the reason.
-        With ``register`` the confirmed database is added to the global registry
-        (used for the optional extra databases; the lab default is instead
-        recorded in lab_info.json by ``create_lab_info``).
+        With ``register`` the confirmed database is added to this PC's list.
         """
         conn = connection or {}
         fields = {
@@ -1645,50 +1740,81 @@ class Api(object):
         return {"ok": False, "created": False, "reason": res.get("reason", ""),
                 "message": res.get("message") or "Could not create the database."}
 
-    @api_call
-    def create_lab_info(self, labs, database, admin):
-        """Write lab_info.json from the setup wizard, then reload so the app
-        picks up the labs/credentials without a restart (web parity with the Tk
-        FirstRunWizard's ``_create``). Thin wrapper: all shaping is
-        ``core.build_lab_info``; all file IO + reload is core. Returns ``ok``
-        plus a fresh initial state so the JS can re-render straight into the
-        normal lab-present UI and drop the wizard.
-        """
-        # Gate on the SAME shared validator the Lab Settings "Add lab" path uses,
-        # so a lab with an empty Host/IP (or no/invalid seats) can never be saved
-        # here -- it would render <host> in the participant links and then hide
-        # this wizard on every future start.
-        ok, message = core.validate_wizard_labs(labs or [])
-        if not ok:
-            return {"ok": False, "message": message}
-        try:
-            data = core.build_lab_info(labs or [], database or {}, admin or {})
-            core.save_lab_info(data)
-            core.reload_lab_info()
+    # -- the per-PC setup wizard (core.WIZARD_STEPS) ------------------------
+    # Lab -> Postgres -> Databases -> Save. Every decision is core's
+    # (setup_state / test_pg_admin_connection / finish_machine_setup); these
+    # methods only hand the page what it renders.
+
+    def _reload_store(self):
+        """Re-read the store after the wizard wrote the data files, exactly as
+        __init__ does."""
+        with self._store_lock:
+            self.presets, self.store_extra = core.load_store(self.store_path)
+            self._store_mtime = self._store_mtime_now()
             core.apply_default_database(self.store_extra)
-        except Exception as error:
-            LOG.exception("create_lab_info failed")
-            return {"ok": False,
-                    "message": "Could not save lab settings: %s" % error}
-        return {"ok": True, "state": self.get_initial_state()}
+            core.apply_lab_marker(
+                self.presets, lab_presets=core.lab_presets_from_store(self.store_extra))
+            core.clear_builtin_last_run(self.presets)
+            core.clear_builtin_project_path(self.presets)
+            self.presets = core.order_presets_for_display(self.presets)
 
     @api_call
-    def use_example_lab_info(self):
-        """Convenience mirror of the Tk wizard's "Use example values": write the
-        shipped lab_info.example.json as lab_info.json and reload. Thin wrapper
-        over ``core.example_lab_info_to_save`` + save + reload."""
+    def wizard_state(self):
+        """Everything the setup wizard shows (core.setup_state)."""
+        return {"ok": True, "setup": core.setup_state()}
+
+    @api_call
+    def wizard_test_pg(self, admin=None):
+        """Step 2's Test connection against THIS computer's Postgres."""
+        return core.test_pg_admin_connection(admin or {})
+
+    @api_call
+    def wizard_use_example(self):
+        """Step 1 with no labs yet: write the shipped example lab_info.json
+        (core.example_lab_info_to_save) and return the fresh wizard state."""
         example = core.example_lab_info_to_save()
         if not example:
-            return {"ok": False,
-                    "message": "Could not read lab_info.example.json."}
+            return {"ok": False, "message": "Could not read the example lab settings."}
         try:
             core.save_lab_info(example)
             core.reload_lab_info()
-            core.apply_default_database(self.store_extra)
         except Exception as error:
-            LOG.exception("use_example_lab_info failed")
+            LOG.exception("wizard_use_example failed")
             return {"ok": False, "message": "Could not save: %s" % error}
-        return {"ok": True, "state": self.get_initial_state()}
+        return {"ok": True, "setup": core.setup_state()}
+
+    @api_call
+    def wizard_finish(self, payload=None):
+        """Step 4: core.finish_machine_setup does it all (create/link databases,
+        write machine.json; lab_info.json too when labs were created here). On
+        success the store is reloaded and a fresh initial state returned; on
+        failure nothing was written and the wizard stays open for Retry."""
+        p = payload or {}
+        try:
+            index = int(p.get("default_index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        try:
+            result = core.finish_machine_setup(
+                p.get("home_lab") or "",
+                pg_admin=p.get("pg_admin") or None,
+                databases=p.get("databases") or [],
+                default_index=index,
+                default_database_id=p.get("default_database_id") or None,
+                new_labs=p.get("new_labs") or None,
+                default_admin=p.get("default_admin") or None,
+                researcher=str(p.get("researcher") or ""))
+        except Exception as error:
+            LOG.exception("wizard_finish failed")
+            return {"ok": False, "message": "Could not finish the setup: %s" % error}
+        if not result.get("ok"):
+            return {"ok": False, "message": result.get("message") or "Setup failed.",
+                    "results": result.get("results", [])}
+        self._reload_store()
+        return {"ok": True, "message": result.get("message", ""),
+                "results": result.get("results", []),
+                "warnings": result.get("warnings", []),
+                "state": self.get_initial_state()}
 
     @api_call
     def set_lab_display(self, lab_id, display, config_lab=None):
@@ -1769,7 +1895,7 @@ class Api(object):
         """Soft-delete a lab preset from the Lab Settings Edit view (web/Tk parity).
 
         Flags the preset ``deleted`` (core.soft_delete_lab_preset) so it is
-        hidden from every UI list but KEPT in presets.json (recoverable by
+        hidden from every UI list but KEPT in lab_info.json (recoverable by
         hand-editing). Refuses to remove the last displayed lab, so the selector
         always keeps a lab. Returns the next lab to select when the deleted one
         was the current selection. ``config_lab`` keeps the open config's own
@@ -1839,7 +1965,7 @@ class Api(object):
         except Exception:
             LOG.exception("shortcut folder dialog failed")
             self._callback("pywOnShortcutsResult",
-                           {"ok": False, "message": "Folder dialog failed. See the log."})
+                           {"ok": False, "message": "Folder dialog failed. See the activity log."})
             return
         dest = self._dialog_path(result)
         if not dest:
@@ -1939,7 +2065,7 @@ class Api(object):
         Mirrors the Tk ``save_shortcut``: the shortcut calls the launcher
         headlessly (``otree_lab_launcher.py --run "<name>"``), so it always
         reflects the latest saved settings and the DB password is NOT written
-        into the file -- the secret stays in presets.json. It therefore requires
+        into the file -- the secret stays in saved_configs.json. It therefore requires
         a saved, unmodified config: an unsaved or edited setup is refused with a
         clear "save it first" message rather than a password-baked snapshot.
         """
@@ -1982,7 +2108,7 @@ class Api(object):
         except Exception:
             LOG.exception("save dialog failed")
             self._callback("pywOnBatResult",
-                           {"ok": False, "message": "Save dialog failed. See the log."})
+                           {"ok": False, "message": "Save dialog failed. See the activity log."})
             return
         path = result if isinstance(result, str) else (result[0] if result else None)
         if not path:
@@ -3164,7 +3290,11 @@ def main(argv=None):
     LOG.info("startup: otree_launcher_web on %s, python %s (browser_mode=%s)",
              sys.platform, sys.version.split()[0], browser_mode)
     LOG.info("log file: %s", LOG_PATH)
-    core.reload_lab_info()
+    # Upgrade an old data folder / load the live state BEFORE any UI exists.
+    global STORAGE_RESULT
+    STORAGE_RESULT = core.prepare_storage()
+    if not STORAGE_RESULT.get("ok", True):
+        LOG.warning("storage: %s", STORAGE_RESULT.get("message"))
 
     if want_window:
         try:

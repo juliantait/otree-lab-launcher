@@ -40,13 +40,14 @@ Prefer a desktop icon? Run `Mac_Create desktop shortcut.command` / `Win_Create d
 
 ## Quick start
 
-First launch opens the **setup wizard** (it appears whenever there is no `data/lab_info.json`). Two roles:
+First launch on a computer opens the **setup wizard**: which lab is this computer, its Postgres login (or skip: launches then use oTree's SQLite), and its databases. Two roles:
 
 **Lab manager - set up once:**
 
 1. Set up Postgres.
-2. Create the default database everyone shares.
+2. Run the wizard: add the labs, create the default database everyone shares.
 3. Create a shared room and prep the participant PCs with that room's link.
+4. For the next computer of the lab: copy only `data/lab_info.json` there and run the wizard.
 
 **Any researcher - three clicks:**
 
@@ -69,8 +70,9 @@ First launch opens the **setup wizard** (it appears whenever there is no `data/l
     Win_Start oTree Lab Launcher (simple).vbs           (Simple/Tk, Windows, windowless)
     debug_Win_Start oTree Lab Launcher (simple).bat     (Simple/Tk, Windows, visible console)
     debug_Win_Start oTree Lab Launcher.bat              (default/browser, Windows, visible console)
-  app/    the app code (and app/branding/ logo files)
-  data/   your config and maps (lab_info.json, presets.json, maps/, ...)
+  app/    the app code (app/assets/: example lab settings + maps; app/branding/: logos)
+  data/   your settings, never part of the app (lab_info.json = the lab,
+          machine.json = this computer, saved_configs.json, ...)
 ```
 
 **Requirements.** Python 3 (the Simple app uses the standard-library `tkinter`). Your oTree project, runnable with `otree`. To use the create-a-database button: PostgreSQL reachable from the machine and `psycopg2` (`pip install psycopg2-binary`); an existing database needs only its connection details.
@@ -83,7 +85,7 @@ If you cloned the repo, run `git pull` in the folder:
 git pull
 ```
 
-That fetches the latest version and leaves your own `data/` config untouched: your `lab_info.json`, `presets.json`, saved shortcuts, the database registry and this machine's identity all carry over.
+That fetches the latest version and leaves your own `data/` folder untouched (git ignores all of it): your labs, saved configs, databases and this computer's setup all carry over. Updating from 1.4 or older converts the old settings files once and moves them to `data/retired/`.
 
 If you did not clone, you can instead download the repo and drop the `app/` folder over your existing one. But cloning once and using `git pull` is the recommended and easiest way to stay up to date.
 

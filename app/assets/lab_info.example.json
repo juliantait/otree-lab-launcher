@@ -1,0 +1,422 @@
+{
+  "_comment": "Example lab settings (schema_version 1). A lab manager copies ONE lab_info.json to every computer of the lab; each computer then runs the setup wizard, which asks which lab it is and creates this computer's own databases (kept in machine.json, never copied). Each lab's 'map' names an entry of the 'maps' table below; seat cells in a map fill from the lab's 'seats' list in order. 'suggested_database' prefills the wizard's database name (no password here). 'default_admin' is the oTree admin login new configs start with. 'github_sync_enabled' / 'github_org' are the GitHub Organisation Sync settings; 'databases_localhost_only' (on by default) keeps every database on this computer.",
+  "schema_version": 1,
+  "labs": [
+    {
+      "id": "small",
+      "name": "Small lab",
+      "host": "your.lab.host",
+      "seats": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22"
+      ],
+      "geometry": "grid",
+      "cols": 0,
+      "map": "example_small",
+      "default_room": "study",
+      "shortcut_label": "",
+      "deleted": false,
+      "suggested_database": {
+        "db_name": "otree_small_lab",
+        "db_user": "otree"
+      }
+    },
+    {
+      "id": "large",
+      "name": "Large lab",
+      "host": "your.lab.host",
+      "seats": [
+        "A1",
+        "A2",
+        "A3",
+        "A5",
+        "A6",
+        "A7",
+        "A8",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6",
+        "C7",
+        "C8",
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "E1",
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "geometry": "grid",
+      "cols": 0,
+      "map": "example_large",
+      "default_room": "study",
+      "shortcut_label": "",
+      "deleted": false,
+      "suggested_database": {
+        "db_name": "otree_large_lab",
+        "db_user": "otree"
+      }
+    }
+  ],
+  "maps": {
+    "example_small": {
+      "description": "Example small room: 5x5 grid, front of the room at the bottom (grid row 5). Experimenter desk front-left; a wall closes the right column of rows 4 and 3; no aisle. 22 seat cells, filled in order from the lab's 'seats' list.",
+      "front": "bottom",
+      "rows": 5,
+      "cols": 5,
+      "aisle_cols": [],
+      "cells": [
+        {
+          "r": 5,
+          "c": 1,
+          "kind": "exp"
+        },
+        {
+          "r": 5,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 5,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 5,
+          "kind": "wall"
+        },
+        {
+          "r": 3,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 5,
+          "kind": "wall"
+        },
+        {
+          "r": 2,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 5,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 5,
+          "kind": "seat"
+        }
+      ]
+    },
+    "example_large": {
+      "description": "Example large room: 9x5 grid with a central AISLE at column 5 (left of it are 4 seat columns, right of it 4 more). Front of the room at the bottom (grid row 5). The experimenter desk sits just right of the aisle on the front row; a wall spans the back of the aisle. Rows front-to-back are A (full), B (full), C (full), D and E (short end rows on the outer columns). 31 seat cells, filled in order from the lab's 'seats' list.",
+      "front": "bottom",
+      "rows": 5,
+      "cols": 9,
+      "aisle_cols": [
+        5
+      ],
+      "cells": [
+        {
+          "r": 5,
+          "c": 9,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 8,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 7,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 6,
+          "kind": "exp"
+        },
+        {
+          "r": 5,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 5,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 9,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 8,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 7,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 6,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 4,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 9,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 8,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 7,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 6,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 4,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 3,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 3,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 9,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 8,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 2,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 9,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 8,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 2,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 1,
+          "kind": "seat"
+        },
+        {
+          "r": 1,
+          "c": 4,
+          "kind": "wall"
+        },
+        {
+          "r": 1,
+          "c": 5,
+          "kind": "wall"
+        },
+        {
+          "r": 1,
+          "c": 6,
+          "kind": "wall"
+        }
+      ]
+    }
+  },
+  "default_admin": {
+    "username": "admin",
+    "password": "changeme"
+  },
+  "github_sync_enabled": false,
+  "github_org": "",
+  "databases_localhost_only": true
+}

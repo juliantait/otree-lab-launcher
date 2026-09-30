@@ -31,8 +31,9 @@ extra.
 ## What's here
 
 - **`../otree_core.py`**: the pure logic (config model, `DATABASE_URL`, seat
-  files, resetdb/prodserver commands, the `settings.py` block, `presets.json`
-  storage, project validation). No tkinter, so it imports anywhere.
+  files, resetdb/prodserver commands, the `settings.py` block, the data-folder
+  storage (`lab_info.json`, `machine.json`, `saved_configs.json`), the 1.5.0
+  migration and the per-PC setup wizard logic, project validation). No tkinter, so it imports anywhere.
 - **`../otree_launcher_web.py`**: the pywebview host + the `Api` bridge class.
   Every method is callable from the page as `window.pywebview.api.<name>`.
 - **`index.html`**: the UI. It calls `window.pywebview.api.*` for real actions
@@ -46,9 +47,9 @@ extra.
 | Config dropdown | `select_config` | loads that saved config's fields |
 | Browse (project) | `pick_project_folder` | native folder dialog → validate → show apps |
 | Browse (participant file) | `pick_participant_file` | native file dialog |
-| Save as new… | `save_config_as` | writes to `presets.json` |
+| Save as new… | `save_config_as` | writes to `saved_configs.json` |
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
-| Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `presets.json`, never in the file |
+| Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `machine.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
 | Add block to settings.py | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
 
@@ -75,7 +76,7 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
   settings.py block, presets storage, the lab-preset/database/preflight layer,
   and, since 2026-09-24, the last pure-logic tail: `normalize_config`,
   `configs_differ`, the DB-URL builders, `build_url`, `validate_project`, the
-  storage-path + `lab.local` helpers, `preset_from_fields`, `export_bat_text` and
+  storage-path + home-lab helpers, `preset_from_fields`, `export_bat_text` and
   the rest are all `name = core.name` aliases). What remains duplicated is only
   the Tk GUI layer. `export_bat_text` (the standalone `.bat` export) is not wired
   to any button in either face — only the tests call it.

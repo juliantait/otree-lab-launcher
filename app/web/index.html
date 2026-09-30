@@ -29,21 +29,13 @@
 })();
 /* THEME: apply the saved light/dark choice BEFORE the first paint so there is
    no flash. DARK is the default: we only set data-theme for an explicit "light".
-   Source of truth, in order:
-     1. window.__LAUNCHER_THEME__  -- injected by the --browser server from the
-        persisted prefs file (data/ui_prefs.json). This is what survives a restart
-        in browser mode, where localStorage is tied to the (changing) server port.
-     2. localStorage "otreeLabTheme" -- fallback within a single run/port and for
-        the static file:// preview.
-   The header toggle and the Lab-settings control both read/write these (see
-   toggleTheme / applyTheme / currentTheme in the main script), and applyTheme also
-   persists to the server file. */
+   The ONLY store is this PC's machine.json (the page keeps no copy of its own):
+   the --browser server injects it as window.__LAUNCHER_THEME__; the pywebview
+   window applies state.theme right after boot. applyTheme persists a change
+   through API.set_theme. */
 (function(){
   try{
-    var t=null;
-    var inj=window.__LAUNCHER_THEME__;
-    if(inj==="light"||inj==="dark")t=inj;
-    else t=localStorage.getItem("otreeLabTheme");
+    var t=window.__LAUNCHER_THEME__;
     if(t==="light")document.documentElement.setAttribute("data-theme","light");
     else if(t==="dark")document.documentElement.removeAttribute("data-theme");
   }catch(e){}
@@ -141,7 +133,7 @@
 
 /* ═══════════════════════════════════════════════════════════════════════
    LIGHT THEME — opt-in (set data-theme="light" on <html>; the head script
-   restores it from localStorage before first paint). DARK stays the default
+   restores it from the server-injected value before first paint). DARK stays the default
    (plain :root above). This block ONLY re-defines token VALUES — it repeats
    no layout rules — so every rule above paints light automatically. The pink
    ACCENT is deliberately NOT re-defined here: it stays exactly as in :root,
@@ -637,6 +629,11 @@ input::placeholder{color:var(--faint)}
 .db-pick-by{color:var(--faint);font-size:12px}
 /* "on HOST:PORT": a database on another computer (picker, card, briefing). */
 .db-host-note{color:var(--faint);font-size:12px;font-weight:400;margin-left:6px}
+/* 1.5.0: where a database was created (grey) and the warnings that go with it. */
+.db-created{color:var(--faint);font-size:11.5px;margin-top:3px}
+.db-warn{color:var(--warn);font-size:12px;margin-top:4px;line-height:1.4}
+.db-pick-row .db-created,.db-pick-row .db-warn{display:block;margin-left:22px;text-align:left}
+.db-default-tag{color:var(--ok);font-size:11.5px;font-weight:600;margin-left:6px}
 .bl-dbhost{margin:0 0 8px;font-size:12.5px;color:var(--muted)}
 .db-mode-note.host-lock-note{margin:2px 0 4px}
 .upd-restored{font-size:12px;color:var(--muted);margin:10px 0 0}
@@ -747,6 +744,22 @@ input::placeholder{color:var(--faint)}
 .log .t{color:#6f7d90}.log .info{color:var(--text)}.log .muted{color:#8e9aab}
 .log .cmd{color:#7fd1ff}.log .ok{color:#7ee0a8}.log .warn{color:#f2c66b}.log .err{color:#ff9a90}
 .log .out{color:#b6c0cf;padding-left:20px;display:block}
+
+/* "See activity log" button next to a message that points at the log, and the
+   brief highlight the log panel gets when that button opens it. */
+.log-jump{margin-left:6px;vertical-align:baseline}
+.notice-bar .log-jump{margin-left:8px}
+@keyframes logflash{0%{box-shadow:0 0 0 3px var(--accent),var(--shadow-lg)}100%{box-shadow:0 0 0 0 transparent,var(--shadow-lg)}}
+.modal-card.log-flash{animation:logflash 1.6s ease-out}
+.log-body .ln.log-flash-line{background:rgba(var(--accent-rgb),.16);transition:background 1.6s ease-out}
+/* Grey hint under a Postgres password field (the password may be left blank). */
+.pw-hint{margin:-6px 0 10px 162px;font-size:11.5px;line-height:1.4;color:var(--faint)}
+@media (max-width:560px){.pw-hint{margin-left:0}}
+/* GitHub login / token dialog (sits above every other modal). */
+#ghLoginModal{z-index:90}
+.gh-login-action{margin-top:8px}
+.gh-login-msg{display:none;margin-top:10px;font-size:12.5px;line-height:1.45}
+.gh-login-msg.ok{color:var(--ok)} .gh-login-msg.err{color:var(--err)}
 
 /* ---------------------------- LAUNCH BAR ---------------------------- */
 .launchbar{
@@ -1049,6 +1062,34 @@ input::placeholder{color:var(--faint)}
 .pill.link{color:var(--muted);background:var(--panel-2);border:1px solid var(--line)}
 .wiz-foot{margin-top:18px;display:flex;align-items:center;justify-content:space-between;gap:10px}
 .wiz-foot .right{display:flex;gap:9px}
+/* 1.5.0 per-PC wizard: lab choice cards, the Postgres test result, the notes. */
+.wiz-lab{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer;
+  padding:11px 13px;margin:6px 0;background:var(--bg-deep);border:1px solid var(--line);
+  border-radius:var(--r-md);color:var(--text);font:inherit}
+.wiz-lab.sel{border-color:var(--accent);background:var(--accent-soft)}
+.wiz-lab .nm{font-weight:650;color:var(--text-strong)}
+.wiz-lab .meta{font-size:11.5px;color:var(--muted);margin-top:2px}
+.wiz-lab input{accent-color:var(--accent)}
+.wiz-note{font-size:12px;color:var(--muted);background:var(--bg-deep);border:1px dashed var(--line);
+  border-radius:var(--r-sm);padding:9px 11px;margin:8px 0;line-height:1.5}
+.wiz-note b{color:var(--text-strong)}
+.wiz-test{font-size:12px;margin:6px 0 0}
+.wiz-test.ok{color:var(--ok)} .wiz-test.err{color:var(--err)}
+.wiz-dbrow{display:flex;align-items:flex-start;gap:10px;padding:8px 11px;background:var(--bg-deep);
+  border:1px solid var(--line-soft);border-radius:var(--r-sm);margin:6px 0;font-size:12.5px}
+.wiz-dbrow .nm{color:var(--text-strong);font-weight:600}
+.wiz-dbrow .body{flex:1;min-width:0}
+.wiz-dbrow .x{background:none;border:0;color:var(--faint);cursor:pointer;font-size:16px;line-height:1}
+.wiz-dbrow input[type=radio]{accent-color:var(--accent);margin-top:3px}
+/* one-time banners (e.g. "Settings upgraded ...") and the fail-soft warning */
+.notice-bar{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:90;max-width:760px;
+  width:calc(100% - 32px);display:flex;gap:12px;align-items:flex-start;padding:11px 14px;
+  background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--ok);
+  border-radius:var(--r-md);box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:12.5px;color:var(--text)}
+.notice-bar.warn{border-left-color:var(--warn)}
+.notice-bar .txt{flex:1;line-height:1.5}
+.notice-bar .txt b{color:var(--text-strong)}
+.notice-bar .x{background:none;border:0;color:var(--faint);cursor:pointer;font-size:17px;line-height:1}
 
 /* launch briefing / handoff */
 .caution-bar{background:var(--caution);color:#fff;font-weight:700;font-size:13.5px;line-height:1.5;
@@ -1185,6 +1226,12 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
 </style>
 </head>
 <body>
+
+<!-- One-time banners (core.take_notices) and the fail-soft storage warning. -->
+<div class="notice-bar" id="noticeBar" hidden>
+  <div class="txt" id="noticeText"></div>
+  <button class="x" onclick="dismissNotice()" aria-label="Dismiss">&times;</button>
+</div>
 
 <div class="app">
 
@@ -1329,12 +1376,18 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <h2 class="card-num"><span class="n">2</span> Database</h2>
           <div class="sumrow">
             <span class="db-name">
-              <span class="v" id="dbSummary">Lab shared database (Postgres)</span>
+              <span class="v" id="dbSummary">This computer's default database</span>
               <span class="db-host-note" id="dbHostNote" hidden></span>
               <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbPicker(event)">&#9998;</button>
             </span>
             <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
           </div>
+          <!-- 1.5.0: where the database was created (grey), a warning when a
+               localhost database was created on another computer, and a note when
+               this config's database is not on this computer (core decides). -->
+          <div class="db-created" id="dbCreatedOn" hidden></div>
+          <div class="db-warn" id="dbWarn" hidden></div>
+          <div class="db-warn" id="dbNote" hidden></div>
           <!-- Feature 3: the selected database shows only the summary above; this
                discloses the connection READ-ONLY. Editing is in Lab Settings. -->
           <button type="button" class="db-details-toggle" id="dbDetailsToggle" onclick="toggleDbDetails()">Details &#9656;</button>
@@ -1373,8 +1426,8 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <h2 class="card-num"><span class="n">3</span> Lab</h2>
 
           <div class="labnotice" id="labNotice" hidden>
-            <b>No lab_info.json found.</b> Run first-time setup, or copy
-            <code>lab_info.example.json</code> to <code>lab_info.json</code> and edit it.
+            <b>This computer is not set up yet.</b> Finish the setup wizard, or copy
+            the lab's <code>lab_info.json</code> into <code>data/</code> and restart.
           </div>
 
           <div id="labBody">
@@ -1470,7 +1523,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
      new OS window. #logBody is the one source of truth: appendLog() writes here
      whether the overlay is open or not, and the compact launch-bar line mirrors
      the latest entry. Long backup paths wrap here (never truncated). -->
-<div class="modal" id="logModal" hidden onclick="if(event.target===this)closeLogModal()">
+<div class="modal" id="logModal" hidden style="z-index:85" onclick="if(event.target===this)closeLogModal()">
   <div class="modal-card huge" id="logCard">
     <button class="modal-x" onclick="closeLogModal()" aria-label="Close">&times;</button>
     <h3 class="modal-title">Activity log</h3>
@@ -1481,25 +1534,60 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
   </div>
 </div>
 
-<!-- ==================== FIRST-RUN SETUP WIZARD ==================== -->
-<!-- Shown only on first run (lab_info.json absent). Deliberately has no close
-     X and does not dismiss on a backdrop click: there is nothing behind it to
-     use until setup is done. All step logic renders here; the Api does the work. -->
+<!-- ==================== GITHUB LOGIN / TOKEN ==================== -->
+<!-- Its own overlay (not the generic #infoModal) so it can open ON TOP of the
+     clone dialog and Lab Settings without replacing them. The username + token
+     go straight to core.github_save_login (git credential approve, the SYSTEM
+     credential store); the page keeps no copy and the token is cleared from the
+     field as soon as it is sent. -->
+<div class="modal" id="ghLoginModal" hidden onclick="if(event.target===this)closeGhLogin()">
+  <div class="modal-card" id="ghLoginCard">
+    <button class="modal-x" onclick="closeGhLogin()" aria-label="Close">&times;</button>
+    <h3 class="modal-title" id="ghLoginTitle">Use a different GitHub login or token</h3>
+    <p class="modal-desc"><b>Enter the GitHub username and a token, then Save.</b> <span id="ghLoginNote"></span></p>
+    <p class="modal-desc" id="ghLoginPlatform" hidden></p>
+    <div class="mfield"><label for="ghLoginUser">GitHub username</label><input id="ghLoginUser" type="text" autocomplete="off" placeholder="the lab account"></div>
+    <div class="mfield"><label for="ghLoginToken">Token</label><div class="pwrap"><input id="ghLoginToken" type="password" autocomplete="off" placeholder="read-only token"><button type="button" class="pw-toggle" onclick="togglePw2('ghLoginToken',this)">Show</button></div></div>
+    <div class="gh-login-msg" id="ghLoginMsg"></div>
+    <div class="cta"><button class="btn" id="ghForgetBtn" onclick="doGhForget()" style="margin-right:auto">Forget GitHub login</button>
+      <button class="btn" onclick="closeGhLogin()">Cancel</button>
+      <button class="btn accent" id="ghLoginSave" onclick="doGhSaveLogin()">Save</button></div>
+  </div>
+</div>
+
+<!-- ==================== PER-PC SETUP WIZARD ==================== -->
+<!-- Shown when this computer is not set up yet (core.setup_needed: no lab in
+     lab_info.json, or no lab chosen for this PC). Deliberately has no close X and
+     does not dismiss on a backdrop click: there is nothing behind it to use until
+     setup is done. All step logic renders here; core does the work. -->
 <div class="modal" id="wizModal" hidden>
   <div class="modal-card wide" id="wizCard">
     <div class="wiz-head">
-      <h3 class="modal-title">Set up this launcher for your lab</h3>
-      <p class="modal-desc" style="margin:4px 0 0">Add your lab(s), the shared database, and the admin login. You can change all of this later in Settings.</p>
+      <h3 class="modal-title">Set up this computer</h3>
+      <p class="modal-desc" style="margin:4px 0 0">Four short steps: <b>which lab this computer is</b>, its Postgres login, its databases, then save. You can change all of this later in Settings.</p>
     </div>
     <div class="wiz-rail" id="wizRail"></div>
     <div class="wiz-body" id="wizBody"></div>
+    <div class="modal-err" id="wizErr"></div>
     <div class="wiz-foot">
-      <button class="link" id="wizExample" onclick="wizUseExample()">Use example values</button>
+      <div>
+        <button class="link" id="wizExample" onclick="wizUseExample()">Use example values</button>
+        <button class="link" id="wizSkip" onclick="wizSkip()">Skip this step</button>
+      </div>
       <div class="right">
         <button class="btn" id="wizBack" onclick="wizGo(-1)">Back</button>
         <button class="btn accent" id="wizNext" onclick="wizGo(1)">Next &rarr;</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- A data folder written by a NEWER launcher: nothing may be used or saved. -->
+<div class="modal" id="storageBlock" hidden>
+  <div class="modal-card">
+    <h3 class="modal-title">Update the launcher first</h3>
+    <p class="modal-desc" id="storageBlockText"></p>
+    <p class="modal-desc"><b>Update the launcher (git pull, or download the latest version), then start it again.</b> Nothing in this data folder was changed.</p>
   </div>
 </div>
 
@@ -1515,10 +1603,8 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
    Shared by the header sun/moon toggle AND the Appearance control in Lab settings,
    so changing either keeps the other in sync. DARK is the default: light is
    applied by setting data-theme="light" on <html>; dark clears the attribute.
-   Persistence is TWO-fold: localStorage (instant, per-port) AND a server-side
-   file (data/ui_prefs.json via API.set_theme) so the choice survives a restart in
-   browser mode, where the port -- and thus localStorage -- changes each launch.
-   The pre-paint head script restores it from the injected value / localStorage. */
+   Persisted ONLY in this PC's machine.json (API.set_theme); the pre-paint head
+   script restores it from the value the server injects. */
 function currentTheme(){
   return document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
 }
@@ -1529,7 +1615,6 @@ function applyTheme(theme,persist){
   var t=(theme==="light")?"light":"dark";
   if(t==="light")document.documentElement.setAttribute("data-theme","light");
   else document.documentElement.removeAttribute("data-theme");
-  try{localStorage.setItem("otreeLabTheme",t);}catch(e){}   /* instant, per-port */
   if(persist!==false&&NATIVE&&API&&API.set_theme){          /* durable, cross-restart */
     try{API.set_theme(t);}catch(e){}
   }
@@ -1567,9 +1652,6 @@ var hiddenFields={};
    click toggles and echoed back on save, so Tk-saved exclusions are not wiped on
    a web re-save (item 1). */
 var currentSeatExcluded=[];
-/* True while the first-run "create a new lab" flow is open, so on save the new
-   lab is adopted as this machine's lab via set_lab_marker (item 6). */
-var pendingIdentityAdopt=false;
 /* GitHub Organisation Sync (opt-in, DEFAULT OFF). A lab setting, loaded from lab_info.json via
    the initial state; drives whether the GitHub org button + the per-config Git Pull button show. */
 var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
@@ -1586,15 +1668,15 @@ var LABS=[], LAB_BY_ID={}, selectedLabId="";
 var LAB_PRESETS=[], PG_ADMIN={admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"};
 var PROJECT_ROOMS=null, roomSelIndex=0, labMarker="";
 var mapExpanded=true, prevDbMode="lab";
-/* Round 3: the global database registry (custom entries only), the shared
-   researcher roster, and which built-in a new config defaults to. Kept in sync
-   from the backend (initial state + create-database results). The two built-in
-   ids match otree_core (DB_BUILTIN_SQLITE / DB_BUILTIN_LAB). */
-var DB_SQLITE_ID="otree_default", DB_LAB_ID="lab_shared";
-var DATABASES=[], RESEARCHERS=[], defaultDatabase=DB_LAB_ID;
-/* The databases a user may pick as the lab-shared default: the lab built-in +
-   every custom DB (SQLite excluded). Sent by the backend as default_db_options;
-   the static preview builds an equivalent list from PREVIEW_DATABASES. */
+/* This PC's databases (machine.json), the shared researcher roster, and which
+   database is this PC's DEFAULT (by id; "" = none). Kept in sync from the backend
+   (initial state + create/edit results). The one built-in id matches otree_core
+   (DB_BUILTIN_SQLITE). A config references its database by id (database_id):
+   "" = follow this PC's default (only the generated Lab default does). */
+var DB_SQLITE_ID="otree_default";
+var DATABASES=[], RESEARCHERS=[], defaultDatabase="", currentDatabaseId="";
+/* The databases a user may pick as this PC's default (every Postgres database of
+   this PC). Sent by the backend as default_db_options. */
 var DEFAULT_DB_OPTIONS=[];
 
 /* ---------- static preview data (example labs/maps, no real hosts) ---------- */
@@ -1616,9 +1698,15 @@ var PREVIEW_ROOMS=["study","pilot","bargaining","teaching_demo"];
    hosts, users or passwords). Mirrors what core.known_databases_from_store /
    list_researchers would return in the app. */
 var PREVIEW_DATABASES=[
-  {id:"dictator_pilot",title:"Dictator pilot",researcher:"J. Tait",postgres_user:"otree",
+  {id:"otree_large_lab",title:"otree_large_lab",researcher:"",postgres_user:"otree",is_default:true,
+   created_on_line:"Created on LAB-PC-01 (192.0.2.10), Large lab, 2026-09-30",location_warning:"",
+   builtin:false,db_mode:"custom",db_name:"otree_large_lab",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432"},
+  {id:"dictator_pilot",title:"Dictator pilot",researcher:"J. Tait",postgres_user:"otree",is_default:false,
+   created_on_line:"Created on LAB-PC-01 (192.0.2.10), Large lab, 2026-09-23",location_warning:"",
    builtin:false,db_mode:"custom",db_name:"dictator_pilot",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432"},
-  {id:"trust_wave_2",title:"Trust wave 2",researcher:"S. Vermeer",postgres_user:"otree",
+  {id:"trust_wave_2",title:"Trust wave 2",researcher:"S. Vermeer",postgres_user:"otree",is_default:false,
+   created_on_line:"Created on LAB-PC-02 (192.0.2.11), Small lab, 2026-09-11",
+   location_warning:"Trust wave 2 was created on LAB-PC-02. On this computer (LAB-PC-01), localhost is a different Postgres: a database with the same name here is NOT the same data.",
    builtin:false,db_mode:"custom",db_name:"trust_wave_2",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432"}
 ];
 var PREVIEW_RESEARCHERS=["A. Kowalski","J. Tait","L. Rossi","M. Researcher","P. Andersson","S. Vermeer"];
@@ -1712,6 +1800,11 @@ function labRoom(){var l=labById(currentLab());return (l&&l.default_room)||"stud
 window.pywLog=function(cls,text){appendLog(cls,text);};
 window.pywStatus=function(cls,text){
   appendLog(cls,text);
+  /* An error that says "See the activity log." would otherwise only land IN the
+     log. Show it in the notice bar with a [See activity log] button, unless the
+     launch popup is open and already shows it in its handoff banner. */
+  if(cls==="err"&&splitLogHint(text).hint&&!(el("infoModal")&&!el("infoModal").hidden&&el("takeoverStatus"))){
+    showNotices([text],true,true);}
   /* During a launch the Before-you-launch modal shows a live handoff note;
      keep tinting it to match the latest status (colour only — its text is
      driven by the launch flow). */
@@ -1733,6 +1826,50 @@ function openLogModal(){
   el("logModal").hidden=false;
   var b=el("logBody");if(b)b.scrollTop=b.scrollHeight;
 }
+/* Wording owned by core (get_initial_state().ui_text overrides these; the copies
+   here keep the static preview identical -- a test compares them to core). */
+var UI_TEXT={
+  activity_log_button:"See activity log",
+  pg_blank_password_hint:"Leave blank if this Postgres user has no password (e.g. Postgres.app on a Mac, or a trust login).",
+  pg_new_user_password_hint:"Optional. Leave blank only if this Postgres lets users in without a password (e.g. Postgres.app on a Mac); on a standard Windows install, set one.",
+  github_login_action:"Use a different GitHub login or token",
+  github_forget:"Forget GitHub login",
+  github_login_note:"Saved in this computer's own credential store (Windows Credential Manager or the macOS Keychain), never in a launcher file. Use a lab account that is a member of the organisation, and a read-only token as the password.",
+  github_platform_note:"",
+  admin_login_note:"Uses the Postgres admin login from this computer.",
+  admin_login_missing:"This database uses the Postgres admin login from this computer, but no admin login is stored. Add it in Settings > Postgres admin."
+};
+/* A TRAILING "See the activity log." in a message. Mirror of
+   core.ACTIVITY_LOG_HINT_PATTERN / core.split_activity_log_hint. */
+var ACTIVITY_LOG_HINT_RE=/[\s:;,.\-]*\b(?:see|check) the (?:activity )?log(?: above| below)?(?: for [^.!?]{1,40})?\s*[.!]?\s*$/i;
+function splitLogHint(msg){
+  var t=String(msg==null?"":msg),m=ACTIVITY_LOG_HINT_RE.exec(t);
+  if(!m)return {text:t,hint:false};
+  var head=t.slice(0,m.index).replace(/[ \t:;,\-]+$/,"");
+  if(head&&!/[.!?]$/.test(head))head+=".";
+  return {text:head,hint:true};
+}
+function logBtnHtml(){
+  return '<button type="button" class="btn tiny log-jump" onclick="revealActivityLog()">'+escapeHtml(UI_TEXT.activity_log_button)+'</button>';
+}
+/* Escaped message; a trailing "See the activity log." becomes the button. */
+function msgWithLogBtn(msg){var sp=splitLogHint(msg);return escapeHtml(sp.text)+(sp.hint?" "+logBtnHtml():"");}
+/* The "See activity log" button: open the log panel on top of whatever is open,
+   scroll to the latest lines and briefly highlight it. */
+function revealActivityLog(){
+  openLogModal();
+  var card=el("logCard"),b=el("logBody");
+  if(b){b.scrollTop=b.scrollHeight;
+    var lines=b.querySelectorAll(".ln"),from=Math.max(0,lines.length-3);
+    for(var i=from;i<lines.length;i++){(function(ln){ln.classList.add("log-flash-line");
+      setTimeout(function(){ln.classList.remove("log-flash-line");},1600);})(lines[i]);}}
+  if(card){card.classList.remove("log-flash");void card.offsetWidth;card.classList.add("log-flash");
+    setTimeout(function(){card.classList.remove("log-flash");},1700);}
+}
+/* The grey hint under every Postgres password field; newUser = the password of a
+   NEW database user (create dialog, wizard database cards), which only works
+   blank where this Postgres lets users in without one. */
+function pwHint(newUser){return '<div class="pw-hint">'+escapeHtml(newUser?UI_TEXT.pg_new_user_password_hint:UI_TEXT.pg_blank_password_hint)+'</div>';}
 function closeLogModal(){el("logModal").hidden=true;}
 function copyLog(){try{navigator.clipboard.writeText(el("logBody").innerText);}catch(e){}}
 
@@ -1959,8 +2096,7 @@ document.addEventListener("keydown",function(e){if(e.key==="Escape"){closeAuthMe
    CARD 2: Database
    ====================================================================== */
 /* The pen icon opens the GLOBAL database picker (Round 3, Task 1): the oTree
-   default (SQLite), the lab shared Postgres, and EVERY custom database in the
-   registry, each with its creator researcher in grey on the same line, plus an
+   default (SQLite) and EVERY database of this computer (the default one tagged), each with its creator researcher in grey on the same line, plus an
    "Add new database…" action. The list is core.list_databases so this picker
    and the Tk one show the same databases. Selecting one applies
    core.database_config_fields to the on-screen config. The connection fields
@@ -1972,18 +2108,16 @@ function openDbPicker(ev){
       renderDbPicker((r&&r.databases)||[],(r&&r.current_id)||"");});
   }else{
     var list=[
-      {id:DB_SQLITE_ID,title:"oTree default (SQLite)",researcher:"",builtin:true,db_mode:"none"},
-      {id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:"",builtin:true,db_mode:"lab"}
+      {id:DB_SQLITE_ID,title:"oTree default (SQLite)",researcher:"",builtin:true,db_mode:"none"}
     ].concat(DATABASES.length?DATABASES:PREVIEW_DATABASES);
     renderDbPicker(list,previewCurrentDbId(list));
   }
 }
+/* Static preview only: the app gets current_id from core.current_database_id. */
 function previewCurrentDbId(list){
   if(currentDbMode==="none")return DB_SQLITE_ID;
-  if(currentDbMode==="lab")return DB_LAB_ID;
-  var name=(val("db_name")||"").trim(),host=(val("db_host")||"").trim(),user=(val("db_user")||"").trim();
-  for(var i=0;i<list.length;i++){var e=list[i];
-    if(!e.builtin&&e.db_name===name&&e.db_host===host&&e.db_user===user)return e.id;}
+  if(currentDatabaseId)return currentDatabaseId;
+  for(var i=0;i<list.length;i++)if(list[i].is_default)return list[i].id;
   return "";
 }
 function renderDbPicker(list,currentId){
@@ -1993,12 +2127,15 @@ function renderDbPicker(list,currentId){
     /* Another computer's database: say where (core.database_host_note). */
     var note=(e.host_note!==undefined)?e.host_note:dbHostNote(e);
     var on=note?'<span class="db-pick-by db-host-note">'+escapeHtml(note)+'</span>':'';
+    var tag=e.is_default?'<span class="db-default-tag">(default)</span>':'';
+    var made=e.created_on_line?'<span class="db-created">'+escapeHtml(e.created_on_line)+'</span>':'';
+    var warn=e.location_warning?'<span class="db-warn">'+escapeHtml(e.location_warning)+'</span>':'';
     return '<button class="db-pick-row'+(sel?" sel":"")+'" onclick="pickDatabase(\''+escapeHtml(e.id)+'\')">'+
       '<span class="db-pick-dot">'+(sel?"&#9679;":"")+'</span>'+
-      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+on+grey+'</button>';
+      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+tag+on+grey+made+warn+'</button>';
   }).join("");
   openModal("Choose a database",
-    '<p class="modal-desc">Everyone shares this list. A grey name shows who created that database.</p>'+
+    '<p class="modal-desc">The databases on <b>this computer</b>. The title is its nickname; the grey line says where it was created.</p>'+
     '<div class="db-pick-list">'+rows+'</div>'+
     '<div class="db-pick-sep"></div>'+
     '<button class="db-pick-add" onclick="closeModal();openCreateDb()">+&nbsp; Add new database&hellip;</button>'+
@@ -2015,10 +2152,10 @@ function pickDatabase(id){
     return;
   }
   var all=[
-    {id:DB_SQLITE_ID,db_mode:"none"},{id:DB_LAB_ID,db_mode:"lab"}
+    {id:DB_SQLITE_ID,db_mode:"none",builtin:true}
   ].concat(DATABASES.length?DATABASES:PREVIEW_DATABASES);
   var entry=all.filter(function(e){return e.id===id;})[0];if(!entry)return;
-  var fields={db_mode:entry.db_mode||"custom"};
+  var fields={db_mode:entry.db_mode||"custom",database_id:entry.id};
   if(!entry.builtin&&entry.db_name!==undefined){
     fields.db_name=entry.db_name;fields.db_user=entry.db_user;fields.db_password=entry.db_password||"";
     fields.db_host=entry.db_host;fields.db_port=entry.db_port;}
@@ -2026,6 +2163,8 @@ function pickDatabase(id){
 }
 function applyDbFields(fields){
   fields=fields||{};var mode=fields.db_mode||"lab";
+  /* The REFERENCE that is saved with the config (core.database_config_fields). */
+  if(fields.database_id!==undefined)currentDatabaseId=fields.database_id||"";
   if(fields.db_name!==undefined){
     setDbVals(fields.db_name||"",fields.db_user||"",fields.db_password||"",fields.db_host||"localhost",fields.db_port||"5432");}
   applyDbMode(mode);refreshDbSummary();updateDirtyState();
@@ -2034,7 +2173,7 @@ var dbDetailsShown=false;
 function applyDbMode(mode){
   currentDbMode=mode;
   var fields=["db_name","db_user","db_pw","db_host","db_port"];
-  /* Feature 3: every database (lab shared, custom, oTree default) shows only a
+  /* Feature 3: every database (this PC's databases, oTree default) shows only a
      one-line summary here; the connection is revealed READ-ONLY behind the
      Details disclosure. Editing a database moved entirely to Lab Settings >
      Database, so nothing is editable inline on the run/config screen. */
@@ -2094,7 +2233,9 @@ function remoteHostWarning(host){
 function refreshUrl(){
   var e=el("dbUrl");if(!e)return;
   if(currentDbMode==="none"){e.textContent="not set — oTree falls back to its own default database (SQLite)";refreshDbHostWarning();return;}
-  e.textContent="postgres://"+val("db_user")+":••••••••@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");
+  /* A blank password (a Postgres user with none) has no ":password" part,
+     exactly like core.build_database_url. */
+  e.textContent="postgres://"+val("db_user")+(val("db_pw")?":••••••••":"")+"@"+val("db_host")+":"+val("db_port")+"/"+val("db_name");
   refreshDbHostWarning();
 }
 /* Live remote-host warning near the main-config DATABASE_URL preview. */
@@ -2115,12 +2256,32 @@ function dbHostNote(e){
   if(isLocalHost(host))return "";
   return "on "+host+":"+(String(e.db_port==null?"":e.db_port).trim()||"5432");
 }
-/* The Database card line: mirror of core.database_summary_label, plus the grey
-   host note when the database is on another computer. */
+/* The Database card: in the app every line comes from core (Api.database_card:
+   the nickname label, grey host note, grey "created on" line, the location
+   warning and the "not on this computer" note). The static preview renders a
+   local approximation. */
+function renderDbCard(c){
+  c=c||{};
+  if(c.db_label)el("dbSummary").textContent=c.db_label;
+  var n=el("dbHostNote");if(n){n.textContent=c.db_host_note||"";n.hidden=!c.db_host_note;}
+  [["dbCreatedOn","db_created_on"],["dbWarn","db_warning"],["dbNote","db_note"]].forEach(function(p){
+    var e=el(p[0]);if(e){e.textContent=c[p[1]]||"";e.hidden=!c[p[1]];}});
+}
+var dbCardSeq=0;
 function refreshDbSummary(){
+  if(NATIVE&&API&&API.database_card){
+    var seq=++dbCardSeq;
+    API.database_card(gatherFields()).then(function(r){if(r&&r.ok&&seq===dbCardSeq)renderDbCard(r);});
+    return;
+  }
   var mode=currentDbMode,base;
   var host=(val("db_host")||"").trim()||"localhost";
-  if(mode==="lab")base="Lab shared database (Postgres)";
+  var entry=null,list=DATABASES.length?DATABASES:PREVIEW_DATABASES;
+  for(var i=0;i<list.length;i++){var d=list[i];
+    if(d.id===currentDatabaseId||(!currentDatabaseId&&mode==="lab"&&d.is_default))entry=d;}
+  if(mode!=="none"&&entry){renderDbCard({db_label:entry.title+" (Postgres)",db_created_on:entry.created_on_line||"",db_warning:entry.location_warning||""});return;}
+  renderDbCard({});
+  if(mode==="lab")base="This computer's default database";
   else if(mode==="none")base="oTree default (SQLite)";
   else{var name=(val("db_name")||"").trim()||"custom database";base=isLocalHost(host)?(name+" on "+host+" (Postgres)"):(name+" (Postgres)");}
   el("dbSummary").textContent=base;
@@ -2159,7 +2320,6 @@ function selectLab(id){
     t.classList.toggle("active",t.dataset.lab===selectedLabId);t.classList.remove("faded");});
   markHostPick("");el("backToLabLink").hidden=true;
   el("customFields").hidden=true;el("localNote").hidden=true;el("roomRow").hidden=false;
-  try{localStorage.setItem("otreeLab",id);}catch(e){}
   updateSeats();updateDirtyState();
 }
 /* The two host buttons are ALWAYS shown, side by side; this only moves the
@@ -2341,6 +2501,7 @@ function applyFields(f){
   else if(lab==="local"){selectLocalHost();}
   else{selectLab(lab);}
   var mode=f.db_mode||"lab";
+  currentDatabaseId=f.database_id||"";
   setDbVals(f.db_name||"otree",f.db_user||"otree",f.db_password||"",f.db_host||"localhost",f.db_port||"5432");
   applyDbMode(mode);
   el("resetdb").checked=(f.resetdb!==false);
@@ -2358,6 +2519,7 @@ function gatherFields(){
      (fable review items 1 & 2). */
   var gathered={
     project_path:currentProjectPath,
+    database_id:currentDatabaseId,
     db_mode:currentDbMode,
     db_name:val("db_name"),db_user:val("db_user"),db_password:val("db_pw"),
     db_host:val("db_host"),db_port:val("db_port"),
@@ -2485,6 +2647,9 @@ function ghShowCloneError(r){
   var e=el("ghCloneErr");if(!e)return;
   var html='<b>'+escapeHtml(r.message||"Could not clone the repository.")+'</b>';
   if(r.hint)html+='<div class="gh-hint">'+escapeHtml(r.hint)+'</div>';
+  /* GitHub answers "not found" for a repo this login cannot see, so both a
+     not-found and a login failure offer switching the login / adding a token. */
+  if(r.status==="not_found"||r.status==="auth")html+=ghLoginActionHtml("clone");
   if(r.output)html+='<details><summary>Git output</summary><div class="mono-line">'+escapeHtml(r.output)+'</div></details>';
   e.innerHTML=html;e.style.display="block";
   var go=el("ghCloneGo");if(go)go.textContent="Retry";
@@ -2529,6 +2694,63 @@ function doGithubOrgClone(){
     if(r&&!r.ok){window.pywOnCloneDone(r);}
   });
 }
+/* ---------------- GitHub login / token (system credential store) ----------------
+   The launcher never keeps a token: core.github_save_login hands the username +
+   token to git's own credential helper (git credential reject, then approve) and
+   returns no secret. The field is cleared as soon as it has been sent. */
+var ghLoginFrom="";
+function ghLoginActionHtml(from){
+  return '<div class="gh-login-action"><button type="button" class="btn tiny" onclick="openGhLogin(\''+from+'\')">'+
+    escapeHtml(UI_TEXT.github_login_action)+'</button></div>';
+}
+function openGhLogin(from){
+  ghLoginFrom=from||"";
+  el("ghLoginTitle").textContent=UI_TEXT.github_login_action;
+  el("ghLoginNote").textContent=UI_TEXT.github_login_note;
+  var pn=el("ghLoginPlatform");pn.textContent=UI_TEXT.github_platform_note||"";pn.hidden=!UI_TEXT.github_platform_note;
+  el("ghForgetBtn").textContent=UI_TEXT.github_forget;
+  el("ghLoginUser").value="";el("ghLoginToken").value="";
+  var m=el("ghLoginMsg");m.style.display="none";m.textContent="";
+  el("ghLoginSave").disabled=false;el("ghForgetBtn").disabled=false;
+  el("ghLoginModal").hidden=false;el("ghLoginUser").focus();
+}
+function closeGhLogin(){el("ghLoginToken").value="";el("ghLoginModal").hidden=true;}
+function ghLoginMsg(ok,text){var m=el("ghLoginMsg");m.className="gh-login-msg "+(ok?"ok":"err");m.textContent=text||"";m.style.display=text?"block":"none";}
+function doGhSaveLogin(){
+  var user=(val("ghLoginUser")||"").trim(),token=(val("ghLoginToken")||"").trim();
+  if(!user||!token){ghLoginMsg(false,"Enter the GitHub username and the token.");return;}
+  if(!NATIVE||!API||!API.github_save_login){ghLoginMsg(false,"Saving a GitHub login works in the app, not the static preview.");return;}
+  el("ghLoginSave").disabled=true;el("ghForgetBtn").disabled=true;
+  el("ghLoginToken").value="";   /* sent; never kept in the page */
+  API.github_save_login(user,token).then(function(r){
+    r=r||{};el("ghLoginSave").disabled=false;el("ghForgetBtn").disabled=false;
+    if(!r.ok){ghLoginMsg(false,r.message||"Could not save the GitHub login.");return;}
+    closeGhLogin();ghLoginDone(true,r.message||"Saved the GitHub login.");
+  });
+}
+function doGhForget(from){
+  if(from)ghLoginFrom=from;
+  if(!NATIVE||!API||!API.github_forget_login){ghLoginDone(false,"Forgetting the GitHub login works in the app, not the static preview.");return;}
+  API.github_forget_login().then(function(r){
+    r=r||{};
+    if(!el("ghLoginModal").hidden){if(r.ok)closeGhLogin();else{ghLoginMsg(false,r.message||"Could not forget the GitHub login.");return;}}
+    ghLoginDone(!!r.ok,r.message||"");
+  });
+}
+/* Show the outcome where the user came from: the clone dialog (then Retry) or
+   the Lab Settings card. Always also in the activity log. */
+function ghLoginDone(ok,msg){
+  window.pywStatus(ok?"ok":"err",msg);
+  if(ghLoginFrom==="clone"&&ghCloneDialogOpen()){
+    var e=el("ghCloneErr");
+    if(e){e.innerHTML='<span style="color:'+(ok?"var(--ok)":"var(--err)")+'"><b>'+escapeHtml(msg)+'</b></span>';e.style.display="block";}
+    var go=el("ghCloneGo");if(go){go.textContent="Retry";updateGhCloneState();if(ok&&!go.disabled)go.focus();}
+    return;
+  }
+  var st=el("ghLoginStatus");
+  if(st){st.textContent=msg;st.style.color=ok?"var(--ok)":"var(--err)";}
+}
+
 /* GitHub Organisation Sync: per-config Git Pull. Pulls the SELECTED study folder
    (never the launcher folder). Three outcomes surfaced with clear messages. */
 function onGitUpdateStudy(){
@@ -2661,8 +2883,11 @@ function _singleCtaAccent(root){
   return out.length===1?out[0]:null;   /* 0 or >1 => ambiguous => no Enter target */
 }
 function _topModal(){
-  if(!el("infoModal").hidden)return {root:el("infoModal"),kind:"info"};
+  var gl=el("ghLoginModal");if(gl&&!gl.hidden)return {root:gl,kind:"ghlogin"};
+  /* The log overlay stacks ABOVE the generic modal (the "See activity log"
+     button opens it from inside one), so it is checked first. */
   if(!el("logModal").hidden)return {root:el("logModal"),kind:"log"};
+  if(!el("infoModal").hidden)return {root:el("infoModal"),kind:"info"};
   var w=el("wizModal");if(w&&!w.hidden)return {root:w,kind:"wiz"};
   return null;
 }
@@ -2678,6 +2903,7 @@ function _modalPrimary(m){
 document.addEventListener("keydown",function(e){
   if(e.isComposing||e.defaultPrevented)return;   /* let IME / already-handled keys pass */
   if(e.key==="Escape"){
+    if(el("ghLoginModal")&&!el("ghLoginModal").hidden){closeGhLogin();return;}
     if(!el("logModal").hidden){closeLogModal();return;}
     if(!el("infoModal").hidden){closeModal();return;}
     /* wizModal: intentionally NOT closable by Escape (no close X / backdrop). */
@@ -2984,7 +3210,7 @@ function renderCreateDb(roster,suggestedResearcher){
      Mirror of core.new_database_host_defaults. */
   if(DB_LOCALHOST_ONLY){if(!isLocalHost(adminHost))adminPort="5432";adminHost="localhost";}
   openModal("Create a new Postgres database",
-    '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
+    '<p class="modal-desc">Uses the admin details from Lab Settings. The new user is optional; <b>leave it blank to let the admin login own the database and connect to it.</b></p>'+
     '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
     /* Host (+ Port): visible, read-only until the pen is clicked. Another host
        forces register-only (see cdbHostChanged). */
@@ -2994,8 +3220,11 @@ function renderCreateDb(roster,suggestedResearcher){
     '<div class="mfield"><label>Researcher (required)</label>'+
       '<input id="cdbResearcher" type="text" list="cdbRosterList" autocomplete="off" value="'+escapeHtml(suggestedResearcher||"")+'">'+
       '<datalist id="cdbRosterList">'+opts+'</datalist></div>'+
-    '<div class="mfield"><label>New user (optional)</label><input id="cdbUser" type="text"></div>'+
-    '<div class="mfield"><label>New password (optional)</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+
+    '<div class="mfield"><label>New user (optional)</label><input id="cdbUser" type="text" oninput="dbUserChanged(\'cdb\')"></div>'+
+    /* No user = the database is owned by, and connects as, the Postgres admin
+       login (a reference, not a copy); a user = its own role + password. */
+    '<div class="pw-hint" id="cdbAdminNote">'+escapeHtml(UI_TEXT.admin_login_note)+'</div>'+
+    '<div id="cdbPwRow" hidden><div class="mfield"><label>New password</label><div class="pwrap"><input id="cdbPw" type="password"><button type="button" class="pw-toggle" data-target="cdbPw" onclick="togglePw(this)">Show</button></div></div>'+pwHint(true)+'</div>'+
     /* Feature 4: register an existing database WITHOUT running CREATE DATABASE.
        The entry is identical either way, so it is selectable/editable afterward. */
     '<label class="chk" style="margin:2px 0 4px"><input type="checkbox" id="cdbExists" onchange="onCdbExistsToggle()"> The database already exists in Postgres (register without creating)</label>'+
@@ -3023,7 +3252,7 @@ function cdbHostChanged(){
 }
 function doCreateDb(){
   var name=(val("cdbName")||"").trim(),researcher=(val("cdbResearcher")||"").trim();
-  var user=(val("cdbUser")||"").trim(),pw=val("cdbPw")||"";
+  var user=(val("cdbUser")||"").trim(),pw=user?(val("cdbPw")||""):"";   /* no user = the admin login */
   var exists=!!(el("cdbExists")&&el("cdbExists").checked);
   var host=(val("cdbHost")||"").trim()||"localhost",port=(val("cdbPort")||"").trim()||"5432";
   var e=el("cdbErr");
@@ -3036,10 +3265,19 @@ function doCreateDb(){
       if(r.fields)setDbVals(r.fields.db_name,r.fields.db_user,r.fields.db_password,r.fields.db_host,r.fields.db_port);
       /* keep the local registry + roster in sync with what the backend saved */
       if(r.databases)DATABASES=r.databases;if(r.researchers)RESEARCHERS=r.researchers;
-      applyDbFields(r.fields||{db_mode:"custom"});
+      if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
+      if(r.default_database!==undefined)defaultDatabase=r.default_database||"";
+      /* The config references the new database BY ID (what is saved). */
+      var df=Object.assign({db_mode:"custom"},r.fields||{});
+      if(r.registered&&r.registered.id)df.database_id=r.registered.id;
+      applyDbFields(df);
       var msg=r.message||(exists?"Database registered.":"Database created.");
       if(r.advisory)msg+=" "+r.advisory;
-      window.pywStatus(r.reachable===false?"warn":"ok",msg);}
+      window.pywStatus((r.reachable===false||r.warning)?"warn":"ok",msg);
+      /* Kept, but its user cannot log in (e.g. a blank password on a Postgres
+         that requires one): a visible warning, not just a log line. The create's
+         message already carries it, a register's does not. */
+      if(r.warning){if(r.registered_only)window.pywStatus("warn",r.warning);showNotices([r.warning],true);}}
     else{if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not create the database.";}el("cdbCreate").textContent=exists?"Register":"Create";}
   });
 }
@@ -3051,25 +3289,30 @@ function doCreateDb(){
    an empty note. Same source (core.known_databases_from_store) as the picker. */
 function lsCustomDbRows(){
   var list=(NATIVE?DATABASES:(DATABASES.length?DATABASES:PREVIEW_DATABASES));
-  if(!list||!list.length)return '<p class="d" style="margin:0">No custom databases yet.</p>';
+  if(!list||!list.length)return '<p class="d" style="margin:0">No databases on this computer yet. Launches use oTree’s own SQLite until one is added.</p>';
   return list.map(function(e){
     var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
-    /* Feature 2: each registered database is EDITABLE right here, and can be
-       soft-deleted (hidden from the app, kept in the store JSON) with the shared
-       hold-to-delete control. */
+    var tag=(e.is_default||e.id===defaultDatabase)?'<span class="db-default-tag">(default)</span>':'';
+    var made=e.created_on_line?'<div class="db-created">'+escapeHtml(e.created_on_line)+'</div>':'';
+    var warn=e.location_warning?'<div class="db-warn">'+escapeHtml(e.location_warning)+'</div>':'';
+    if(e.login_missing)warn+='<div class="db-warn">'+escapeHtml(UI_TEXT.admin_login_missing)+'</div>';
+    else if(e.uses_admin_login)made+='<div class="db-created">'+escapeHtml(UI_TEXT.admin_login_note)+'</div>';
+    /* Feature 2: each database is EDITABLE right here, and can be soft-deleted
+       (hidden from the app, kept in machine.json) with the shared hold-to-delete
+       control. */
     return '<div style="padding:3px 0;display:flex;align-items:center;gap:8px">'+
-      '<span style="flex:1;min-width:0">'+escapeHtml(e.title)+grey+'</span>'+
+      '<span style="flex:1;min-width:0">'+escapeHtml(e.title)+tag+grey+made+warn+'</span>'+
       '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(e.id)+'\')">Edit</button>'+
       holdDeleteBtn("db",e.id,{tiny:true})+'</div>';
   }).join("");
 }
-/* The selected default's one-line summary + an Edit button (Feature 2): even the
-   lab shared / setup-wizard database is editable now (it was locked before). */
+/* The current default's one-line summary + an Edit button (Feature 2). */
 function lsDefaultDbSummary(){
-  var entry=lsFindDbEntry(defaultDatabase)||{title:"Lab shared database"};
+  var entry=lsFindDbEntry(defaultDatabase);
+  if(!entry)return '<p class="d" style="margin:0 0 6px"><b>No default database.</b> The Lab default config uses oTree’s own SQLite until you pick one below.</p>';
   var where=(entry.db_name?(" — "+escapeHtml(entry.db_name)+" on "+escapeHtml(entry.db_host||"")):"");
   return '<div style="padding:2px 0 6px;display:flex;align-items:center;gap:8px">'+
-    '<span style="flex:1;min-width:0"><b>Selected:</b> '+escapeHtml(entry.title||"Lab shared database")+where+'</span>'+
+    '<span style="flex:1;min-width:0"><b>Selected:</b> '+escapeHtml(entry.title||"database")+where+'</span>'+
     '<button class="btn tiny" onclick="openEditDb(\''+escapeHtml(defaultDatabase)+'\')">Edit selected</button></div>';
 }
 function lsFindDbEntry(id){
@@ -3080,27 +3323,34 @@ function lsFindDbEntry(id){
 function openEditDb(id){
   var entry=lsFindDbEntry(id);
   if(!entry){window.pywStatus("warn","That database is not available to edit.");return;}
-  var isLab=(entry.id===DB_LAB_ID);
   var rosterOpts=(RESEARCHERS||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
-  var body='<p class="modal-desc">'+(isLab
-      ?'The lab shared (default) database’s connection details. Saved to lab_info.json; every “Lab shared database” launch uses them.'
-      :'Connection details for this database, shared across all configs. Saved to the launcher’s store.')+'</p>';
-  if(!isLab){
-    body+='<div class="mfield"><label>Title</label><input id="edbTitle" type="text" value="'+escapeHtml(entry.title||"")+'"></div>'+
-      '<div class="mfield"><label>Researcher</label><input id="edbResearcher" type="text" list="edbRosterList" autocomplete="off" value="'+escapeHtml(entry.researcher||"")+'"><datalist id="edbRosterList">'+rosterOpts+'</datalist></div>';
-  }
+  var body='<p class="modal-desc">Connection details for this database on <b>this computer</b>, used by every config that references it. Saved in this computer’s machine.json.</p>'+
+    (entry.created_on_line?'<p class="db-created" style="margin:0 0 8px">'+escapeHtml(entry.created_on_line)+'</p>':'')+
+    (entry.location_warning?'<p class="db-warn" style="margin:0 0 8px">'+escapeHtml(entry.location_warning)+'</p>':'');
+  body+='<div class="mfield"><label>Title</label><input id="edbTitle" type="text" value="'+escapeHtml(entry.title||"")+'"></div>'+
+    '<div class="mfield"><label>Researcher</label><input id="edbResearcher" type="text" list="edbRosterList" autocomplete="off" value="'+escapeHtml(entry.researcher||"")+'"><datalist id="edbRosterList">'+rosterOpts+'</datalist></div>';
   body+='<div class="mfield"><label>Database name</label><input id="edbName" type="text" value="'+escapeHtml(entry.db_name||"")+'"></div>'+
-    '<div class="mfield"><label>User</label><input id="edbUser" type="text" value="'+escapeHtml(entry.db_user||"")+'"></div>'+
-    '<div class="mfield"><label>Password</label><div class="pwrap"><input id="edbPw" type="password" value="'+escapeHtml(entry.db_password||"")+'"><button type="button" class="pw-toggle" data-target="edbPw" onclick="togglePw(this)">Show</button></div></div>'+
+    /* Blank user = connect as this computer's Postgres admin login (a reference,
+       never a copy of its password): the password row is hidden then. */
+    '<div class="mfield"><label>User</label><input id="edbUser" type="text" placeholder="blank = the Postgres admin login" value="'+escapeHtml(entry.uses_admin_login?"":(entry.db_user||""))+'" oninput="dbUserChanged(\'edb\')"></div>'+
+    '<div class="pw-hint" id="edbAdminNote">'+escapeHtml(entry.login_missing?UI_TEXT.admin_login_missing:UI_TEXT.admin_login_note)+'</div>'+
+    '<div id="edbPwRow"><div class="mfield"><label>Password</label><div class="pwrap"><input id="edbPw" type="password" value="'+escapeHtml(entry.uses_admin_login?"":(entry.db_password||""))+'"><button type="button" class="pw-toggle" data-target="edbPw" onclick="togglePw(this)">Show</button></div></div>'+pwHint()+'</div>'+
     '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'" oninput="refreshEdbWarn()"'+(DB_LOCALHOST_ONLY?' readonly title="'+escapeHtml(LOCALHOST_ONLY_LABEL)+' is on in Settings"':'')+'></div>'+
     '<div class="mfield"><label>Port</label><input id="edbPort" type="text" value="'+escapeHtml(entry.db_port||"")+'"></div>'+
     /* Feature 1: live remote-host warning, same copy as the main config. */
     '<div class="db-mode-note" id="edbHostWarn" style="display:none"></div>'+
     '<div class="modal-err" id="edbErr"></div>'+
     '<div class="cta"><button class="btn" onclick="openLabSettings()">Cancel</button>'+
-    '<button class="btn accent" id="edbSave" onclick="doEditDb(\''+escapeHtml(id)+'\','+(isLab?"true":"false")+')">Save</button></div>';
-  openModal(isLab?"Edit the lab shared database":("Edit “"+(entry.title||"database")+"”"),body,true);
-  refreshEdbWarn();
+    '<button class="btn accent" id="edbSave" onclick="doEditDb(\''+escapeHtml(id)+'\')">Save</button></div>';
+  openModal("Edit “"+(entry.title||"database")+"”",body,true);
+  refreshEdbWarn();dbUserChanged("edb");
+}
+/* Create / edit database dialogs: no user = the admin login (password row
+   hidden, grey note shown); a user = its own password (with the hint). */
+function dbUserChanged(p){
+  var has=!!(val(p+"User")||"").trim();
+  var row=el(p+"PwRow"),note=el(p+"AdminNote");
+  if(row)row.hidden=!has;if(note)note.hidden=has;
 }
 /* Live remote-host warning in the edit-DB dialog. */
 function refreshEdbWarn(){
@@ -3109,20 +3359,21 @@ function refreshEdbWarn(){
   if(!isLocalHost(host)){w.style.display="block";w.innerHTML=remoteHostWarning(host);}
   else{w.style.display="none";w.innerHTML="";}
 }
-function doEditDb(id,isLab){
+function doEditDb(id){
   var name=(val("edbName")||"").trim();
   var e=el("edbErr");
   if(!name){e.style.display="block";e.textContent="Enter a database name.";return;}
-  var fields={db_name:name,db_user:val("edbUser")||"",db_password:val("edbPw")||"",
+  var eu=(val("edbUser")||"").trim();   /* blank = the admin login (core: uses_admin_login) */
+  var fields={db_name:name,db_user:eu,db_password:eu?(val("edbPw")||""):"",
               db_host:val("edbHost")||"",db_port:val("edbPort")||""};
-  if(!isLab){fields.title=val("edbTitle")||"";fields.researcher=val("edbResearcher")||"";}
+  fields.title=val("edbTitle")||"";fields.researcher=val("edbResearcher")||"";
   if(!NATIVE||!API){window.pywStatus("","Editing a database works in the app, not the static preview.");openLabSettings();return;}
   el("edbSave").textContent="Saving…";
   API.edit_database(id,fields).then(function(r){
     if(r&&r.ok){
       if(r.databases)DATABASES=r.databases;
       if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
-      if(r.default_database)defaultDatabase=r.default_database;
+      if(r.default_database!==undefined)defaultDatabase=r.default_database||"";
       /* If the on-screen config uses this database, repaint its summary/preview. */
       refreshDbSummary();refreshUrl();
       window.pywStatus("ok","Database saved.");
@@ -3139,7 +3390,7 @@ function doDeleteCustomDb(id){
     if(r&&r.ok){
       if(r.databases)DATABASES=r.databases;
       if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
-      if(r.default_database)defaultDatabase=r.default_database;
+      if(r.default_database!==undefined)defaultDatabase=r.default_database||"";
       refreshDbSummary();refreshUrl();
       openLabSettings();       /* repaint Lab Settings without the hidden entry */
       window.pywStatus("ok",r.message||"Database hidden.");
@@ -3147,12 +3398,11 @@ function doDeleteCustomDb(id){
   });
 }
 HOLD_ACTIONS.db=doDeleteCustomDb;
-/* The lab-shared-default picker rows: one radio per selectable database (the lab
-   built-in + every custom DB), the current default checked. Mirror of the Tk
-   _build_default_db_card radio list. */
+/* The default-database picker rows: one radio per database of this computer,
+   the current default checked. Mirror of the Tk _build_default_db_card list. */
 function lsDefaultDbRows(){
-  var opts=DEFAULT_DB_OPTIONS.length?DEFAULT_DB_OPTIONS:
-    [{id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:""}];
+  var opts=DEFAULT_DB_OPTIONS||[];
+  if(!opts.length)return '';
   return opts.map(function(e){
     var grey=e.researcher?'<span class="db-pick-by">   created by '+escapeHtml(e.researcher)+'</span>':'';
     return '<label class="chk" style="display:flex;align-items:center;margin:4px 0">'+
@@ -3163,11 +3413,14 @@ function lsDefaultDbRows(){
   }).join("");
 }
 function saveDefaultDb(id){
-  /* Promote a database to the lab-shared default BY REFERENCE. The lab-shared
-     database shows on the config only as the one-line label "Lab shared database
-     (Postgres)", so there are no on-screen fields to repaint here. */
+  /* Make a database this computer's DEFAULT, by reference (machine.json). A config
+     that follows the default (the Lab default) repaints its Database card. */
   defaultDatabase=id;
-  if(NATIVE&&API&&API.save_default_db)API.save_default_db(id);
+  if(NATIVE&&API&&API.save_default_db)API.save_default_db(id).then(function(r){
+    if(r&&r.ok){if(r.databases)DATABASES=r.databases;if(r.default_db_options)DEFAULT_DB_OPTIONS=r.default_db_options;
+      refreshDbSummary();var box=el("lsDbList");if(box)box.innerHTML=lsCustomDbRows();
+      var sum=el("lsDefaultSummary");if(sum)sum.innerHTML=lsDefaultDbSummary();}
+    else window.pywStatus("err",(r&&r.message)||"Could not change the default database.");});
 }
 /* Expand the (auto-collapsed) Postgres admin card to its full form. */
 function expandPgAdmin(){
@@ -3176,9 +3429,10 @@ function expandPgAdmin(){
 }
 function openLabSettings(){
   var marker=labMarker,markerName=(LAB_BY_ID[marker]||{}).name||marker;
-  /* Postgres admin is "Completed" once a username AND password are set; a completed
-     card auto-collapses (item 3). */
-  var pgComplete=!!(((PG_ADMIN.admin_username||"").trim())&&((PG_ADMIN.admin_password||"").trim()));
+  /* Postgres admin is "Completed" once a username is set (the password may be
+     blank: a Postgres user with no password); a completed card auto-collapses
+     (item 3). */
+  var pgComplete=!!((PG_ADMIN.admin_username||"").trim());
   var opts=LAB_PRESETS.map(function(p){return '<option value="'+escapeHtml(p.id)+'"'+(p.id===marker?" selected":"")+'>'+escapeHtml(p.name)+'</option>';}).join("");
   var rows=LAB_PRESETS.map(function(p){
     var pid=escapeHtml(p.id);
@@ -3196,16 +3450,16 @@ function openLabSettings(){
       '<button class="settings-x" onclick="closeModal()" aria-label="Close">&times;</button></div>'+
     '<div class="settings-content">'+
     /* Section order (top -> bottom): Which lab, Lab presets, Custom databases,
-       Lab shared default (sits just below Custom databases), Postgres admin
+       Default database (sits just below the database list), Postgres admin
        (collapsible), GitHub Organisation Sync, then Appearance LAST just above the
        footer. Appearance is the theme control; its contents/behaviour are
        unchanged, only its DOM position. */
     '<div class="ls-card"><h4>Which lab is this computer</h4>'+
-      '<p class="d">Sets the machine’s lab (saved to lab.local) and shows only that lab in the main selector. No file editing needed.</p>'+
+      '<p class="d">Sets this computer’s lab (saved in this computer’s machine.json) and shows only that lab in the main selector. No file editing needed.</p>'+
       '<div class="mfield" style="grid-template-columns:110px 1fr auto"><label>This computer</label>'+
       '<select id="lsMarker">'+opts+'</select><button class="btn" onclick="makeThisTheLab()">Make this the lab</button></div>'+
       '<div class="ls-status'+(marker?"":" warn")+'" id="lsIdentityStatus">'+(marker?("This computer is set to "+escapeHtml(markerName)+"."):"Not set yet: pick this computer’s lab.")+'</div>'+
-      /* View settings.py block lives here now (moved out of the Lab shared default
+      /* View settings.py block lives here now (moved out of the default
          database section): a lab machine wires a project into the lab by pasting
          this block, so it belongs with the machine's lab identity. Behaviour is
          unchanged -- same viewBlock() viewer. */
@@ -3222,8 +3476,8 @@ function openLabSettings(){
     /* Database section, part 2: the whole global registry of custom databases,
        each with its creator researcher (grey). Add here; edit/remove is a
        future idea (append-only). Mirror of the Tk _build_custom_db_card. */
-    '<div class="ls-card"><h4>Custom databases</h4>'+
-      '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
+    '<div class="ls-card"><h4>Databases on this computer</h4>'+
+      '<p class="d">Every database this computer uses (kept in this computer’s machine.json, never copied to another PC). The grey line says where it was created. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
       '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
       '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button>'+
       /* Lab setting (lab_info.json), default on: new and edited databases stay on
@@ -3236,12 +3490,12 @@ function openLabSettings(){
        setup-wizard DB, or any custom DB made later -- chosen by selecting it, not
        by re-typing credentials. Mirror of the Tk _build_default_db_card. Sits
        JUST BELOW Custom databases (v1.4.0 reorder). */
-    '<div class="ls-card"><h4>Lab shared (default) database</h4>'+
-      '<p class="d">Which database is the lab shared one. A config on “Lab shared database (Postgres)” uses whichever you pick here. Add databases above, then switch the default at any time. The selected default is editable below — even the lab shared one.</p>'+
-      lsDefaultDbSummary()+
+    '<div class="ls-card"><h4>Default database (this computer)</h4>'+
+      '<p class="d">The database the <b>Lab default</b> config uses on this computer. Add databases above, then switch the default at any time.</p>'+
+      '<div id="lsDefaultSummary">'+lsDefaultDbSummary()+'</div>'+
       lsDefaultDbRows()+'</div>'+
     /* Postgres admin (collapsible, v1.4.0). When it is already configured
-       (username + password present) the card AUTO-COLLAPSES to just its title +
+       (username present; the password may be blank) the card AUTO-COLLAPSES to just its title +
        an Edit button + a green "Completed"; Edit expands it to the full form. When
        not yet configured it shows expanded, as before. Title stripped to plain
        "Postgres admin" (the "used only to create databases" text was removed). */
@@ -3252,7 +3506,7 @@ function openLabSettings(){
           '<span style="color:var(--ok);font-weight:650">Completed</span></span></div>'+
       '<div id="pgAdminDetail"'+(pgComplete?" hidden":"")+'>'+
         '<div class="mfield"><label>Admin username</label><input id="pgUser" type="text" value="'+escapeHtml(PG_ADMIN.admin_username||"")+'"></div>'+
-        '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+
+        '<div class="mfield"><label>Admin password</label><div class="pwrap"><input id="pgPw" type="password" value="'+escapeHtml(PG_ADMIN.admin_password||"")+'"><button type="button" class="pw-toggle" data-target="pgPw" onclick="togglePw(this)">Show</button></div></div>'+pwHint()+
         '<div class="mfield"><label>Host</label><input id="pgHost" type="text" value="'+escapeHtml(PG_ADMIN.admin_host||"localhost")+'"></div>'+
         '<div class="mfield"><label>Port</label><input id="pgPort" type="text" value="'+escapeHtml(PG_ADMIN.admin_port||"5432")+'"></div>'+
         '<div class="ls-status" id="pgStatus">Saved automatically.</div></div></div>'+
@@ -3271,7 +3525,12 @@ function openLabSettings(){
       '<label class="chk" style="margin:2px 0 8px"><input type="checkbox" id="ghSyncEnabled" onchange="saveGithubSync()"> Enable GitHub Organisation Sync</label>'+
       '<div class="mfield" style="grid-template-columns:150px 1fr"><label>Organisation name</label>'+
       '<input id="ghSyncOrg" type="text" placeholder="e.g. CREED" onchange="saveGithubSync()"></div>'+
-      '<div class="ls-status" id="ghSyncStatus"></div></div>'+
+      '<div class="ls-status" id="ghSyncStatus"></div>'+
+      /* GitHub login: handed to the SYSTEM credential store, never a launcher file. */
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'+
+        '<button class="btn tiny" onclick="openGhLogin(\'settings\')">'+escapeHtml(UI_TEXT.github_login_action)+'</button>'+
+        '<button class="btn tiny" onclick="doGhForget(\'settings\')">'+escapeHtml(UI_TEXT.github_forget)+'</button></div>'+
+      '<div class="ls-status" id="ghLoginStatus"></div></div>'+
     /* Appearance LAST, just above the footer (moved here; contents unchanged). */
     '<div class="ls-card"><h4>Appearance</h4>'+
       '<p class="d">Light or dark theme for this launcher. Saved on this computer; the header sun/moon button does the same thing.</p>'+
@@ -3633,13 +3892,16 @@ function makeThisTheLab(){
 }
 function savePgAdmin(){
   PG_ADMIN={admin_username:val("pgUser"),admin_password:val("pgPw"),admin_host:val("pgHost"),admin_port:val("pgPort")};
-  if(NATIVE&&API&&API.save_pg_admin)API.save_pg_admin(PG_ADMIN);
+  /* Databases that use the admin login follow it: keep the list in step. */
+  if(NATIVE&&API&&API.save_pg_admin)API.save_pg_admin(PG_ADMIN).then(function(r){if(r&&r.databases)DATABASES=r.databases;});
   var s=el("pgStatus");if(s)s.textContent="Saved ✓";
 }
 function toggleLabShown(id){
   var p=LAB_PRESETS.filter(function(x){return x.id===id;})[0];if(!p)return;
   var next=(p.display===false);
-  if(NATIVE&&API&&API.set_lab_display){API.set_lab_display(id,next,currentLab()).then(function(r){if(r&&r.presets){LAB_PRESETS=r.presets;if(r.labs)setLabs(r.labs);openLabSettings();}});}
+  if(NATIVE&&API&&API.set_lab_display){API.set_lab_display(id,next,currentLab()).then(function(r){
+    if(r&&r.presets){LAB_PRESETS=r.presets;if(r.labs)setLabs(r.labs);openLabSettings();}
+    else if(r&&r.message){var st=el("lsLabStatus");if(st){st.className="ls-status warn";st.textContent=r.message;}}});}
   else{p.display=next;openLabSettings();}
 }
 function labPresetEdit(id){
@@ -3675,22 +3937,6 @@ function saveLabPreset(id){
   if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
   var colsNum=cols?(parseInt(cols,10)||0):0;
   var done=function(r){
-    if(r&&r.ok&&pendingIdentityAdopt&&!id&&r.new_id){
-      /* First-run "create a new lab": adopt the just-added lab as this machine's
-         lab so the first-run chooser does not reappear (fable review item 6). */
-      pendingIdentityAdopt=false;
-      API.set_lab_marker(r.new_id,currentConfigName||"",isFormDirty()).then(function(rr){
-        closeModal();
-        if(rr&&rr.ok){labMarker=r.new_id;
-          if(rr.lab_presets)LAB_PRESETS=rr.lab_presets;
-          if(rr.labs)setLabs(rr.labs);
-          renderConfigList(rr.configs,rr.selected);
-          if(rr.selected)currentConfigName=rr.selected;
-          if(rr.fields)applyFields(rr.fields);
-          window.pywStatus("ok","This machine is set to the "+(rr.lab_name||r.new_id)+" lab.");}
-        else{showChooseLab();window.pywStatus("err",(rr&&rr.message)||"Could not set the lab.");}});
-      return;
-    }
     if(r&&r.ok){if(r.presets){LAB_PRESETS=r.presets;}if(r.labs)setLabs(r.labs);
       /* A changed default_room re-derives the built-in Lab default live. */
       if(r.configs){renderConfigList(r.configs,currentConfigName);
@@ -3744,7 +3990,7 @@ function exportPcShortcuts(id,hotkeyKey){
 }
 /* SOFT-delete a lab preset (shared hold-to-delete confirm handler, run only from
    the preset Edit view now). The backend flags the preset deleted so it is hidden
-   from the UI but stays in presets.json (recoverable by hand-editing). The
+   from the UI but stays in lab_info.json (recoverable by hand-editing). The
    hold-to-delete control already confirmed, so there is no extra confirm here. On
    success the Edit modal is replaced by a repainted Lab Settings. */
 function deleteLabPreset(id){
@@ -3760,48 +4006,9 @@ function deleteLabPreset(id){
 }
 HOLD_ACTIONS.preset=deleteLabPreset;
 
-/* ======================================================================
-   FIRST-RUN "which lab is this computer in?"
-   ====================================================================== */
-function maybeChooseLab(marker){
-  if(marker)return;if(!NATIVE||!API)return;if(!LABS.length)return;showChooseLab();
-}
-function showChooseLab(){
-  var buttons=LABS.map(function(l){
-    return '<button class="room-item" style="border:1px solid var(--line);margin:6px 0;padding:12px 14px" onclick="chooseLab(\''+escapeHtml(l.id)+'\')">'+
-      '<div style="font-weight:600;color:var(--text-strong)">'+escapeHtml(l.name)+'</div>'+
-      '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+l.seats.length+' seats · '+escapeHtml(l.host)+'</div></button>';
-  }).join("");
-  openModal("Which lab is this computer in?",
-    '<p class="modal-desc">First launch on this machine: pick the lab it sits in. The launcher then shows just that lab.</p>'+
-    buttons+
-    '<button class="room-item" style="border:1px solid var(--line);margin:8px 0 0;padding:12px 14px;color:var(--accent);font-weight:600" onclick="createLabForIdentity()">This is a different lab: create a new lab</button>'+
-    '<p class="room-note" style="margin-top:14px">Saved to lab.local on this machine and remembered next time. You can change it later in Lab Settings.</p>');
-}
-function createLabForIdentity(){
-  /* First-run "this is a different lab": add the lab, then ADOPT it as this
-     machine's lab (set_lab_marker), so the first-run chooser does not come back
-     on the next start (fable review item 6). The adoption happens in
-     saveLabPreset's success handler, gated by this flag. */
-  pendingIdentityAdopt=true;labPresetEdit(null);
-}
 function cancelLabPreset(){
-  /* Back out of the add/edit-lab modal: to the first-run chooser when we came
-     from there, otherwise to Lab Settings. */
-  if(pendingIdentityAdopt){pendingIdentityAdopt=false;showChooseLab();}
-  else openLabSettings();
-}
-function chooseLab(lab){
-  if(!NATIVE||!API){closeModal();labMarker=lab;return;}
-  API.set_lab_marker(lab,currentConfigName||"",isFormDirty()).then(function(r){closeModal();
-    if(r&&r.ok){labMarker=lab;
-      // BUG A: collapse the main selector to the chosen lab live (the marker
-      // path now hides the other labs server-side and returns refreshed tiles).
-      if(r.lab_presets)LAB_PRESETS=r.lab_presets;
-      if(r.labs)setLabs(r.labs);
-      renderConfigList(r.configs,r.selected);currentConfigName=r.selected;if(r.fields)applyFields(r.fields);
-      window.pywStatus("ok","This machine is set to the "+(r.lab_name||lab)+" lab.");}
-    else window.pywStatus("err",(r&&r.message)||"Could not set the lab.");});
+  /* Back out of the add/edit-lab modal to Lab Settings. */
+  openLabSettings();
 }
 
 /* ======================================================================
@@ -4029,20 +4236,23 @@ function blChangeToSqlite(){
      needed. Writes back to the on-screen config for real (Round 3, Task 4): the
      main Database card, the re-check and the launch all agree, and it saves with
      the config like any other edit. */
+  currentDatabaseId=DB_SQLITE_ID;
   applyDbMode("none");refreshDbSummary();updateDirtyState();
   window.pywStatus&&window.pywStatus("ok","Switched to the oTree default database (SQLite).");
   blRecheck();
 }
 function blUseLabDefault(){
-  /* Feature 5: the chosen custom database could not be connected to. Switch to
-     the lab shared (default) database so a re-launch works. Writes back to the
-     on-screen config; the backend forces the live LAB_DB at launch. */
-  var lab=lsFindDbEntry(DB_LAB_ID);
-  if(lab&&lab.db_name!==undefined)
-    setDbVals(lab.db_name||"",lab.db_user||"",lab.db_password||"",lab.db_host||"",lab.db_port||"");
-  applyDbMode("lab");refreshDbSummary();updateDirtyState();
-  window.pywStatus&&window.pywStatus("ok","Switched to the lab shared database (Postgres).");
-  blRecheck();
+  /* Feature 5: the chosen database could not be connected to. Switch to THIS
+     computer's default database (core.database_config_fields of that entry) so
+     a re-launch works; with no default, fall back to SQLite. */
+  if(!defaultDatabase){blChangeToSqlite();return;}
+  var done=function(){window.pywStatus&&window.pywStatus("ok","Switched to this computer's default database.");blRecheck();};
+  if(NATIVE&&API){
+    API.database_config_fields(defaultDatabase).then(function(r){
+      if(r&&r.ok){applyDbFields(r.fields);updateDirtyState();done();}});
+    return;
+  }
+  applyDbFields({db_mode:"custom",database_id:defaultDatabase});updateDirtyState();done();
 }
 function blPickRoom(idx){
   var sel=el("blRoomSel"+idx);if(!sel)return;
@@ -4213,7 +4423,11 @@ function showHandoffFailure(msg){
   el("modalTitle").textContent="Launch failed";
   var t=el("takeoverStatus");
   if(t){t.className="handoff-note err";
-    t.innerHTML='<strong>Launch failed. See the activity log.</strong><br>'+escapeHtml(msg||"");}
+    /* Bold takeaway + the [See activity log] button right there; the reason
+       (minus its own "See the activity log.") underneath. */
+    var why=splitLogHint(msg||"").text;
+    t.innerHTML='<strong>Launch failed.</strong>'+logBtnHtml()+
+      ((why&&why!=="Launch failed.")?'<br>'+escapeHtml(why):"");}
 }
 function openDashboard(){
   /* Re-run the real authenticated open (fresh form-login + one-shot cookie
@@ -4270,334 +4484,355 @@ function onExport(){
 }
 
 /* ======================================================================
-   FIRST-RUN SETUP WIZARD  (shown when lab_info.json is absent)
+   PER-PC SETUP WIZARD  (shown when core.setup_needed())
    ----------------------------------------------------------------------
-   A re-skin: this JS only collects fields and RENDERS; every decision (create
-   or link a database, write lab_info.json, reload) is made in Python via
-   Api.provision_database / Api.create_lab_info. See _ai/web_wizard_design.md.
+   A re-skin: this JS only collects fields and RENDERS. Every decision is made
+   in Python (core.setup_state / test_pg_admin_connection /
+   finish_machine_setup, through Api.wizard_*). Steps (core.WIZARD_STEPS):
+     1 Lab       which lab this computer is (or create labs when lab_info.json
+                 has none yet)
+     2 Postgres  the superuser login of Postgres on THIS computer (host is always
+                 localhost); Test connection; may be skipped
+     3 Databases the default database (prefilled from the lab's suggested
+                 database), create or link it, add more; may be skipped
+     4 Save      review, then core writes machine.json (and lab_info.json when
+                 labs were created here)
+   Without a Postgres login no database can be created (Create is greyed out,
+   with core's note) and launches use oTree's own SQLite until one is added in
+   Lab Settings.
    ====================================================================== */
-var WIZ_STEPS=["Labs","Databases","Review"];
-var WIZ_MAPS=[];
+var ROOM_HELP="If the lab PCs already have shortcuts that open a room, put that room name here so participants land in it; otherwise leave it as study.";
 var WIZ=null;
-function wizFreshDb(){
-  return {db_name:"otree",db_user:"otree",db_password:"",db_host:"localhost",db_port:"5432",create:false};
+/* A new wizard database: by default NO user of its own (it is owned by, and
+   connects as, the Postgres admin login); "Advanced" gives it a dedicated user
+   (prefilled with the lab's suggested user). */
+function wizFreshDb(name,user){
+  return {db_name:name||"otree",db_user:user||"",db_password:"",create:true,advanced:false};
 }
-function openSetupWizard(maps){
-  WIZ_MAPS=maps||[];
-  // admin = the shared, OPTIONAL Postgres admin creds (entered once at the top of
-  // the Databases step; needed only to CREATE databases). otree = the oTree admin
-  // login, pre-filled to admin/password and never a blocking step.
-  WIZ={step:0,labs:[],
-    admin:{admin_username:"",admin_password:"",admin_host:"localhost",admin_port:"5432"},
-    db:wizFreshDb(),extras:[],extraOpen:false,exDraft:null,
-    otree:{username:"admin",password:"password"},busy:false};
+function openSetupWizard(setup){
+  setup=setup||{};
+  WIZ={step:0,setup:setup,home:setup.home_lab||"",newLabs:[],newHome:0,
+    otree:{username:(setup.default_admin&&setup.default_admin.username)||"admin",
+           password:(setup.default_admin&&setup.default_admin.password)||""},
+    pg:{admin_username:(setup.pg_admin&&setup.pg_admin.admin_username)||"",
+        admin_password:(setup.pg_admin&&setup.pg_admin.admin_password)||"",
+        admin_port:(setup.pg_admin&&setup.pg_admin.admin_port)||"5432"},
+    pgSkipped:false,pgTest:null,dbs:null,dbSkipped:false,
+    defaultChoice:setup.default_database?("old:"+setup.default_database):"new:0",busy:false};
+  var labs=setup.labs||[];
+  if(!WIZ.home&&labs.length===1)WIZ.home=labs[0].id;
   el("wizModal").hidden=false;
   wizRender();
 }
-function wizUseExample(){
-  if(!NATIVE||!API){
-    WIZ.labs=[{name:"Small lab",host:"192.168.1.10",seats:["1","2","3","4"],map:""}];
-    WIZ.db=wizFreshDb();wizRender();return;}
-  el("wizExample").textContent="Loading…";
-  API.use_example_lab_info().then(function(res){
-    if(res&&res.ok&&res.state){closeSetupWizard();initNative(res.state);
-      window.pywStatus("ok","Loaded example lab settings.");}
-    else{el("wizExample").textContent="Use example values";
-      window.pywStatus("err",(res&&res.message)||"Could not load the example.");}
-  });
-}
 function closeSetupWizard(){el("wizModal").hidden=true;WIZ=null;}
-function wizMapOptions(sel){
-  var opts=["(plain grid)"].concat(WIZ_MAPS||[]);
-  return opts.map(function(m){
-    var v=(m==="(plain grid)")?"":m;
-    return '<option value="'+escapeHtml(v)+'"'+((sel||"")===v?" selected":"")+'>'+escapeHtml(m)+'</option>';
-  }).join("");
-}
+function wizSteps(){return (WIZ&&WIZ.setup&&WIZ.setup.steps)||["Lab","Postgres","Databases","Save"];}
 function wizRenderRail(){
-  var h="";
-  for(var i=0;i<WIZ_STEPS.length;i++){
+  var steps=wizSteps(),h="";
+  for(var i=0;i<steps.length;i++){
     var cls="wiz-step"+(i===WIZ.step?" active":(i<WIZ.step?" done":""));
-    h+='<div class="'+cls+'"><span class="dot">'+(i<WIZ.step?"✓":(i+1))+'</span>'+WIZ_STEPS[i]+'</div>';
-    if(i<WIZ_STEPS.length-1)h+='<span class="bar"></span>';
+    h+='<div class="'+cls+'"><span class="dot">'+(i<WIZ.step?"✓":(i+1))+'</span>'+escapeHtml(steps[i])+'</div>';
+    if(i<steps.length-1)h+='<span class="bar"></span>';
   }
   el("wizRail").innerHTML=h;
 }
-/* -- reusable database field renderers (default DB and each extra) -- */
-function wizConnFields(p,o){
-  return '<div class="mfield"><label>Database</label><input type="text" id="'+p+'Name" value="'+escapeHtml(o.db_name)+'"></div>'+
-    '<div class="mfield"><label>User</label><input type="text" id="'+p+'User" value="'+escapeHtml(o.db_user)+'"></div>'+
-    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="'+p+'Pw" value="'+escapeHtml(o.db_password)+'">'+
-      '<button type="button" class="pw-toggle" onclick="togglePw2(\''+p+'Pw\',this)">Show</button></div></div>'+
-    /* Host + Port: read-only until the pen at the end of the host box. */
-    hostPenField(p,o.db_host,o.db_port,"wizHostChanged")+
-    /* One short note when this card's host is not this computer. */
-    '<p class="db-mode-note" id="'+p+'HostWarn" style="display:'+(isLocalHost(o.db_host)?'none':'block')+'">'+(isLocalHost(o.db_host)?'':REMOTE_DB_NOTE)+'</p>';
+function wizErr(msg){var e=el("wizErr");if(!e)return;e.style.display=msg?"block":"none";e.textContent=msg||"";}
+/* A Postgres login is present (and the step was not skipped): only then may a
+   database be CREATED. core.finish_machine_setup enforces the same rule. */
+function wizPgReady(){return !WIZ.pgSkipped&&!!WIZ.pg.admin_username;}
+function wizChosenLab(){
+  var labs=(WIZ.setup.labs||[]);
+  for(var i=0;i<labs.length;i++)if(labs[i].id===WIZ.home)return labs[i];
+  return null;
 }
-/* A wizard card's Host was edited: show/hide the note and re-gate its create
-   toggle (another host = link/register only). */
-function wizHostChanged(p){
-  var w=el(p+"HostWarn");
-  var host=(val(p+"Host")||"").trim();
-  if(w){if(!isLocalHost(host)){w.style.display="block";w.textContent=REMOTE_DB_NOTE;}
-    else{w.style.display="none";w.textContent="";}}
-  wizGateCreate(p);
-}
-/* Enable/disable one card's create toggle from the admin section AND its host. */
-function wizGateCreate(p){
-  var c=el(p+"Create");if(!c)return;
-  var remote=!isLocalHost(val(p+"Host"));
-  var ready=wizCreateAllowed()&&!remote;
-  c.disabled=!ready;
-  var hint=el(p+"Hint");if(hint){hint.hidden=ready||remote;hint.innerHTML=wizCreateHint();}
-  if(!ready&&c.checked)c.checked=false;
-  var n=el(p+"Note");if(n){n.className="db-mode-note"+(c.checked?" create":"");n.innerHTML=wizModeNote(c.checked);}
-}
-/* The ONE shared Postgres admin section (top of the Databases step). Optional:
-   filled = create-new becomes available on every database card; blank = those
-   toggles are disabled and only link-existing is possible. Never used to launch. */
-function wizAdminCard(){
-  var a=WIZ.admin;
-  return '<div class="ls-card"><h4>Postgres admin <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
-    '<p class="d">Needed only to CREATE new databases. Leave blank to link databases that already exist. Entered once, used only at setup, never to launch.</p>'+
-    '<div class="mfield"><label>Admin user</label><input type="text" id="admU" value="'+escapeHtml(a.admin_username)+'" oninput="wizAdminChanged()"></div>'+
-    '<div class="mfield"><label>Admin password</label><div class="pwrap"><input type="password" id="admP" value="'+escapeHtml(a.admin_password)+'" oninput="wizAdminChanged()">'+
-      '<button type="button" class="pw-toggle" onclick="togglePw2(\'admP\',this)">Show</button></div></div>'+
-    '<div class="mfield"><label>Admin host</label><input type="text" id="admH" value="'+escapeHtml(a.admin_host)+'" oninput="wizAdminChanged()"></div>'+
-    '<div class="mfield"><label>Admin port</label><input type="text" id="admPort" value="'+escapeHtml(a.admin_port)+'" oninput="wizAdminChanged()"></div>'+
-    /* Feature 1: creating is local-only for now; note it when the admin host is remote. */
-    '<p class="db-mode-note" id="admHostNote" style="display:'+(isLocalHost(a.admin_host)?'none':'block')+'">'+(isLocalHost(a.admin_host)?'':'Creating a database is local-only for now (this admin host is remote), so databases below can only be linked to ones that already exist.')+'</p></div>';
-}
-function wizReadAdmin(){
-  WIZ.admin={admin_username:(val("admU")||"").trim(),admin_password:val("admP")||"",
-    admin_host:(val("admH")||"").trim()||"localhost",admin_port:(val("admPort")||"").trim()||"5432"};
-}
-/* Create-new is available once admin user + password are present (host/port
-   default). Matches core.pg_admin_ready's minimum without a live connection. */
-function wizAdminReady(){return !!(WIZ.admin.admin_username && WIZ.admin.admin_password);}
-/* Feature 1: creating a database is local-only for now. Create-new is offered
-   only when the admin creds are present AND the admin host is local; a remote
-   admin host forces link/register mode. */
-function wizCreateAllowed(){return wizAdminReady() && isLocalHost(WIZ.admin.admin_host);}
-/* The hint shown under a disabled create toggle: either fill in admin, or the
-   local-only note when the admin host is remote. */
-function wizCreateHint(){
-  if(wizAdminReady() && !isLocalHost(WIZ.admin.admin_host))
-    return 'Creating a database is local-only for now (admin host '+escapeHtml(WIZ.admin.admin_host)+' is remote). Link the existing database instead.';
-  return 'Fill in Postgres admin above to create a new database.';
-}
-/* Live-toggle each visible create checkbox as the admin section is edited, with
-   no full re-render (which would drop focus). */
-function wizAdminChanged(){
-  wizReadAdmin();
-  var ready=wizCreateAllowed();
-  var an=el("admHostNote");
-  if(an){
-    if(!isLocalHost(WIZ.admin.admin_host)){an.style.display="block";
-      an.innerHTML="Creating a database is local-only for now (this admin host is remote), so databases below can only be linked to ones that already exist.";}
-    else{an.style.display="none";an.innerHTML="";}
+
+/* -- step 1: which lab is this computer -- */
+function wizStepLab(){
+  var labs=WIZ.setup.labs||[];
+  if(WIZ.setup.has_labs){
+    return '<p class="modal-desc"><b>Which lab is this computer in?</b> The launcher then shows that lab and uses its default room.</p>'+
+      labs.map(function(l){
+        var sel=(l.id===WIZ.home);
+        return '<label class="wiz-lab'+(sel?" sel":"")+'"><input type="radio" name="wizHome" value="'+escapeHtml(l.id)+'"'+(sel?" checked":"")+
+          ' onchange="wizPickHome(\''+escapeHtml(l.id)+'\')"><span><div class="nm">'+escapeHtml(l.name)+'</div>'+
+          '<div class="meta">'+escapeHtml(l.host||"")+' · '+l.seats+' seats · room '+escapeHtml(l.default_room||"study")+'</div></span></label>';
+      }).join("")+
+      '<p class="hint" style="font-size:11.5px;color:var(--faint);margin:10px 0 0">The labs come from lab_info.json (the one file a lab manager copies to every computer of the lab).</p>';
   }
-  ["wd"].concat(WIZ.extraOpen?["ex"]:[]).forEach(wizGateCreate);
-}
-function wizModeNote(create){
-  return create
-    ? 'The launcher will create it with the admin details below. A database of this name that already exists is reused.'
-    : 'Connects to a Postgres database that already exists &mdash; nothing is created.';
-}
-function wizDbControl(p,o){
-  // The create toggle relies on the ONE shared admin section above: disabled
-  // (with a hint) until admin user + password are filled AND the admin host is
-  // local (creating is local-only for now).
-  var remote=!isLocalHost(o.db_host);
-  var ready=wizCreateAllowed()&&!remote;
-  var eff=o.create&&ready;
-  return wizConnFields(p,o)+
-    '<label class="chk" style="margin:12px 0 2px"><input type="checkbox" id="'+p+'Create"'+(eff?" checked":"")+(ready?"":" disabled")+' onchange="wizToggleCreate(\''+p+'\')"> Create this database in Postgres for me</label>'+
-    '<p class="db-mode-note'+(eff?' create':'')+'" id="'+p+'Note">'+wizModeNote(eff)+'</p>'+
-    '<p class="db-create-hint" id="'+p+'Hint"'+((ready||remote)?' hidden':'')+'>'+wizCreateHint()+'</p>';
-}
-function wizToggleCreate(p){
-  var c=el(p+"Create");if(!c||c.disabled)return;
-  var n=el(p+"Note");n.className="db-mode-note"+(c.checked?" create":"");n.innerHTML=wizModeNote(c.checked);
-}
-function wizReadDb(p,into){
-  into.db_name=(val(p+"Name")||"").trim();into.db_user=(val(p+"User")||"").trim();
-  into.db_password=val(p+"Pw")||"";into.db_host=(val(p+"Host")||"").trim();into.db_port=(val(p+"Port")||"").trim();
-  var c=el(p+"Create");into.create=!!(c&&c.checked&&!c.disabled);
-  return into;
-}
-/* -- step 1: labs -- */
-function wizStepLabs(){
-  var rows=WIZ.labs.length?WIZ.labs.map(function(l,i){
-    return '<div class="wiz-row"><span class="nm">'+escapeHtml(l.name)+'</span>'+
+  var rows=WIZ.newLabs.length?WIZ.newLabs.map(function(l,i){
+    return '<div class="wiz-row"><input type="radio" name="wizNewHome" title="This computer is in this lab"'+(i===WIZ.newHome?" checked":"")+' onchange="WIZ.newHome='+i+'">'+
+      '<span class="nm">'+escapeHtml(l.name)+'</span>'+
       '<span class="meta">'+escapeHtml(l.host||"(no host)")+' · '+l.seats.length+' seats'+
-      (l.map?' · map: '+escapeHtml(l.map):'')+' · room: '+escapeHtml(l.default_room||"study")+
-      (l.shortcut_label?' · shortcut: '+escapeHtml(l.shortcut_label):'')+'</span>'+
+      (l.map?' · map: '+escapeHtml(l.map):'')+' · room: '+escapeHtml(l.default_room||"study")+'</span>'+
       '<button class="x" onclick="wizRemoveLab('+i+')" title="Remove">×</button></div>';
-  }).join(""):'<div class="wiz-empty">No labs yet &mdash; fill the row below and click Add lab.</div>';
-  return '<div>'+rows+'</div>'+
+  }).join(""):'<div class="wiz-empty">No labs yet &mdash; fill the form below and click Add lab.</div>';
+  var maps=["(plain grid)"].concat(WIZ.setup.maps||[]).map(function(m){
+    var v=(m==="(plain grid)")?"":m;return '<option value="'+escapeHtml(v)+'">'+escapeHtml(m)+'</option>';}).join("");
+  return '<p class="modal-desc"><b>No labs yet.</b> Add your lab(s); the ticked one is the lab this computer is in. (Or copy a lab_info.json from another computer of the lab into data/ and restart.)</p>'+
+    '<div>'+rows+'</div>'+
     '<div class="ls-card" style="margin-top:12px"><h4>Add a lab</h4>'+
     '<div class="mfield"><label>Name</label><input type="text" id="wlName" placeholder="e.g. Small lab"></div>'+
     '<div class="mfield"><label>Host / IP</label><input type="text" id="wlHost" placeholder="host or IP the seats connect to"></div>'+
-    '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label>'+
-      '<input type="text" id="wlRoom" placeholder="study" value="study"></div>'+
+    '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label><input type="text" id="wlRoom" value="study"></div>'+
     '<div class="mfield"><label>Shortcut label</label><input type="text" id="wlShortcut" placeholder="(optional) name of the participant-PC desktop shortcuts"></div>'+
-    '<div class="mfield"><label>Map</label><select id="wlMap">'+wizMapOptions("")+'</select></div>'+
+    '<div class="mfield"><label>Map</label><select id="wlMap">'+maps+'</select></div>'+
     '<div class="mfield" style="align-items:start"><label>Seats</label>'+
       '<textarea id="wlSeats" rows="3" placeholder="one per line, or space / comma separated" style="font-family:var(--mono);font-size:12px"></textarea></div>'+
-    '<div style="text-align:right"><button class="btn" onclick="wizAddLab()">Add lab</button></div>'+
-    '<div class="modal-err" id="wlErr"></div></div>';
+    '<div style="text-align:right"><button class="btn" onclick="wizAddLab()">Add lab</button></div></div>'+
+    '<div class="ls-card"><h4>oTree admin login <span style="color:var(--faint);font-weight:400">&mdash; the default for new configs</span></h4>'+
+    '<div class="mfield"><label>Username</label><input type="text" id="woU" value="'+escapeHtml(WIZ.otree.username)+'"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="woP" value="'+escapeHtml(WIZ.otree.password)+'">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\'woP\',this)">Show</button></div></div></div>';
 }
-var ROOM_HELP="If the lab PCs already have shortcuts that open a room, put that room name here so participants land in it; otherwise leave it as study.";
+function wizPickHome(id){WIZ.home=id;WIZ.dbs=null;wizRender();}
 function wizAddLab(){
+  wizReadOtree();
   var name=(val("wlName")||"").trim(),host=(val("wlHost")||"").trim();
   var seats=(val("wlSeats")||"").trim().split(/[\s,]+/).filter(Boolean);
-  var map=val("wlMap")||"";
-  var room=(val("wlRoom")||"").trim()||"study";
-  var shortcut=(val("wlShortcut")||"").trim();
-  var e=el("wlErr");
-  if(!name){e.style.display="block";e.textContent="Give the lab a name.";return;}
-  if(!host){e.style.display="block";e.textContent="Enter the lab's IP address or host name.";return;}
-  if(!seats.length){e.style.display="block";e.textContent="Add at least one seat.";return;}
-  WIZ.labs.push({name:name,host:host,seats:seats,map:map,default_room:room,shortcut_label:shortcut});
-  wizRender();
+  if(!name){wizErr("Give the lab a name.");return;}
+  if(!host){wizErr("Enter the lab's IP address or host name.");return;}
+  if(!seats.length){wizErr("Add at least one seat.");return;}
+  WIZ.newLabs.push({name:name,host:host,seats:seats,map:val("wlMap")||"",
+    default_room:(val("wlRoom")||"").trim()||"study",shortcut_label:(val("wlShortcut")||"").trim()});
+  wizErr("");wizRender();
 }
-function wizRemoveLab(i){WIZ.labs.splice(i,1);wizRender();}
-/* -- step 2: databases -- */
+function wizRemoveLab(i){wizReadOtree();WIZ.newLabs.splice(i,1);if(WIZ.newHome>=WIZ.newLabs.length)WIZ.newHome=0;wizRender();}
+function wizReadOtree(){
+  if(el("woU"))WIZ.otree.username=(val("woU")||"").trim()||"admin";
+  if(el("woP"))WIZ.otree.password=val("woP")||"";
+}
+function wizUseExample(){
+  if(!NATIVE||!API){wizErr("Preview only: in the app this writes the example lab_info.json.");return;}
+  API.wizard_use_example().then(function(r){
+    if(r&&r.ok&&r.setup){WIZ.setup=r.setup;WIZ.home=r.setup.home_lab||"";wizErr("");wizRender();}
+    else wizErr((r&&r.message)||"Could not load the example.");
+  });
+}
+
+/* -- step 2: Postgres on THIS computer -- */
+function wizStepPg(){
+  var t=WIZ.pgTest;
+  return '<p class="modal-desc"><b>The Postgres superuser on this computer.</b> Used only to create this computer’s databases, never to launch.</p>'+
+    '<div class="ls-card primary"><h4>Postgres on this computer</h4>'+
+    '<div class="mfield"><label>Superuser</label><input type="text" id="wpUser" value="'+escapeHtml(WIZ.pg.admin_username)+'" placeholder="e.g. postgres"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="wpPw" value="'+escapeHtml(WIZ.pg.admin_password)+'">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\'wpPw\',this)">Show</button></div></div>'+pwHint()+
+    '<div class="mfield"><label>Host</label><input type="text" value="localhost" readonly title="Always this computer"></div>'+
+    '<div class="mfield"><label>Port</label><input type="text" id="wpPort" value="'+escapeHtml(WIZ.pg.admin_port||"5432")+'" style="max-width:120px"></div>'+
+    '<div style="text-align:right"><button class="btn" id="wpTest" onclick="wizTestPg()">Test connection</button></div>'+
+    (t?'<p class="wiz-test '+(t.ok?"ok":"err")+'">'+escapeHtml(t.message||"")+'</p>':'')+'</div>'+
+    '<div class="wiz-note">No Postgres on this computer? <b>Skip this step.</b> '+escapeHtml(WIZ.setup.no_pg_note||"")+'</div>';
+}
+function wizReadPg(){
+  if(!el("wpUser"))return;
+  WIZ.pg={admin_username:(val("wpUser")||"").trim(),admin_password:val("wpPw")||"",admin_port:(val("wpPort")||"").trim()||"5432"};
+}
+function wizTestPg(){
+  wizReadPg();
+  if(!NATIVE||!API){WIZ.pgTest={ok:false,message:"Preview only: in the app this logs in to Postgres on this computer."};wizRender();return;}
+  el("wpTest").textContent="Testing…";el("wpTest").disabled=true;
+  API.wizard_test_pg(WIZ.pg).then(function(r){WIZ.pgTest=r||{ok:false,message:"No answer."};wizRender();});
+}
+
+/* -- step 3: this computer's databases -- */
+function wizEnsureDbs(){
+  if(WIZ.dbs!==null)return;
+  var lab=wizChosenLab(),s=(lab&&lab.suggested_database)||{};
+  WIZ.dbs=[wizFreshDb(s.db_name||"otree",s.db_user||"")];
+  if(!WIZ.setup.default_database)WIZ.defaultChoice="new:0";
+}
+function wizDbRow(d,i){
+  var pg=wizPgReady();
+  var create=pg&&d.create;
+  return '<div class="wiz-dbrow"><div class="body">'+
+    '<label class="chk" style="margin:0 0 6px"><input type="radio" name="wizDefault"'+
+      (WIZ.defaultChoice===("new:"+i)?" checked":"")+' onchange="wizSetDefault(\'new:'+i+'\')"> <b>Default database</b></label>'+
+    '<div class="mfield"><label>Database</label><input type="text" id="wd'+i+'Name" value="'+escapeHtml(d.db_name)+'"></div>'+
+    /* Default: the Postgres admin login (no role, no password to set). Without
+       a Postgres login (step 2 skipped) a dedicated user is the only option. */
+    (pg?'<label class="chk" style="margin:0 0 4px"><input type="checkbox" id="wd'+i+'Adv"'+(d.advanced?" checked":"")+
+      ' onchange="wizReadDbs();wizRender()"> Advanced: a dedicated database user</label>':'')+
+    ((pg&&!d.advanced)?'<div class="pw-hint" style="margin-left:0">'+escapeHtml(UI_TEXT.admin_login_note)+'</div>':
+    '<div class="mfield"><label>User</label><input type="text" id="wd'+i+'User" value="'+escapeHtml(d.db_user)+'"></div>'+
+    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="wd'+i+'Pw" value="'+escapeHtml(d.db_password)+'">'+
+      '<button type="button" class="pw-toggle" onclick="togglePw2(\'wd'+i+'Pw\',this)">Show</button></div></div>'+pwHint(true))+
+    '<label class="chk" style="margin:6px 0 2px"><input type="radio" name="wd'+i+'Mode" value="create"'+(create?" checked":"")+(pg?"":" disabled")+'> Create it in Postgres</label> '+
+    '<label class="chk" style="margin:2px 0"><input type="radio" name="wd'+i+'Mode" value="link"'+(create?"":" checked")+'> It already exists (link it)</label>'+
+    '</div>'+(i>0?'<button class="x" onclick="wizRemoveDb('+i+')" title="Remove">×</button>':'')+'</div>';
+}
 function wizStepDb(){
-  var extras=WIZ.extras.length?WIZ.extras.map(function(x,i){
-    return '<div class="wiz-row"><span class="nm">'+escapeHtml(x.db_name)+'</span>'+
-      '<span class="meta">'+(x.create?"will be created":"existing")+' · '+escapeHtml(x.db_host)+'</span>'+
-      '<button class="x" onclick="wizRemoveExtra('+i+')">×</button></div>';
-  }).join(""):'';
-  var draft=WIZ.extraOpen?
-    ('<div class="ls-card" style="margin-top:10px;border-style:dashed"><h4 style="font-size:12.5px">New database</h4>'+
-      wizDbControl("ex",WIZ.exDraft)+
-      '<div class="modal-err" id="exErr"></div>'+
-      '<div class="cta"><button class="btn" onclick="wizCancelExtra()">Cancel</button>'+
-      '<button class="btn accent" onclick="wizAddExtra()">Add to list</button></div></div>')
-    :'<button class="btn ghost" style="margin-top:2px" onclick="wizOpenExtra()">+ Add another database</button>';
-  return wizAdminCard()+
-    '<div class="ls-card primary"><h4>Lab default database</h4>'+
-    '<p class="d">The shared database every researcher gets in one click. Connect to an existing Postgres database, or tick below to have the launcher create it.</p>'+
-    wizDbControl("wd",WIZ.db)+'</div>'+
-    '<div class="ls-card"><h4>Additional databases <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
-    '<p class="d">Extra databases for researchers who want their own. Same choice: link an existing one, or create a new one.</p>'+
-    '<div>'+extras+'</div>'+draft+'</div>';
+  wizEnsureDbs();
+  var old=(WIZ.setup.databases||[]).map(function(d){
+    var id="old:"+d.id;
+    return '<div class="wiz-dbrow"><div class="body"><label class="chk" style="margin:0"><input type="radio" name="wizDefault"'+(WIZ.defaultChoice===id?" checked":"")+
+      ' onchange="wizSetDefault(\''+escapeHtml(id)+'\')"> <span class="nm">'+escapeHtml(d.title)+'</span></label>'+
+      (d.created_on_line?'<div class="db-created">'+escapeHtml(d.created_on_line)+'</div>':'')+
+      (d.location_warning?'<div class="db-warn">'+escapeHtml(d.location_warning)+'</div>':'')+'</div></div>';
+  }).join("");
+  return '<p class="modal-desc"><b>This computer’s databases.</b> The ticked one is the default: the Lab default config uses it.</p>'+
+    (old?'<div class="ls-card"><h4>Already on this computer</h4>'+old+'</div>':'')+
+    '<div class="ls-card primary"><h4>'+(old?"New databases":"Default database")+'</h4>'+
+    WIZ.dbs.map(wizDbRow).join("")+
+    '<button class="btn ghost" style="margin-top:6px" onclick="wizAddDb()">+ Add another database</button></div>'+
+    (wizPgReady()?'':'<div class="wiz-note"><b>No Postgres login</b> (step 2 was skipped): databases can only be linked. '+escapeHtml(WIZ.setup.no_pg_note||"")+'</div>');
 }
-function wizOpenExtra(){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.exDraft=wizFreshDb();WIZ.extraOpen=true;wizRender();}
-function wizCancelExtra(){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.extraOpen=false;WIZ.exDraft=null;wizRender();}
-function wizAddExtra(){
-  wizReadAdmin();wizReadDb("wd",WIZ.db);
-  var d=wizReadDb("ex",WIZ.exDraft||wizFreshDb());
-  var e=el("exErr");
-  if(!d.db_name){e.style.display="block";e.textContent="Enter a database name.";return;}
-  WIZ.extras.push(d);WIZ.extraOpen=false;WIZ.exDraft=null;wizRender();
+function wizReadDbs(){
+  if(!WIZ.dbs)return;
+  WIZ.dbs.forEach(function(d,i){
+    if(!el("wd"+i+"Name"))return;
+    d.db_name=(val("wd"+i+"Name")||"").trim();
+    var adv=el("wd"+i+"Adv");if(adv)d.advanced=!!adv.checked;
+    if(el("wd"+i+"User")){d.db_user=(val("wd"+i+"User")||"").trim();d.db_password=val("wd"+i+"Pw")||"";}
+    var c=document.querySelector('input[name="wd'+i+'Mode"][value="create"]');
+    d.create=!!(c&&c.checked&&!c.disabled);
+  });
 }
-function wizRemoveExtra(i){wizReadAdmin();wizReadDb("wd",WIZ.db);WIZ.extras.splice(i,1);wizRender();}
-/* -- step 3: review (the oTree admin login is NON-blocking: pre-filled defaults,
-      editable here, never gates the flow) -- */
-function wizStepReview(){
-  var d=WIZ.db,o=WIZ.otree;
-  var labNames=WIZ.labs.map(function(l){return escapeHtml(l.name)+' <span class="mut">('+l.seats.length+')</span>';}).join(", ")||'<span class="mut">none</span>';
-  var dbPill=d.create?'<span class="pill create">will be created</span>':'<span class="pill link">existing</span>';
-  var extra=WIZ.extras.length?WIZ.extras.map(function(x){return escapeHtml(x.db_name)+(x.create?" (new)":"");}).join(", "):'<span class="mut">none</span>';
+function wizAddDb(){wizReadDbs();WIZ.dbs.push(wizFreshDb("",""));wizRender();}
+function wizRemoveDb(i){wizReadDbs();WIZ.dbs.splice(i,1);
+  if(WIZ.defaultChoice==="new:"+i)WIZ.defaultChoice="new:0";wizRender();}
+function wizSetDefault(id){wizReadDbs();WIZ.defaultChoice=id;}
+
+/* -- step 4: review + save -- */
+function wizStepSave(){
+  var lab=WIZ.setup.has_labs?wizChosenLab():WIZ.newLabs[WIZ.newHome];
+  var dbs=WIZ.dbSkipped?[]:(WIZ.dbs||[]).filter(function(d){return d.db_name;});
+  var hasOldDefault=WIZ.defaultChoice.indexOf("old:")===0;
+  var dbList=dbs.length?dbs.map(function(d,i){
+    return escapeHtml(d.db_name)+' '+(d.create?'<span class="pill create">will be created</span>':'<span class="pill link">existing</span>')+
+      (WIZ.defaultChoice===("new:"+i)?' <span class="db-default-tag">(default)</span>':'');}).join("<br>"):'<span class="mut">none</span>';
   return '<div class="ls-card wiz-review"><h4>Review</h4>'+
-    '<div class="rrow"><div class="rk">Labs</div><div class="rv">'+labNames+'</div></div>'+
-    '<div class="rrow"><div class="rk">Default database</div><div class="rv">'+escapeHtml(d.db_name)+' <span class="mut">@ '+escapeHtml(d.db_host)+'</span> '+dbPill+'</div></div>'+
-    '<div class="rrow"><div class="rk">Additional</div><div class="rv">'+extra+'</div></div>'+
+    '<div class="rrow"><div class="rk">This computer is in</div><div class="rv">'+(lab?escapeHtml(lab.name):'<span class="mut">not chosen</span>')+'</div></div>'+
+    '<div class="rrow"><div class="rk">Postgres login</div><div class="rv">'+(wizPgReady()?escapeHtml(WIZ.pg.admin_username)+' <span class="mut">@ localhost:'+escapeHtml(WIZ.pg.admin_port)+'</span>':'<span class="mut">skipped</span>')+'</div></div>'+
+    '<div class="rrow"><div class="rk">New databases</div><div class="rv">'+dbList+'</div></div>'+
     '</div>'+
-    '<div class="ls-card"><h4>oTree admin login <span style="color:var(--faint);font-weight:400">&mdash; optional</span></h4>'+
-    '<p class="d">Pre-filled defaults the launcher configures for the lab. Change them if you like; you can also edit later.</p>'+
-    '<div class="mfield"><label>Username</label><input type="text" id="woU" value="'+escapeHtml(o.username)+'"></div>'+
-    '<div class="mfield"><label>Password</label><div class="pwrap"><input type="password" id="woP" value="'+escapeHtml(o.password)+'">'+
-      '<button type="button" class="pw-toggle" onclick="togglePw2(\'woP\',this)">Show</button></div></div></div>'+
-    '<p class="hint" style="font-size:11.5px;color:var(--faint);margin:6px 0 0">Save lab settings creates any &ldquo;will be created&rdquo; database, writes lab_info.json, then opens the launcher.</p>'+
-    '<div class="modal-err" id="wizSaveErr"></div>';
+    ((!dbs.length&&!hasOldDefault)?'<div class="wiz-note"><b>No database:</b> '+escapeHtml(WIZ.setup.skipped_note||"")+'</div>':'')+
+    '<p class="hint" style="font-size:11.5px;color:var(--faint);margin:6px 0 0"><b>Save</b> creates any “will be created” database and writes this computer’s settings (machine.json).</p>';
 }
-/* -- read the visible step's inputs into WIZ before leaving it -- */
+
 function wizCollect(){
-  if(WIZ.step===1){wizReadAdmin();wizReadDb("wd",WIZ.db);if(WIZ.extraOpen&&el("exName"))wizReadDb("ex",WIZ.exDraft=WIZ.exDraft||wizFreshDb());}
-  else if(WIZ.step===2){if(el("woU"))WIZ.otree.username=(val("woU")||"").trim()||"admin";if(el("woP"))WIZ.otree.password=val("woP")||"";}
+  if(WIZ.step===0)wizReadOtree();
+  else if(WIZ.step===1)wizReadPg();
+  else if(WIZ.step===2)wizReadDbs();
 }
 function wizRender(){
   wizRenderRail();
-  el("wizBody").innerHTML=[wizStepLabs,wizStepDb,wizStepReview][WIZ.step]();
+  el("wizBody").innerHTML=[wizStepLab,wizStepPg,wizStepDb,wizStepSave][WIZ.step]();
+  var last=(WIZ.step===wizSteps().length-1);
   el("wizBack").disabled=(WIZ.step===0)||WIZ.busy;
-  el("wizExample").style.visibility=(WIZ.step===0)?"visible":"hidden";
-  el("wizNext").textContent=(WIZ.step===WIZ_STEPS.length-1)?"Save lab settings":"Next →";
+  el("wizExample").hidden=!(WIZ.step===0&&!WIZ.setup.has_labs);
+  el("wizSkip").hidden=!(WIZ.step===1||WIZ.step===2);
+  el("wizNext").textContent=last?(WIZ.busy?"Saving…":"Save"):"Next →";
   el("wizNext").disabled=WIZ.busy;
+}
+function wizSkip(){
+  if(WIZ.busy)return;wizCollect();wizErr("");
+  if(WIZ.step===1){WIZ.pgSkipped=true;}
+  if(WIZ.step===2){WIZ.dbSkipped=true;}
+  WIZ.step+=1;wizRender();
 }
 function wizGo(dir){
   if(WIZ.busy)return;
-  if(dir>0&&WIZ.step===0&&!WIZ.labs.length){var e=el("wlErr");if(e){e.style.display="block";e.textContent="Add at least one lab first.";}return;}
-  wizCollect();
-  if(dir>0&&WIZ.step===WIZ_STEPS.length-1){wizSave();return;}
-  WIZ.step=Math.max(0,Math.min(WIZ_STEPS.length-1,WIZ.step+dir));
+  wizCollect();wizErr("");
+  if(dir>0&&WIZ.step===0){
+    if(WIZ.setup.has_labs&&!WIZ.home){wizErr("Choose which lab this computer is in.");return;}
+    if(!WIZ.setup.has_labs&&!WIZ.newLabs.length){wizErr("Add at least one lab first.");return;}
+  }
+  if(dir>0&&WIZ.step===1){
+    /* Next with a login = use it; with an empty login = the step is skipped.
+       The password may be blank (a superuser with no password). */
+    WIZ.pgSkipped=!WIZ.pg.admin_username;
+  }
+  if(dir>0&&WIZ.step===2)WIZ.dbSkipped=false;
+  if(dir>0&&WIZ.step===wizSteps().length-1){wizSave();return;}
+  WIZ.step=Math.max(0,Math.min(wizSteps().length-1,WIZ.step+dir));
   wizRender();
 }
-function wizFail(msg){
-  WIZ.busy=false;wizRender();
-  var e=el("wizSaveErr");if(e){e.style.display="block";e.textContent=msg;}
-  el("wizNext").disabled=false;
-}
-/* Provision one database entry through the Api (link = record only; create =
-   actually create, already-exists treated as success by the backend). Returns
-   a promise of the Api result. Preview mode short-circuits to ok. */
-function wizProvision(entry,register){
-  var conn={db_name:entry.db_name,db_user:entry.db_user,db_password:entry.db_password,
-    db_host:entry.db_host,db_port:entry.db_port};
-  if(!NATIVE||!API)return Promise.resolve({ok:true,fields:conn});
-  // create-new uses the ONE shared wizard-level Postgres admin (WIZ.admin).
-  return API.provision_database(conn,!!entry.create,entry.create?WIZ.admin:null,"",!!register);
-}
 function wizSave(){
-  if(!NATIVE||!API){
-    alert("Preview only: in the app this creates the databases and writes lab_info.json.");return;}
-  WIZ.busy=true;el("wizNext").textContent="Saving…";el("wizNext").disabled=true;
-  var e=el("wizSaveErr");if(e)e.style.display="none";
-  // 1) default DB, then 2) each extra (registered), then 3) write lab_info.json.
-  wizProvision(WIZ.db,false).then(function(r){
-    if(!r||!r.ok)return wizFail((r&&r.message)||"Could not set up the default database.");
-    var dbFields=(r.fields)||{db_name:WIZ.db.db_name,db_user:WIZ.db.db_user,db_password:WIZ.db.db_password,db_host:WIZ.db.db_host,db_port:WIZ.db.db_port};
-    var chain=Promise.resolve();
-    WIZ.extras.forEach(function(x){chain=chain.then(function(){
-      return wizProvision(x,true).then(function(rr){if(!rr||!rr.ok)throw new Error((rr&&rr.message)||("Could not set up database “"+x.db_name+"”."));});});});
-    chain.then(function(){
-      var database={db_name:dbFields.db_name,db_user:dbFields.db_user,db_password:dbFields.db_password,db_host:dbFields.db_host,db_port:dbFields.db_port};
-      var admin={username:WIZ.otree.username||"admin",password:WIZ.otree.password||""};
-      return API.create_lab_info(WIZ.labs,database,admin).then(function(res){
-        if(res&&res.ok&&res.state){closeSetupWizard();initNative(res.state);
-          window.pywStatus("ok","Settings saved.");}
-        else wizFail((res&&res.message)||"Could not write lab_info.json.");});
-    }).catch(function(err){wizFail(String(err&&err.message||err));});
+  if(!NATIVE||!API){wizErr("Preview only: in the app Save writes this computer's settings.");return;}
+  var dbs=WIZ.dbSkipped?[]:(WIZ.dbs||[]).filter(function(d){return d.db_name;});
+  var idx=0,oldId=null;
+  if(WIZ.defaultChoice.indexOf("old:")===0)oldId=WIZ.defaultChoice.slice(4);
+  else idx=parseInt(WIZ.defaultChoice.slice(4),10)||0;
+  var newLabs=null;
+  if(!WIZ.setup.has_labs){
+    /* The lab this computer is in goes FIRST: core makes the first new lab home. */
+    newLabs=WIZ.newLabs.slice();var home=newLabs.splice(WIZ.newHome,1);newLabs=home.concat(newLabs);
+  }
+  var payload={home_lab:WIZ.setup.has_labs?WIZ.home:"",
+    pg_admin:wizPgReady()?WIZ.pg:null,
+    /* Not Advanced (and a Postgres login present): no user = the admin login. */
+    databases:dbs.map(function(d){var own=d.advanced||!wizPgReady();
+      return {db_name:d.db_name,db_user:own?d.db_user:"",db_password:own?d.db_password:"",create:!!d.create&&wizPgReady()};}),
+    default_index:idx,default_database_id:oldId,
+    new_labs:newLabs,default_admin:WIZ.setup.has_labs?null:WIZ.otree};
+  WIZ.busy=true;wizRender();
+  API.wizard_finish(payload).then(function(r){
+    WIZ.busy=false;
+    if(r&&r.ok&&r.state){closeSetupWizard();initNative(r.state);
+      window.pywStatus("ok",r.message||"This computer is set up.");
+      /* A database kept although its user cannot log in: say so clearly. */
+      if(r.warnings&&r.warnings.length){r.warnings.forEach(function(w){window.pywStatus("warn",w);});showNotices(r.warnings,true);}}
+    else{wizRender();wizErr((r&&r.message)||"Could not save. Nothing was changed; fix it and Save again.");}
   });
 }
+/* Notices: one-time banners from core (shown once, dismissible) and the
+   fail-soft storage warning. The first sentence is bold (the takeaway). */
+var NOTICE_QUEUE=[];
+var NOTICE_SHOWN=null;
+function showNotices(list,warn,logButton){
+  (list||[]).forEach(function(t){
+    if(!t)return;
+    /* Never stack the same message twice (a failed launch reports it twice). */
+    if(NOTICE_SHOWN===t&&!el("noticeBar").hidden)return;
+    for(var i=0;i<NOTICE_QUEUE.length;i++)if(NOTICE_QUEUE[i].text===t)return;
+    NOTICE_QUEUE.push({text:t,warn:!!warn,log:!!logButton});});
+  if(el("noticeBar").hidden)nextNotice();
+}
+function nextNotice(){
+  var n=NOTICE_QUEUE.shift(),bar=el("noticeBar");
+  if(!n){bar.hidden=true;NOTICE_SHOWN=null;return;}
+  NOTICE_SHOWN=n.text;
+  var sp=n.log?splitLogHint(n.text):{text:String(n.text),hint:false};
+  var t=sp.text,cut=t.indexOf(". ");
+  el("noticeText").innerHTML=(cut>0?('<b>'+escapeHtml(t.slice(0,cut+1))+'</b> '+escapeHtml(t.slice(cut+2))):('<b>'+escapeHtml(t)+'</b>'))+
+    (sp.hint?logBtnHtml():"");
+  bar.classList.toggle("warn",n.warn);bar.hidden=false;
+}
+function dismissNotice(){nextNotice();}
 
 /* ======================================================================
    BOOTSTRAP: native vs static preview
    ====================================================================== */
 function initNative(state){
   NATIVE=true;el("logBody").innerHTML="";
-  /* Reflect the persisted theme (data/ui_prefs.json). In browser mode the head
-     script already applied it pre-paint from the injected marker; this makes the
-     native pywebview path match too. persist=false: we are echoing the stored
-     value, not making a fresh choice, so do not write it back. */
+  if(state&&state.ui_text)for(var k in state.ui_text)if(state.ui_text[k]!=null)UI_TEXT[k]=state.ui_text[k];
+  /* A data folder written by a NEWER launcher: block everything (core refuses to
+     touch it) and say what to do. */
+  var st=state.storage||{};
+  if(st.newer_schema){
+    el("storageBlockText").textContent=st.message||"This data folder was saved by a newer version of the launcher.";
+    el("storageBlock").hidden=false;return;
+  }
+  /* Reflect the persisted theme (machine.json). In browser mode the head script
+     already applied it pre-paint from the injected marker; this makes the native
+     pywebview path match too. persist=false: we are echoing the stored value,
+     not making a fresh choice, so do not write it back. */
   if(state.theme==="light"||state.theme==="dark")applyTheme(state.theme,false);
   defaultAuthor=state.default_author||"";labMarker=state.lab_marker||"";
-  var haveLab=(state.lab_info_present!==false);
-  setLabs(haveLab?(state.labs||[]):[]);
+  var needSetup=!!state.setup_needed;
+  setLabs(state.labs||[]);
   LAB_PRESETS=state.lab_presets||state.labs||[];
   if(state.pg_admin)PG_ADMIN=state.pg_admin;
   DATABASES=state.databases||[];RESEARCHERS=state.researchers||[];
-  if(state.default_database)defaultDatabase=state.default_database;
+  defaultDatabase=state.default_database||"";
   DEFAULT_DB_OPTIONS=state.default_db_options||[];
-  if(!haveLab){el("labBody").hidden=true;openSetupWizard(state.maps||[]);}
-  else{el("labBody").hidden=false;el("labNotice").hidden=true;}
+  el("labBody").hidden=false;el("labNotice").hidden=true;
   renderConfigList(state.configs,state.selected);currentConfigName=state.selected;
   applyFields(state.fields);applyProject(state.project);applySettings(state.settings);
+  renderDbCard(state);
   appendLog("muted","oTree Lab Launcher ready. Config file: "+state.presets_path);
-  if(haveLab)maybeChooseLab(state.lab_marker);
+  if(needSetup)openSetupWizard(state.setup||{});
+  if(st.ok===false&&st.message)showNotices([st.message],true);
+  showNotices(state.notices||[]);
   /* GitHub Organisation Sync opt-in (default off): reflect the persisted state and
      show/hide the two buttons accordingly. */
   var gs=state.github_sync||{};
@@ -4629,15 +4864,15 @@ function bootPreview(){
   setLabs(PREVIEW_LABS);
   LAB_PRESETS=PREVIEW_LABS.map(function(l){return {id:l.id,name:l.name,ip:l.host,seats:l.seats,display:true};});
   PG_ADMIN={admin_username:"postgres",admin_password:"postgres",admin_host:"localhost",admin_port:"5432"};
-  DATABASES=PREVIEW_DATABASES.slice();RESEARCHERS=PREVIEW_RESEARCHERS.slice();defaultDatabase=DB_LAB_ID;
-  DEFAULT_DB_OPTIONS=[{id:DB_LAB_ID,title:"Lab shared database (Postgres)",researcher:"",builtin:true,db_mode:"lab"}].concat(PREVIEW_DATABASES);
+  DATABASES=PREVIEW_DATABASES.slice();RESEARCHERS=PREVIEW_RESEARCHERS.slice();defaultDatabase="otree_large_lab";
+  DEFAULT_DB_OPTIONS=PREVIEW_DATABASES.slice();
   labMarker="large";
   /* Open SELECTED on the built-in Lab default -- a fresh, Browse-first template
      every start (Job 2), matching core.select_on_open. No project folder is set,
      so the project section shows the Browse-first prompt. */
   renderConfigList(PREVIEW_CONFIGS,"Lab default");
   currentConfigName="Lab default";
-  var lab=(function(){try{var v=localStorage.getItem("otreeLab");if(v&&LAB_BY_ID[v])return v;}catch(e){}return "large";})();
+  var lab="large";
   applyFields({lab:lab,db_mode:"lab",admin_username:"admin",production:true,auth_level:"STUDY",
     resetdb:true,seat_mode:"lab_default",room_name:"study"});
   applyProject({});setPath("");

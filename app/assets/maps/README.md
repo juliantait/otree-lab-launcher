@@ -1,19 +1,22 @@
 # Lab room maps
 
-Each file in this folder is one **room layout** (a top-down seat map) that the
-launcher draws when you pick a lab. A lab in `lab_info.json` points at a map by
-name:
+A **room map** is a top-down seat layout the launcher draws when you pick a lab.
+Since 1.5.0 a lab's maps live INSIDE its `lab_info.json`, in the `maps` table,
+and a lab names the one it uses:
 
 ```json
-"labs": {
-  "small": { "name": "Small lab", "host": "…", "seats": ["1","2","…"], "map": "example_small" }
+"labs": [
+  { "id": "small", "name": "Small lab", "host": "…", "seats": ["1","2","…"], "map": "example_small" }
+],
+"maps": {
+  "example_small": { "rows": 5, "cols": 5, "cells": [ … ] }
 }
 ```
 
-`"map": "example_small"` resolves to `maps/example_small.json`. Several labs can
-share one map file, and you can add your own room by dropping a new
-`maps/<name>.json` here and referencing it. (A lab may also inline a full map
-object instead of naming a file, but a file is the normal, reusable way.)
+So copying `lab_info.json` to another computer brings the maps along. The two
+files in this folder (`app/assets/maps/`) are the shipped examples: a lab may
+name `example_small` or `example_large`, and the setup wizard copies the map
+into `lab_info.json`. Several labs can share one map.
 
 There is **no in-app editor for maps**. You author them by hand-editing JSON
 (an LLM is good at this if you paste it this README plus the room shape). The two

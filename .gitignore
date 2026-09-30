@@ -14,35 +14,14 @@ __pycache__/
 venv/
 env/
 
-# data/ (at the repo root) holds BOTH shipped assets and your private runtime
-# files. The shipped template (lab_info.example.json), the maps (data/maps/) and
-# this folder's README ARE committed. Everything the launcher writes at runtime
-# is NOT: real hosts/DB/admin (lab_info.json), saved configs which may hold
-# plaintext passwords (presets.json + its corrupt-store rescue copies), the
-# per-machine lab identity (lab.local), generated seat/label files (seats/), the
-# per-user theme (ui_prefs.json) and the app-written logs. Ignore each of those
-# precisely so the shipped files stay.
-data/lab_info.json
-data/presets.json
-data/presets.json.broken-*
-data/lab.local
-data/seats/
-data/*.log
-# the launch history log, the once-a-day update-check cache and the per-user
-# light/dark theme (runtime state)
-data/sessions.jsonl
-data/update_check.json
-data/ui_prefs.json
-# per-settings.py append locks the launcher keeps in its OWN data folder
-data/locks/
-# save leftovers: presets.json's lock file, the temp files of the atomic saves
-# (present only if a save was interrupted) and a malformed lab_info.json that the
-# launcher moved aside before rewriting it
-data/presets.json.lock
-data/.presets-*.tmp
-data/.lab_info-*.tmp
-data/ui_prefs.json.tmp
-data/lab_info.json.*.corrupt
+# data/ (at the repo root) is FULLY user-owned since 1.5.0: nothing in it ships
+# (the example lab_info, the example maps and the data-folder README moved to
+# app/assets/). The launcher writes everything in it at runtime: lab_info.json
+# (the lab's settings), machine.json (this PC's databases + passwords),
+# saved_configs.json (saved configs, which may hold passwords),
+# launch_history.jsonl, seats/, locks/, retired/ (old files after an upgrade),
+# update_check.json, logs and save leftovers. Ignore the whole folder.
+/data/
 
 # settings.py backups the launcher writes (those land in the user's own project)
 *.bak
