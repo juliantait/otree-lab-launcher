@@ -57,13 +57,24 @@ takes the setup.
    create their own database later, so you do not have to make one per study.
    (Creating a database from the app also needs `psycopg2`:
    `pip install psycopg2-binary`.)
-   **A database on another computer can be added too, but only registered, not
-   created.** In the add-database dialog the **Host** shows `localhost` greyed
-   out; **click the pen at the end of the box** to type another IP or hostname
-   (the Port unlocks with it). As soon as the host is not this computer, **"The
-   database already exists in Postgres"** is ticked and locked: the database must
-   already exist there, and launches then connect to that host. Switching back to
-   `localhost` brings the create option back.
+   **Databases stay on this computer by default.** Settings -> Custom databases
+   has a lab setting, **"Databases on this computer only (localhost)"**, which is
+   **on** for new and existing installs: every database Host is `localhost`, with
+   no pen to change it. It is saved in `lab_info.json`, so it applies to the
+   whole lab.
+   **To use a database on another computer, untick that box first.** It can then
+   be added, but only registered, not created. In the add-database dialog the
+   **Host** shows `localhost` greyed out; **click the pen at the end of the box**
+   to type another IP or hostname (the Port unlocks with it). As soon as the host
+   is not this computer, **"The database already exists in Postgres"** is ticked
+   and locked: the database must already exist there, and launches then connect
+   to that host. Switching back to `localhost` brings the create option back.
+   A database on another computer is always shown with its address in grey
+   (e.g. *on 192.0.2.10:5432*) in the database picker, on the Database card and
+   on the launch confirmation screen, so it is obvious the session uses another
+   computer. That computer's firewall and Postgres (`listen_addresses`,
+   `pg_hba.conf`) must allow the connection; test it with a plain `psql -h`
+   first.
 
 3. **GitHub workspaces (Organisation Sync) — for pulling experiment folders from
    your lab's GitHub organisation.** This is optional and **off by default**. To
@@ -168,6 +179,20 @@ The launch confirmation screen warns about this whenever the chosen room is not
 **Saving configs.** You can save a config per study. A saved config relaunches
 that study in one click in later sessions, so common studies are always a
 double-click away.
+
+**Updating the launcher.** In Settings, click **Update?** at the bottom; when a
+new version is available, **Update** runs `git pull` on the launcher folder and
+then asks you to **quit and reopen the launcher** (the Simple Tk app links to
+GitHub instead; run `git pull` there). Your `data/` (labs, configs,
+databases) is never touched. If the only thing in the way is a changed copy of a
+**shipped template file** (`data/README.md`, `data/lab_info.example.json`,
+`data/maps/README.md` or the example maps, typically after copying a whole
+`data/` folder from another computer), the update puts those files back to the
+shipped version, retries, and says so: *"Restored 2 shipped template files that
+had been changed locally: ..."*. If any other file has local changes, **the
+update stops and lists the files**; undo those edits, then update again. When
+copying lab settings between computers, copy only `lab_info.json` and your own
+maps, not the README or example files.
 
 ### Part 2 — Experimenter (usage)
 

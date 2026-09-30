@@ -2202,6 +2202,8 @@ class LauncherApp(object):
         body = card.body
         body.columnconfigure(0, weight=1)
         self.db_summary = tk.StringVar(self.root, value="")
+        # "on HOST:PORT" in grey when the database is on another computer.
+        self.db_host_note = tk.StringVar(self.root, value="")
 
         # One summary line: the current database NAME in bold + a pen (edit) icon
         # that opens a dropdown of databases (lab / oTree default / the current
@@ -2230,6 +2232,9 @@ class LauncherApp(object):
             font=self.fonts.small_bold, cursor="hand2")
         self.db_edit_icon.pack(side="left")
         self.db_edit_icon.bind("<Button-1>", self._open_db_menu)
+        tk.Label(left, textvariable=self.db_host_note, bg=COLORS["card"],
+                 fg=COLORS["faint"], font=self.fonts.small, anchor="w").pack(
+            side="left", padx=(6, 0))
         summary_row.add(left)
 
         # Reset-before-start: always visible on this line (no expander), reading
@@ -3201,21 +3206,21 @@ class LauncherApp(object):
             self.db_section.grid_remove()
             toggle.configure(text="Details ▸")
 
+    def _db_db_fields(self):
+        return {key: self.var[key].get() for key in
+                ("db_mode", "db_name", "db_host", "db_port")}
+
     def _db_summary_text(self):
         # The reset state is shown by the always-visible "Reset before start"
         # tickbox on the same line, so it is NOT repeated in this summary text.
-        mode = self.var["db_mode"].get()
-        if mode == DB_MODE_LAB:
-            return "Lab shared database (Postgres)"
-        if mode == DB_MODE_NONE:
-            return "oTree default (SQLite)"
-        name = self.var["db_name"].get().strip() or "custom database"
-        host = self.var["db_host"].get().strip() or "localhost"
-        return "%s on %s (Postgres)" % (name, host)
+        return core.database_summary_label(self._db_db_fields())
 
     def _refresh_db_summary(self):
         if hasattr(self, "db_summary"):
             self.db_summary.set(self._db_summary_text())
+        if hasattr(self, "db_host_note"):
+            note = core.database_host_note(self._db_db_fields())
+            self.db_host_note.set(note)
 
     def _lab_label(self, lab):
         preset = core.find_lab_preset(lab, self.lab_presets)
@@ -3537,7 +3542,7 @@ class LauncherApp(object):
         elif result.get("ok") and result.get("status") == "current":
             head, color, sub = (result.get("message") or
                                 "Nothing new: already up to date.",
-                                COLORS["text"], "")
+                                COLORS["text"], result.get("note", ""))
         elif result.get("ok"):
             head, color, sub = (result.get("message") or "Pulled.", COLORS["ok"],
                                 result.get("detail", ""))
@@ -4155,6 +4160,11 @@ class LauncherApp(object):
         its creator researcher (the Postgres user is recorded separately), so it
         appears in every config's picker afterward."""
         admin = core.pg_admin_from_store(self.store_extra)
+        refusal = core.database_host_refusal(host)
+        if refusal:
+            self._on_main(lambda: on_done({"ok": False, "reason": "localhost_only",
+                                           "message": refusal}))
+            return
         # host/port = the dialog's Host/Port; core refuses a non-local host.
         result = core.create_database(admin, name, new_user=user, new_password=password,
                                       host=host or admin["admin_host"],
@@ -4181,6 +4191,11 @@ class LauncherApp(object):
         back to the admin role, so the resulting registry entry is IDENTICAL in
         shape to a freshly-created one and is selectable/editable afterward."""
         admin = core.pg_admin_from_store(self.store_extra)
+        refusal = core.database_host_refusal(host)
+        if refusal:
+            self._on_main(lambda: on_done({"ok": False, "reason": "localhost_only",
+                                           "message": refusal}))
+            return
         fields = core.existing_database_fields(admin, name, user, password,
                                                host=host, port=port)
         result = {"ok": True, "created_db": False, "registered_only": True,
@@ -6086,6 +6101,18 @@ class LaunchBriefingDialog(object):
                 fr += 1
             tk.Frame(info, bg=COLORS["field_off"], height=6).grid(row=fr, column=0)
 
+        # The session's database is on another computer: say so plainly (grey).
+        if briefing.get("db_host_note"):
+            line = tk.Frame(summary, bg=COLORS["card"])
+            line.grid(row=sr, column=0, sticky="w", pady=(0, 8))
+            sr += 1
+            tk.Label(line, text="Database: %s" % briefing.get("db_label", ""),
+                     bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
+                     anchor="w").pack(side="left")
+            tk.Label(line, text=briefing["db_host_note"], bg=COLORS["card"],
+                     fg=COLORS["faint"], font=fonts.small, anchor="w").pack(
+                side="left", padx=(6, 0))
+
         # 2. What to open on the participant computers. An open room has no seat
         # label, so its link is the plain room link.
         if briefing.get("open_room"):
@@ -6850,6 +6877,11 @@ class DatabasePickerDialog(object):
         tk.Label(row, text=entry["title"], bg=COLORS["card"], fg=COLORS["text"],
                  font=self.fonts.small_bold if selected else self.fonts.body,
                  anchor="w").pack(side="left")
+        note = core.database_host_note(entry)
+        if note:
+            # Another computer's database: say where, in grey.
+            tk.Label(row, text="  " + note, bg=COLORS["card"], fg=COLORS["faint"],
+                     font=self.fonts.small, anchor="w").pack(side="left")
         if entry.get("researcher"):
             # The creator researcher, in grey, on the SAME line (whose DB is this).
             tk.Label(row, text="   created by %s" % entry["researcher"], bg=COLORS["card"],
@@ -6910,12 +6942,14 @@ class CreateDatabaseDialog(object):
         # only the pen at the END of the host box makes them editable. Another
         # host than this computer forces register-only (_on_host_change).
         admin = core.pg_admin_from_store(self.app.store_extra)
+        # Localhost-only (lab setting, default on): localhost and NO pen.
+        defaults = core.new_database_host_defaults(admin)
         style = ttk.Style(top)
         style.map("HostLock.TEntry",
                   fieldbackground=[("readonly", COLORS["field_off"])],
                   foreground=[("readonly", COLORS["faint"])])
-        self.host = tk.StringVar(top, value=admin.get("admin_host") or "localhost")
-        self.port = tk.StringVar(top, value=admin.get("admin_port") or "5432")
+        self.host = tk.StringVar(top, value=defaults["host"])
+        self.port = tk.StringVar(top, value=defaults["port"])
         hostframe = tk.Frame(body, bg=COLORS["card"])
         hostframe.columnconfigure(0, weight=1)
         self.host_entry = ttk.Entry(hostframe, textvariable=self.host,
@@ -6926,13 +6960,19 @@ class CreateDatabaseDialog(object):
             highlightthickness=0, padx=2, pady=0, cursor="hand2", font=fonts.body,
             bg=COLORS["field_off"], fg=COLORS["accent"],
             activebackground=COLORS["field_off"], activeforeground=COLORS["accent"])
-        self.host_pen.place(in_=self.host_entry, relx=1.0, x=-3, rely=0.5, anchor="e")
+        if defaults["editable"]:
+            self.host_pen.place(in_=self.host_entry, relx=1.0, x=-3, rely=0.5, anchor="e")
         tk.Label(hostframe, text="Port", bg=COLORS["card"], fg=COLORS["muted"],
                  font=fonts.small).grid(row=0, column=1, padx=(8, 4))
         self.port_entry = ttk.Entry(hostframe, textvariable=self.port, width=7,
                                     style="HostLock.TEntry", state="readonly")
         self.port_entry.grid(row=0, column=2)
         self._row(body, 3, "Host", hostframe)
+        if not defaults["editable"]:
+            tk.Label(hostframe, text="This computer only: \u201c%s\u201d is on in Lab "
+                     "Settings." % core.LOCALHOST_ONLY_LABEL, bg=COLORS["card"],
+                     fg=COLORS["faint"], font=fonts.small, anchor="w").grid(
+                row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
         # Researcher (required): whose database this is. Type a new name or pick
         # from the shared roster (the same list Save-as-new uses). Recorded in the
         # registry so every config's picker shows the creator.
@@ -7182,7 +7222,11 @@ class EditDatabaseDialog(object):
         hostport = tk.Frame(body, bg=COLORS["card"])
         hostport.columnconfigure(0, weight=1)
         self.vars["db_host"] = tk.StringVar(top, value=self.entry.get("db_host", ""))
-        ttk.Entry(hostport, textvariable=self.vars["db_host"]).grid(row=0, column=0, sticky="ew")
+        # Localhost-only (lab setting, default on): the host cannot be changed here.
+        self.host_entry = ttk.Entry(hostport, textvariable=self.vars["db_host"])
+        if core.load_databases_localhost_only():
+            self.host_entry.configure(state="readonly")
+        self.host_entry.grid(row=0, column=0, sticky="ew")
         tk.Label(hostport, text="Port", bg=COLORS["card"], fg=COLORS["muted"]).grid(
             row=0, column=1, padx=(12, 8))
         self.vars["db_port"] = tk.StringVar(top, value=self.entry.get("db_port", ""))
@@ -8155,9 +8199,37 @@ class LabSettingsDialog(object):
         self.db_list_frame.grid(row=2, column=0, sticky="ew", padx=12)
         self.db_list_frame.columnconfigure(0, weight=1)
         btns = tk.Frame(card, bg=COLORS["card"])
-        btns.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 12))
+        btns.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 4))
         ttk.Button(btns, text="Add a database", command=self._add_database).pack(side="left")
+        # Lab setting (lab_info.json), default on: new and edited databases stay
+        # on this computer. Off = another host can be registered (never created).
+        self.db_localhost_only = tk.BooleanVar(
+            self.top, value=core.load_databases_localhost_only())
+        tk.Checkbutton(
+            card, text=core.LOCALHOST_ONLY_LABEL, variable=self.db_localhost_only,
+            command=self._save_db_localhost_only, bg=COLORS["card"], fg=COLORS["text"],
+            activebackground=COLORS["card"], activeforeground=COLORS["text"],
+            selectcolor=COLORS["card"], font=self.fonts.small_bold, anchor="w",
+            bd=0, highlightthickness=0, cursor="hand2").grid(
+            row=4, column=0, sticky="w", padx=12, pady=(8, 0))
+        tk.Label(card,
+                 text="On: every database is on this computer. Off: a database on another "
+                      "computer can be registered (it must already exist there).",
+                 bg=COLORS["card"], fg=COLORS["faint"], font=self.fonts.small, anchor="w",
+                 justify="left", wraplength=560).grid(row=5, column=0, sticky="ew", padx=12)
+        self.db_local_status = tk.Label(card, text="", bg=COLORS["card"],
+                                        fg=COLORS["muted"], font=self.fonts.small,
+                                        anchor="w")
+        self.db_local_status.grid(row=6, column=0, sticky="ew", padx=12, pady=(2, 12))
         self._reload_db_list()
+
+    def _save_db_localhost_only(self):
+        stored = core.save_databases_localhost_only(self.db_localhost_only.get())
+        self.db_localhost_only.set(stored)
+        self.db_local_status.configure(
+            text=("On: databases on this computer only. Saved in the lab settings."
+                  if stored else "Off: a database on another computer can be "
+                                 "registered. Saved in the lab settings."))
 
     def _reload_db_list(self):
         frame = getattr(self, "db_list_frame", None)
@@ -8567,7 +8639,10 @@ class FirstRunWizard(object):
                     self.host_pen = tk.Button(
                         dbf, text="\u270E", command=self._unlock_db_host, relief="flat",
                         bd=0, highlightthickness=0, padx=1, pady=0, cursor="hand2")
-                    self.host_pen.place(in_=entry, relx=1.0, x=-2, rely=0.5, anchor="e")
+                    # Localhost-only (lab setting, default on): no pen.
+                    if not core.load_databases_localhost_only():
+                        self.host_pen.place(in_=entry, relx=1.0, x=-2, rely=0.5,
+                                            anchor="e")
         row += 1
 
         # --- Admin ----------------------------------------------------------

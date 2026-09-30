@@ -15,7 +15,8 @@ lives in `app/`; `data/` stays at the repo root.
 ## Yours (created at runtime, not in git)
 
 - `lab_info.json` - your labs, hosts, database and admin settings, plus the
-  GitHub Organisation Sync on/off switch and organisation name.
+  GitHub Organisation Sync on/off switch and organisation name, and the
+  "Databases on this computer only" setting.
 - `presets.json` - your saved launch configs.
 - `lab.local` - one word naming which lab this computer is.
 - `ui_prefs.json` - your light/dark theme.
@@ -28,3 +29,7 @@ picker opens there, and the launcher creates it when first needed.
 
 The env vars `OTREE_LAB_INFO`, `OTREE_LAB_MARKER` and
 `OTREE_LAB_LAUNCHER_PRESETS` override the default locations when set.
+
+To move lab settings to another computer, copy `lab_info.json` (and any maps of
+your own), not the shipped files listed above: a changed `README.md` or
+`lab_info.example.json` here gets in the way of updating.

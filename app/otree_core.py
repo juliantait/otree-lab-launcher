@@ -76,7 +76,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.4.13"
+APP_VERSION = "1.4.15"
 PRESETS_FILENAME = "presets.json"
 SESSIONS_FILENAME = "sessions.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -1820,6 +1820,73 @@ def save_github_sync_settings(enabled, org, path=None, prefs_path=None):
     return _github_sync_values(values)
 
 
+# --- Databases on this computer only (lab setting, v1.4.15) -----------------
+# A lab-level tick box in Lab Settings (Custom databases), stored as a top-level
+# key of lab_info.json like github_sync_enabled. DEFAULT ON: a missing key (every
+# existing install) or no readable lab_info.json reads as on. When on, a new or
+# edited database host is locked to localhost; when off, a database on another
+# host can be registered (the 1.4.13 behaviour). Saving never creates
+# lab_info.json (that would skip the first-run wizard).
+DB_LOCALHOST_ONLY_KEY = "databases_localhost_only"
+LOCALHOST_ONLY_LABEL = "Databases on this computer only (localhost)"
+
+
+def load_databases_localhost_only(path=None):
+    """The saved "Databases on this computer only" lab setting. Default ON."""
+    info = load_lab_info(path or lab_info_path())
+    if not isinstance(info, dict) or DB_LOCALHOST_ONLY_KEY not in info:
+        return True
+    return bool(info.get(DB_LOCALHOST_ONLY_KEY))
+
+
+def save_databases_localhost_only(enabled, path=None):
+    """Store the setting in lab_info.json (other keys kept) and return the value
+    now in effect. With no readable lab_info.json nothing is written and the
+    default (on) stays in effect. Never raises."""
+    path = path or lab_info_path()
+    info = load_lab_info(path)
+    if info is None:
+        return True
+    values = {DB_LOCALHOST_ONLY_KEY: bool(enabled)}
+    info.update(values)
+    try:
+        save_lab_info(info, path)
+        _set_live_lab_info_keys(path, values)
+    except Exception:
+        return load_databases_localhost_only(path)
+    return bool(enabled)
+
+
+def database_host_refusal(host, localhost_only=None):
+    """Why ``host`` may not be used for a new or edited database, or "".
+
+    Only refuses a non-local host while the localhost-only lab setting is on
+    (``localhost_only`` None reads the saved setting)."""
+    if localhost_only is None:
+        localhost_only = load_databases_localhost_only()
+    if not localhost_only or is_local_host(host):
+        return ""
+    return ("%s is another computer. \"%s\" is on in Lab Settings (Custom "
+            "databases), so databases must be on this computer. Untick it to use "
+            "a database on another host." % (str(host).strip(), LOCALHOST_ONLY_LABEL))
+
+
+def new_database_host_defaults(admin, localhost_only=None):
+    """The Host/Port a new-database dialog opens with, and whether its pen may
+    unlock them: localhost + no pen while localhost-only is on, else the Lab
+    Settings admin host/port behind the pen."""
+    if localhost_only is None:
+        localhost_only = load_databases_localhost_only()
+    admin = admin or {}
+    host = str(admin.get("admin_host", "") or "").strip() or "localhost"
+    port = str(admin.get("admin_port", "") or "").strip() or "5432"
+    if localhost_only:
+        return {"host": "localhost",
+                "port": port if is_local_host(host) else "5432",
+                "editable": False}
+    return {"host": host, "port": port, "editable": True}
+
+
 # --- Per-machine lab identity (lab.local) ----------------------------------
 # Each lab PC carries a gitignored one-word marker file, `lab.local`, next to
 # the launcher, saying which lab it is ("large" or "small"). The launcher reads
@@ -2657,46 +2724,123 @@ def is_git_install(repo=None):
             ["git", "-C", str(repo), "status"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            timeout=10)
+            timeout=10, creationflags=_no_window_flags())
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 
 
+# App-owned template files that SHIP in data/ (repo-relative, forward slashes).
+# The in-app Update may put these back to the shipped version when local edits to
+# them are the ONLY thing blocking the pull (a lab data folder copied over data/
+# marks them changed). Deliberately explicit: never lab_info.json, presets.json,
+# lab.local or anything else the lab writes (those are gitignored anyway).
+SHIPPED_TEMPLATE_FILES = (
+    "data/README.md",
+    "data/lab_info.example.json",
+    "data/maps/README.md",
+    "data/maps/example_large.json",
+    "data/maps/example_small.json",
+)
+
+
+def _pull_blockers(repo, output):
+    """The local files a failed ``git pull`` says it would overwrite, or None
+    when the failure is not about local changes. Falls back to the tracked
+    files with local edits when git gives no list (e.g. a rebase pull's
+    "You have unstaged changes")."""
+    low = str(output or "").lower()
+    if "untracked working tree files" in low:
+        return None
+    classified = classify_git_error(output)
+    if classified["code"] == "local_changes" and classified["files"]:
+        return [f.replace("\\", "/") for f in classified["files"]]
+    if classified["code"] == "local_changes" or "unstaged changes" in low \
+            or "uncommitted changes" in low:
+        porcelain = _git_text(str(repo), "status", "--porcelain",
+                              "--untracked-files=no") or ""
+        files = [line[3:].strip().strip('"') for line in porcelain.splitlines()
+                 if len(line) > 3]
+        return files or None
+    return None
+
+
+def _run_pull(repo):
+    code, output = _run_git(["-C", str(repo), "pull"], timeout=120)
+    return code == 0, output.strip()
+
+
 def git_pull(repo=None):
     """Run ``git -C <repo> pull`` on the install directory and capture its output.
 
-    Returns ``{"ok": bool, "output": str, "message": str}``: ``ok`` is True only
-    when git exits 0, ``output`` is git's combined stdout/stderr, and ``message``
-    is the confirmation line ("Update installed. Restart the launcher to apply.")
-    on success or a short failure note otherwise. Acts ONLY on the launcher's own
-    install directory; never touches any oTree/experiment process. Fail-soft: git
-    missing / not a repo / a timeout returns ``ok`` False with a message rather
-    than raising.
+    Returns ``{"ok", "output", "message", "restored", "restored_note"}``: ``ok``
+    is True only when the pull succeeded, ``output`` is git's combined text and
+    ``message`` the confirmation ("Update installed. Restart the launcher to
+    apply.") or a plain failure reason.
+
+    Safe update: when the pull is blocked ONLY by local edits to
+    :data:`SHIPPED_TEMPLATE_FILES`, those files are restored to the committed
+    version (``git checkout HEAD -- <files>``) and the pull runs once more;
+    ``restored`` lists them and ``restored_note`` says so. When any other file
+    blocks it, nothing is restored and the result carries ``reason_code``
+    "local_changes" plus ``files``. Acts ONLY on the launcher's own install
+    directory; never touches any oTree/experiment process. Fail-soft: git
+    missing / not a repo / a timeout returns ``ok`` False rather than raising.
     """
     repo = repo if repo is not None else repo_root()
+    result = {"ok": False, "output": "", "message": "", "restored": [],
+              "restored_note": ""}
     try:
-        result = subprocess.run(
-            ["git", "-C", str(repo), "pull"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            timeout=120)
+        ok, output = _run_pull(repo)
+        last = output
+        if not ok:
+            blockers = _pull_blockers(repo, output)
+            if blockers and all(f in SHIPPED_TEMPLATE_FILES for f in blockers):
+                code, restore_out = _run_git(
+                    ["-C", str(repo), "checkout", "HEAD", "--"] + blockers,
+                    timeout=30)
+                if code == 0:
+                    result["restored"] = list(blockers)
+                    ok, last = _run_pull(repo)
+                    output = (output + "\n\n" + last).strip()
+                else:
+                    output = (output + "\n\n" + restore_out).strip()
     except FileNotFoundError:
-        return {"ok": False, "output": "",
-                "message": "git is not installed on this machine."}
+        result["message"] = "git is not installed on this machine."
+        return result
     except subprocess.TimeoutExpired:
-        return {"ok": False, "output": "", "message": "git pull timed out."}
+        result["message"] = "git pull timed out."
+        return result
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return {"ok": False, "output": "",
-                "message": "Could not run git pull: %s" % error}
-    output = result.stdout or b""
-    if isinstance(output, (bytes, bytearray)):
-        output = output.decode("utf-8", "replace")
-    output = output.strip()
-    ok = result.returncode == 0
-    message = ("Update installed. Restart the launcher to apply."
-               if ok else "git pull failed (exit code %s)." % result.returncode)
-    return {"ok": ok, "output": output, "message": message}
+        result["message"] = "Could not run git pull: %s" % error
+        return result
+    result["ok"] = ok
+    result["output"] = output
+    if result["restored"]:
+        count = len(result["restored"])
+        result["restored_note"] = (
+            "Restored %s that had been changed locally: %s." % (
+                _plural(count, "shipped template file"),
+                _short_file_list(result["restored"], limit=len(result["restored"]))))
+    if ok:
+        result["message"] = "Update installed. Restart the launcher to apply."
+        if result["restored_note"]:
+            result["message"] += " " + result["restored_note"]
+        return result
+    classified = classify_git_error(last)
+    result["reason_code"] = classified["code"]
+    files = _pull_blockers(repo, last) or []
+    if files:
+        result["reason_code"] = "local_changes"
+        result["files"] = files
+        result["message"] = (
+            "Update blocked: this computer has local changes to %s that the "
+            "update would overwrite. Nothing was changed. Ask the lab manager to "
+            "undo those edits, then update again." % _short_file_list(files, limit=8))
+    else:
+        result["files"] = classified["files"]
+        result["message"] = "git pull failed: %s" % classified["reason"]
+    return result
 
 
 # --- Per-study Git update + GitHub Organisation clone -----------------------
@@ -2728,7 +2872,7 @@ def is_git_repo(folder):
             ["git", "-C", folder, "rev-parse", "--is-inside-work-tree"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            timeout=10)
+            timeout=10, creationflags=_no_window_flags())
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
     if result.returncode != 0:
@@ -2742,12 +2886,14 @@ def is_git_repo(folder):
 def _run_git(args, runner=None, timeout=60):
     """Run ``git <args>`` and return ``(returncode, output)`` with stdout+stderr
     merged and decoded. Raises what subprocess raises (FileNotFoundError when git
-    is missing, TimeoutExpired, OSError); callers turn those into results."""
+    is missing, TimeoutExpired, OSError); callers turn those into results.
+    Runs with CREATE_NO_WINDOW on Windows so Git Pull / Clone never flash a
+    console window from the windowless launcher."""
     run = runner if runner is not None else subprocess.run
     result = run(["git"] + list(args),
                  stdin=subprocess.DEVNULL,
                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                 timeout=timeout)
+                 timeout=timeout, creationflags=_no_window_flags())
     output = getattr(result, "stdout", b"") or b""
     if isinstance(output, (bytes, bytearray)):
         output = output.decode("utf-8", "replace")
@@ -2959,6 +3105,50 @@ def git_changed_files(folder, old, new):
     return [files[p] for p in order]
 
 
+_STATUS_WORDS = {"D": "deleted", "A": "added", "R": "renamed", "C": "copied",
+                 "U": "in conflict"}
+
+
+def local_changes_note(porcelain, limit=3):
+    """The grey hint shown under "Nothing new" when the study folder has local
+    edits, built from ``git status --porcelain`` text; "" when there are none.
+
+    Only tracked changes count (modified / deleted / added / renamed); untracked
+    ("??") and ignored ("!!") files are skipped, so a stray db.sqlite3 or
+    __pycache__ never triggers it. Names up to ``limit`` files, then "and N more":
+    'This folder has local changes (README.md deleted). Git Pull does not undo
+    local edits.'"""
+    items = []
+    for line in (porcelain or "").splitlines():
+        if len(line) < 4 or line[:2] in ("??", "!!"):
+            continue
+        code, path = line[:2], line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        word = next((_STATUS_WORDS[c] for c in code if c in _STATUS_WORDS),
+                    "modified")
+        items.append("%s %s" % (path, word))
+    if not items:
+        return ""
+    shown = ", ".join(items[:limit])
+    if len(items) > limit:
+        shown += " and %d more" % (len(items) - limit)
+    return ("This folder has local changes (%s). Git Pull does not undo local "
+            "edits." % shown)
+
+
+def _local_changes_hint(folder):
+    """local_changes_note for ``folder``, or "" when git status fails (never
+    raises). Not via _git_text: its strip() would eat the first status column."""
+    try:
+        code, output = _run_git(["-C", folder, "status", "--porcelain",
+                                 "--untracked-files=no"], timeout=30)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    return local_changes_note(output) if code == 0 else ""
+
+
 def git_update_study(folder):
     """Run ``git pull`` in a selected STUDY folder and report what happened.
 
@@ -2966,11 +3156,13 @@ def git_update_study(folder):
 
         {"ok", "status", "message", "detail", "reason", "reason_code", "output",
          "files", "file_count", "commit_count", "commit", "conflict_files",
-         "old_head", "new_head"}
+         "old_head", "new_head", "note"}
 
     ``status`` is one of:
       * ``"current"``  -> nothing new (HEAD did not move). ``message`` is
                           "Nothing new: already up to date."
+                          ``note`` is a grey hint naming local edits
+                          (local_changes_note) when the folder has any, else "".
       * ``"updated"``  -> HEAD moved. ``message`` is "Pulled N changed files.",
                           ``files`` lists each changed file (added / modified /
                           deleted, +/- lines), ``commit`` holds the date and
@@ -2991,7 +3183,7 @@ def git_update_study(folder):
     result = {"ok": False, "status": "error", "message": "", "detail": "",
               "reason": "", "reason_code": "", "output": "", "files": [],
               "file_count": 0, "commit_count": 0, "commit": {},
-              "conflict_files": [], "old_head": "", "new_head": ""}
+              "conflict_files": [], "old_head": "", "new_head": "", "note": ""}
 
     def failed(code, reason, output=""):
         result.update(reason_code=code, reason=reason, output=output.strip(),
@@ -3026,7 +3218,8 @@ def git_update_study(folder):
     new = _git_text(folder, "rev-parse", "HEAD") or ""
     result.update(ok=True, old_head=old, new_head=new)
     if new == old:
-        result.update(status="current", message="Nothing new: already up to date.")
+        result.update(status="current", message="Nothing new: already up to date.",
+                      note=_local_changes_hint(folder))
         return result
     files = git_changed_files(folder, old, new)
     count_raw = _git_text(folder, "rev-list", "--count",
@@ -4126,6 +4319,36 @@ def is_local_host(host):
     return h in LOCAL_HOSTS
 
 
+def database_host_note(entry):
+    """"on HOST:PORT" when a database (a config, or a picker entry) lives on
+    another computer, else "". Shown in grey next to the database wherever it is
+    picked or shown, so a session on another computer's database is obvious."""
+    entry = entry or {}
+    if entry.get("db_mode", DB_MODE_CUSTOM) == DB_MODE_NONE:
+        return ""
+    host = str(entry.get("db_host", "") or "").strip()
+    if is_local_host(host):
+        return ""
+    port = str(entry.get("db_port", "") or "").strip() or "5432"
+    return "on %s:%s" % (host, port)
+
+
+def database_summary_label(cfg):
+    """The Database card's one-line name for this config. A custom database on
+    another host drops the "on HOST" part, which :func:`database_host_note`
+    shows next to it instead."""
+    c = normalize_config(cfg)
+    if c["db_mode"] == DB_MODE_LAB:
+        return DB_BUILTIN_LAB_TITLE
+    if c["db_mode"] == DB_MODE_NONE:
+        return DB_BUILTIN_SQLITE_TITLE
+    name = c["db_name"].strip() or "custom database"
+    host = c["db_host"].strip() or "localhost"
+    if not is_local_host(host):
+        return "%s (Postgres)" % name
+    return "%s on %s (Postgres)" % (name, host)
+
+
 def pg_admin_from_store(extra):
     """The Postgres admin config for this store, with sane host/port defaults."""
     raw = (extra or {}).get("pg_admin") or {}
@@ -4402,6 +4625,7 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
         # Seed from the current resolved wizard credentials so a partial edit
         # (say just the host) keeps the other fields intact.
         block = dict(lab_db_from_info(info))
+        _refuse_new_remote_host(block.get("db_host", ""), db_host)
         for key, value in conn_updates.items():
             if value is not None:
                 block[key] = str(value)
@@ -4423,6 +4647,7 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
         raise ValueError("No database with id %r to edit." % (db_id,))
 
     entry = normalize_database_entry(stored[target_index])
+    _refuse_new_remote_host(entry.get("db_host", ""), db_host)
     if title is not None:
         entry["title"] = str(title).strip() or entry["title"]
     if researcher is not None:
@@ -4446,6 +4671,19 @@ def edit_database(extra, db_id, title=None, researcher=None, db_name=None,
     if default_database_id(extra) == entry["id"]:
         apply_default_database(extra)
     return entry
+
+
+def _refuse_new_remote_host(current, new):
+    """ValueError when an edit moves a database to a DIFFERENT non-local host
+    while localhost-only is on. Keeping an existing remote host is allowed, so
+    older entries stay editable."""
+    if new is None:
+        return
+    if str(new).strip().lower() == str(current or "").strip().lower():
+        return
+    refusal = database_host_refusal(new)
+    if refusal:
+        raise ValueError(refusal)
 
 
 def soft_delete_database(extra, db_id):
@@ -5270,6 +5508,10 @@ def launch_briefing(cfg, lab_presets=None):
         "shortcut_label": shortcut_label,
         "caution": caution,
         "caution_text": CAUTION_TEXT if caution else "",
+        # The database this run uses, and "on HOST:PORT" when that is another
+        # computer (blank for localhost / SQLite), shown in grey.
+        "db_label": database_summary_label(c),
+        "db_host_note": database_host_note(c),
         # Guidance for staff about the per-seat link: it already includes
         # welcome_page_ok=1, and this is the link to document / put on the PCs.
         "welcome_note": WELCOME_NOTE,

@@ -780,6 +780,7 @@ class Api(object):
             # the configured org name (a lab setting, in lab_info.json). Drives
             # whether the page shows the GitHub Org. + Git update buttons.
             "github_sync": core.load_github_sync(),
+            "databases_localhost_only": core.load_databases_localhost_only(),
         }
 
     @api_call
@@ -1105,8 +1106,10 @@ class Api(object):
         registry. Each carries its creator ``researcher`` (grey in the UI).
         ``current_id`` ticks the database the on-screen config uses now."""
         cfg = fields_to_config(fields or {})
+        databases = [dict(entry, host_note=core.database_host_note(entry))
+                     for entry in core.list_databases(self.store_extra)]
         return {"ok": True,
-                "databases": core.list_databases(self.store_extra),
+                "databases": databases,
                 "current_id": self._current_database_id(cfg)}
 
     @api_call
@@ -1210,6 +1213,9 @@ class Api(object):
             result["relaunching"] = False
             result["message"] = ("Updated. Please quit this window and reopen the "
                                  "launcher to finish updating.")
+            # Shipped template files put back so the pull could run (core).
+            if result.get("restored_note"):
+                result["message"] += " " + result["restored_note"]
         return result
 
     @api_call
@@ -1235,6 +1241,13 @@ class Api(object):
         """
         stored = core.load_github_sync()
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
+
+    @api_call
+    def set_databases_localhost_only(self, enabled):
+        """Persist the "Databases on this computer only (localhost)" lab setting
+        (lab_info.json, default on). Returns the value now in effect."""
+        return {"ok": True,
+                "enabled": core.save_databases_localhost_only(bool(enabled))}
 
     @api_call
     def set_github_sync(self, enabled, org=""):
@@ -1401,8 +1414,12 @@ class Api(object):
         ``core.create_database``.
         """
         admin = core.pg_admin_from_store(self.store_extra)
-        host = str(host or "").strip() or admin.get("admin_host", "") or "localhost"
-        port = str(port or "").strip() or admin.get("admin_port", "") or "5432"
+        defaults = core.new_database_host_defaults(admin)
+        host = str(host or "").strip() or defaults["host"]
+        port = str(port or "").strip() or defaults["port"]
+        refusal = core.database_host_refusal(host)
+        if refusal:
+            return {"ok": False, "reason": "localhost_only", "message": refusal}
         if already_exists:
             return self._register_existing_database(new_db, new_user, new_password,
                                                     researcher, host, port)
@@ -1588,6 +1605,9 @@ class Api(object):
         }
         if not fields["db_name"]:
             return {"ok": False, "message": "Enter a database name."}
+        refusal = core.database_host_refusal(fields["db_host"])
+        if refusal:
+            return {"ok": False, "reason": "localhost_only", "message": refusal}
 
         if not create_new:
             result = {"ok": True, "created": False, "existed": None,

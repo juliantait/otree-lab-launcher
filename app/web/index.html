@@ -635,6 +635,12 @@ input::placeholder{color:var(--faint)}
 .db-pick-dot{flex:none;width:16px;color:var(--accent);font-size:11px}
 .db-pick-row.sel .db-pick-title{font-weight:700;color:var(--text-strong)}
 .db-pick-by{color:var(--faint);font-size:12px}
+/* "on HOST:PORT": a database on another computer (picker, card, briefing). */
+.db-host-note{color:var(--faint);font-size:12px;font-weight:400;margin-left:6px}
+.bl-dbhost{margin:0 0 8px;font-size:12.5px;color:var(--muted)}
+.db-mode-note.host-lock-note{margin:2px 0 4px}
+.upd-restored{font-size:12px;color:var(--muted);margin:10px 0 0}
+.upd-files{margin:4px 0 8px 18px;padding:0;font-size:12.5px}
 .db-pick-sep{height:1px;background:var(--line-soft);margin:10px 0 8px}
 .db-pick-add{background:none;border:0;color:var(--accent);font-family:inherit;font-size:13px;
   font-weight:650;cursor:pointer;padding:2px 2px}
@@ -1324,6 +1330,7 @@ select.bl-roomsel{width:auto;min-width:130px;background:var(--panel-2);color:var
           <div class="sumrow">
             <span class="db-name">
               <span class="v" id="dbSummary">Lab shared database (Postgres)</span>
+              <span class="db-host-note" id="dbHostNote" hidden></span>
               <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbPicker(event)">&#9998;</button>
             </span>
             <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
@@ -1566,6 +1573,11 @@ var pendingIdentityAdopt=false;
 /* GitHub Organisation Sync (opt-in, DEFAULT OFF). A lab setting, loaded from lab_info.json via
    the initial state; drives whether the GitHub org button + the per-config Git Pull button show. */
 var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
+/* "Databases on this computer only (localhost)": a lab setting in lab_info.json
+   (core.load_databases_localhost_only), DEFAULT ON. When on, every database Host
+   field stays on localhost with no pen; core refuses another host anyway. */
+var DB_LOCALHOST_ONLY=true;
+var LOCALHOST_ONLY_LABEL="Databases on this computer only (localhost)";
 /* The "get ready for the lab" popup fires at most once per project selection;
    this remembers the path already offered so re-inspecting the same folder
    (or a config load) does not nag again. Cleared implicitly by a new path. */
@@ -1978,9 +1990,12 @@ function renderDbPicker(list,currentId){
   var rows=(list||[]).map(function(e){
     var sel=(e.id===currentId);
     var grey=e.researcher?'<span class="db-pick-by">created by '+escapeHtml(e.researcher)+'</span>':'';
+    /* Another computer's database: say where (core.database_host_note). */
+    var note=(e.host_note!==undefined)?e.host_note:dbHostNote(e);
+    var on=note?'<span class="db-pick-by db-host-note">'+escapeHtml(note)+'</span>':'';
     return '<button class="db-pick-row'+(sel?" sel":"")+'" onclick="pickDatabase(\''+escapeHtml(e.id)+'\')">'+
       '<span class="db-pick-dot">'+(sel?"&#9679;":"")+'</span>'+
-      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+grey+'</button>';
+      '<span class="db-pick-title">'+escapeHtml(e.title)+'</span>'+on+grey+'</button>';
   }).join("");
   openModal("Choose a database",
     '<p class="modal-desc">Everyone shares this list. A grey name shows who created that database.</p>'+
@@ -2052,10 +2067,16 @@ var REMOTE_DB_NOTE="Creating a database only works on this computer; a database 
    onchg = the JS function name to call as the host is edited). Both start
    read-only; only the pen (unlockHostPen) makes them editable. */
 function hostPenField(p,host,port,onchg){
+  /* Localhost-only (lab setting, default on): the host is this computer and
+     there is no pen, so another host cannot be typed. */
+  var pen=DB_LOCALHOST_ONLY?"":
+    '<button type="button" class="db-edit pen host-pen" id="'+p+'HostPen" title="Edit host and port" aria-label="Edit host and port" onclick="unlockHostPen(\''+p+'\')">&#9998;</button>';
+  if(DB_LOCALHOST_ONLY)host="localhost";
   return '<div class="mfield"><label>Host</label><div class="hostpen">'+
     '<div class="hp-box"><input type="text" id="'+p+'Host" value="'+escapeHtml(host||"localhost")+'" readonly oninput="'+onchg+'(\''+p+'\')">'+
-    '<button type="button" class="db-edit pen host-pen" id="'+p+'HostPen" title="Edit host and port" aria-label="Edit host and port" onclick="unlockHostPen(\''+p+'\')">&#9998;</button></div>'+
-    '<span class="plbl">Port</span><input type="text" class="port" id="'+p+'Port" value="'+escapeHtml(port||"5432")+'" readonly></div></div>';
+    pen+'</div>'+
+    '<span class="plbl">Port</span><input type="text" class="port" id="'+p+'Port" value="'+escapeHtml(port||"5432")+'" readonly></div></div>'+
+    (DB_LOCALHOST_ONLY?'<p class="db-mode-note host-lock-note">This computer only: “'+LOCALHOST_ONLY_LABEL+'” is on in Settings.</p>':'');
 }
 function unlockHostPen(p){
   ["Host","Port"].forEach(function(f){var i=el(p+f);if(i)i.readOnly=false;});
@@ -2086,12 +2107,25 @@ function refreshDbHostWarning(){
 }
 ["db_name","db_user","db_host","db_port"].forEach(function(f){document.addEventListener("DOMContentLoaded",function(){
   var e=el(f);if(e)e.addEventListener("input",function(){if(currentDbMode==="custom")refreshUrl();refreshDbSummary();});});});
+/* "on HOST:PORT" for a database on another computer, else "". Mirror of
+   core.database_host_note (the picker and briefing get it from Python). */
+function dbHostNote(e){
+  e=e||{};if((e.db_mode||"custom")==="none")return "";
+  var host=String(e.db_host==null?"":e.db_host).trim();
+  if(isLocalHost(host))return "";
+  return "on "+host+":"+(String(e.db_port==null?"":e.db_port).trim()||"5432");
+}
+/* The Database card line: mirror of core.database_summary_label, plus the grey
+   host note when the database is on another computer. */
 function refreshDbSummary(){
   var mode=currentDbMode,base;
+  var host=(val("db_host")||"").trim()||"localhost";
   if(mode==="lab")base="Lab shared database (Postgres)";
   else if(mode==="none")base="oTree default (SQLite)";
-  else{var name=(val("db_name")||"").trim()||"custom database";var host=(val("db_host")||"").trim()||"localhost";base=name+" on "+host+" (Postgres)";}
+  else{var name=(val("db_name")||"").trim()||"custom database";base=isLocalHost(host)?(name+" on "+host+" (Postgres)"):(name+" (Postgres)");}
   el("dbSummary").textContent=base;
+  var n=el("dbHostNote");
+  if(n){var note=dbHostNote({db_mode:mode,db_host:host,db_port:val("db_port")});n.textContent=note;n.hidden=!note;}
 }
 
 /* ======================================================================
@@ -2533,6 +2567,7 @@ function renderGitPullResult(r,path){
     h='<div class="gr-head"><b>Pulling…</b>'+when+'</div>';
   }else if(r.ok&&r.status==="current"){
     h='<div class="gr-head"><b>'+escapeHtml(r.message||"Nothing new: already up to date.")+'</b>'+when+'</div>';
+    if(r.note)h+='<div class="gr-sub">'+escapeHtml(r.note)+'</div>';
   }else if(r.ok){
     h='<div class="gr-head ok"><b>'+escapeHtml(r.message||"Pulled.")+'</b>'+when+'</div>';
     if(r.detail)h+='<div class="gr-sub">'+escapeHtml(r.detail)+'</div>';
@@ -2945,6 +2980,9 @@ function renderCreateDb(roster,suggestedResearcher){
      is checked + disabled, so the action stays Register and CREATE never runs. */
   var adminHost=(PG_ADMIN.admin_host||"").trim()||"localhost";
   var adminPort=(PG_ADMIN.admin_port||"").trim()||"5432";
+  /* Localhost-only on: localhost (the admin port only when the admin is local).
+     Mirror of core.new_database_host_defaults. */
+  if(DB_LOCALHOST_ONLY){if(!isLocalHost(adminHost))adminPort="5432";adminHost="localhost";}
   openModal("Create a new Postgres database",
     '<p class="modal-desc">Uses the admin details from Lab Settings. The new user and password are optional; leave them blank to let the admin role own the database.</p>'+
     '<div class="mfield"><label>Database name</label><input id="cdbName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
@@ -3054,7 +3092,7 @@ function openEditDb(id){
   body+='<div class="mfield"><label>Database name</label><input id="edbName" type="text" value="'+escapeHtml(entry.db_name||"")+'"></div>'+
     '<div class="mfield"><label>User</label><input id="edbUser" type="text" value="'+escapeHtml(entry.db_user||"")+'"></div>'+
     '<div class="mfield"><label>Password</label><div class="pwrap"><input id="edbPw" type="password" value="'+escapeHtml(entry.db_password||"")+'"><button type="button" class="pw-toggle" data-target="edbPw" onclick="togglePw(this)">Show</button></div></div>'+
-    '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'" oninput="refreshEdbWarn()"></div>'+
+    '<div class="mfield"><label>Host</label><input id="edbHost" type="text" value="'+escapeHtml(entry.db_host||"")+'" oninput="refreshEdbWarn()"'+(DB_LOCALHOST_ONLY?' readonly title="'+escapeHtml(LOCALHOST_ONLY_LABEL)+' is on in Settings"':'')+'></div>'+
     '<div class="mfield"><label>Port</label><input id="edbPort" type="text" value="'+escapeHtml(entry.db_port||"")+'"></div>'+
     /* Feature 1: live remote-host warning, same copy as the main config. */
     '<div class="db-mode-note" id="edbHostWarn" style="display:none"></div>'+
@@ -3187,7 +3225,12 @@ function openLabSettings(){
     '<div class="ls-card"><h4>Custom databases</h4>'+
       '<p class="d">Every database created in the launcher, shared across all configs. The grey name is who created it. Add a database here, or Edit one to change its name, user, host, port or password.</p>'+
       '<div id="lsDbList">'+lsCustomDbRows()+'</div>'+
-      '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button></div>'+
+      '<button class="btn" style="margin-top:10px" onclick="openCreateDb()">Add a database</button>'+
+      /* Lab setting (lab_info.json), default on: new and edited databases stay on
+         this computer. Off = another host can be registered (never created). */
+      '<label class="chk" style="display:flex;margin:14px 0 2px"><input type="checkbox" id="lsDbLocalOnly"'+(DB_LOCALHOST_ONLY?" checked":"")+' onchange="saveDbLocalOnly()"> <b>'+LOCALHOST_ONLY_LABEL+'</b></label>'+
+      '<p class="d" style="margin:0">On: every database is on this computer. Off: a database on another computer can be registered (it must already exist there).</p>'+
+      '<div class="ls-status" id="lsDbLocalStatus"></div></div>'+
     /* Database section, part 3: WHICH database is the lab-shared default. It is
        a REFERENCE to one entry in the custom-databases list above -- the
        setup-wizard DB, or any custom DB made later -- chosen by selecting it, not
@@ -3275,6 +3318,17 @@ function openLabSettings(){
   syncThemeControls();
   syncGithubSyncControls();
   loadSettingsVersion();
+}
+/* Persist the localhost-only lab setting (API.set_databases_localhost_only ->
+   lab_info.json). The static preview only flips the in-page value. */
+function saveDbLocalOnly(){
+  var cb=el("lsDbLocalOnly"),st=el("lsDbLocalStatus");
+  DB_LOCALHOST_ONLY=!!(cb&&cb.checked);
+  var say=function(){if(st)st.textContent=DB_LOCALHOST_ONLY?"On: databases on this computer only. Saved in the lab settings.":"Off: a database on another computer can be registered. Saved in the lab settings.";};
+  if(!NATIVE||!API||!API.set_databases_localhost_only){say();return;}
+  API.set_databases_localhost_only(DB_LOCALHOST_ONLY).then(function(r){
+    if(r&&r.ok){DB_LOCALHOST_ONLY=!!r.enabled;if(cb)cb.checked=DB_LOCALHOST_ONLY;say();}
+  });
 }
 /* Reflect the persisted GitHub Organisation Sync state into the Settings card
    controls whenever the panel opens (mirror of syncThemeControls). */
@@ -3399,13 +3453,16 @@ function runGitPull(){
          is DOWNLOADED but not yet ACTIVE, with a bold "restart to activate" call to
          action. Leave the Update button disabled (the pull already succeeded; a
          second pull is a no-op) so the message stands. */
-      openModal("Update downloaded",updateDoneHTML(r.output),true);
+      /* restored_note: shipped template files put back so the pull could run. */
+      openModal("Update downloaded",updateDoneHTML(r.output,r.restored_note),true);
     }else{
       /* Keep the app usable and allow a retry. */
-      var out=r.output?('<div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div>'):"";
+      var out=r.output?('<details class="upd-log"><summary>Git output</summary><div class="mono-line" style="white-space:pre;max-height:220px;overflow:auto;margin-top:4px">'+escapeHtml(r.output)+'</div></details>'):"";
+      /* The files that blocked the pull, one per line. */
+      var files=(r.files&&r.files.length)?('<ul class="upd-files">'+r.files.map(function(f){return '<li class="mono">'+escapeHtml(f)+'</li>';}).join("")+'</ul>'):"";
       if(btn){btn.disabled=false;btn.textContent="Update";}
       openModal("Update did not complete",
-        '<p class="modal-desc">'+escapeHtml(r.message||"git pull failed.")+'</p>'+out+
+        '<p class="modal-desc"><b>'+escapeHtml(r.message||"git pull failed.")+'</b></p>'+files+out+
         '<div class="cta"><button class="btn" onclick="closeModal()">Close</button></div>',true);
     }
   }).catch(function(){
@@ -3421,7 +3478,7 @@ function runGitPull(){
    e.g. "v1.4.11"). A "Quit the launcher" button is shown only when the safe quit
    endpoint exists (API.quit → clean shutdown of the launcher's OWN server, never any
    study); otherwise just the bold instruction stands. */
-function updateDoneHTML(output){
+function updateDoneHTML(output,restoredNote){
   var ver=UPDATE_REMOTE_VERSION?(" "+escapeHtml(UPDATE_REMOTE_VERSION)):"";
   var head=UPDATE_REMOTE_VERSION?("Update to"+ver+" downloaded"):"Update downloaded";
   var canQuit=!!(NATIVE&&API&&API.quit);
@@ -3439,6 +3496,7 @@ function updateDoneHTML(output){
       '<p class="upd-cta-title">Restart to activate the update</p>'+
       '<p class="upd-cta-note">Quit this window and reopen the launcher from the usual shortcut. It will start up on the new version.</p>'+
     '</div>'+
+    (restoredNote?'<p class="upd-restored">'+escapeHtml(restoredNote)+'</p>':'')+
     log+
   '</div>'+
   '<div class="cta">'+quitBtn+'<button class="btn'+(canQuit?"":" accent")+'" onclick="closeModal()">OK</button></div>';
@@ -3804,6 +3862,8 @@ function briefingSummaryHtml(b,launched){
      away, inside the popup on the shortcut/room pill (see below). */
   var html='<div class="bl-sumhead">'+(launched?'What launched':'What will launch')+'</div><div class="bl-sumcard">';
   if(shared)html+='<div class="caution-bar"><span>&#9650;</span><span>Caution: shared lab database. It may be reset between sessions. Download your data as soon as the experiment finishes.</span></div>';
+  /* The session's database is on another computer: say so plainly (grey). */
+  var dbNote=b.db_host_note?'<p class="bl-dbhost">Database: '+escapeHtml(b.db_label||"")+' <span class="db-host-note">'+escapeHtml(b.db_host_note)+'</span></p>':'';
   var linkRow=function(label,link){
     return '<p class="bl-linklabel">'+label+'</p><div class="bl-linkrow"><div class="mono-line" id="blLink">'+link+'</div>'+
       '<button class="btn tiny" onclick="blCopyLink(this)">Copy link</button></div>';
@@ -3819,6 +3879,7 @@ function briefingSummaryHtml(b,launched){
     '<div class="bl-labinfo" id="blLabInfo"><p>'+escapeHtml(labAboutText(b))+'</p>'+
     '<dl class="bl-kv more"><dt>Server</dt><dd class="mono">'+escapeHtml(b.host)+':'+escapeHtml(b.port||"8000")+'</dd>'+
     '<dt>Room</dt><dd class="mono">'+escapeHtml(b.room)+(b.open_room?' &nbsp;(open room, no seat list)':'')+'</dd></dl></div></details>';
+  html+=dbNote;
   /* 2. what to open on the participant computers. The rendering is the SAME
      pre-launch and on the running screen: the study-room shortcut pill keeps the
      exact per-seat link tucked inside its hover popup (never cluttering the card),
@@ -4542,6 +4603,7 @@ function initNative(state){
   var gs=state.github_sync||{};
   GITHUB_SYNC_ENABLED=!!gs.enabled;GITHUB_ORG=gs.org||"";
   applyGithubSyncButtons();
+  DB_LOCALHOST_ONLY=(state.databases_localhost_only!==false);
   loadFooterVersion();
 }
 /* Fill the sidebar footer's version line. IDENTITY ONLY -- no update check here
