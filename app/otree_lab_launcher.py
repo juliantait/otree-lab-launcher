@@ -15,6 +15,7 @@ Standard library only: Python 3 + tkinter/ttk.  No pip installs, no build step.
 
 from __future__ import annotations
 
+import collections
 import datetime as _dt
 import getpass
 import json
@@ -1725,6 +1726,12 @@ class LauncherApp(object):
         # are hooks: tests swap the checker and run it synchronously.
         self._update_checker = core.project_update_status
         self._update_check_async = True
+        # Every git command goes into the activity log with its duration. core
+        # calls the listener on whatever thread ran git, so lines are queued and
+        # the MAIN thread drains them (no Tk call from a worker thread).
+        self._git_log_queue = collections.deque(maxlen=500)
+        core.add_git_command_listener(self._queue_git_command)
+        self.root.after(400, self._drain_git_log)
         self._update_status = {}
         self._update_status_path = ""
         self._update_is_repo = False
@@ -3108,6 +3115,19 @@ class LauncherApp(object):
         )
         self.launch_button.grid(row=0, column=2, sticky="e")
 
+    def _queue_git_command(self, line, level):
+        self._git_log_queue.append((line, "warn" if level == "warn" else "info"))
+
+    def _drain_git_log(self):
+        """Main thread: move queued git lines into the activity log."""
+        try:
+            while self._git_log_queue:
+                line, level = self._git_log_queue.popleft()
+                self.log(line, level)
+            self.root.after(400, self._drain_git_log)
+        except (tk.TclError, RuntimeError, AttributeError):
+            pass
+
     def log(self, message, level="info", prefix=True):
         if threading.current_thread() is not threading.main_thread():
             # If the window has already gone, there is nowhere to log to and
@@ -3978,8 +3998,17 @@ class LauncherApp(object):
             self.log(message, "ok" if ok else "err")
             if ok and saved and callable(on_saved):
                 on_saved()
-        GithubLoginDialog(self.root, self.fonts, on_done=done, retry=retry,
-                          org=self.github_org)
+        self.make_github_login_dialog(self.root, done, retry=retry)
+
+    def make_github_login_dialog(self, parent, on_done, retry=False):
+        """The token dialog with this app's researcher roster (pick or type who
+        is adding the token; a new name joins the roster, as everywhere else)."""
+        return GithubLoginDialog(
+            parent, self.fonts, on_done=on_done, retry=retry, org=self.github_org,
+            researchers=core.list_researchers(self.store_extra, self.presets),
+            suggested_researcher=(str(self.store_extra.get("last_author", "")).strip()
+                                  or default_author()),
+            on_added_by=self._add_researcher)
 
     def _recheck_after_login(self):
         self._sync_update_check(self._current_project_path(), reselect=True)
@@ -4076,7 +4105,18 @@ class LauncherApp(object):
 
         GithubCloneDialog(self.root, self.fonts, self.github_org,
                           on_start=on_start, on_finish=self._on_clone_done,
-                          on_use_existing=self._use_existing_folder)
+                          on_use_existing=self._use_existing_folder,
+                          login_dialog=self.make_github_login_dialog,
+                          researchers=core.list_researchers(self.store_extra, self.presets),
+                          suggested_researcher=(str(self.store_extra.get("last_author", ""))
+                                                .strip() or default_author()),
+                          on_researcher=self._add_researcher)
+
+    def _add_researcher(self, name):
+        """A name used in a dialog joins the shared researcher roster (saved)."""
+        name = str(name or "").strip()
+        if name:
+            self._mutate_store(lambda: core.add_researcher(self.store_extra, name))
 
     def _use_existing_folder(self, path):
         """"Use that folder" in the clone dialog: the study is already on this
@@ -5990,10 +6030,15 @@ class GithubCloneDialog(object):
     """
 
     def __init__(self, parent, fonts, org, on_start, on_finish, on_use_existing=None,
-                 repo_lister=None):
+                 repo_lister=None, login_dialog=None, researchers=None,
+                 suggested_researcher="", on_researcher=None):
         self.parent = parent
+        # A new researcher name joins the shared roster (the app saves it).
+        self.on_researcher = on_researcher
         self.fonts = fonts
         self.org = org
+        # Opens the token dialog (the app's, with the researcher roster).
+        self.login_dialog = login_dialog
         self.on_start = on_start
         self.on_finish = on_finish
         self.on_use_existing = on_use_existing
@@ -6043,6 +6088,16 @@ class GithubCloneDialog(object):
         self.preview.pack(side="left", fill="x", expand=True)
         Tooltip(self.preview, self.target_path).attach(self.preview)
 
+        # Who gets the study (required): the shared researcher roster, pick or
+        # type. Recorded in this computer's clone log.
+        tk.Label(body, text="Researcher", bg=bg, fg=COLORS["muted"],
+                 font=fonts.small, anchor="w").pack(fill="x", pady=(10, 0))
+        self.who_var = tk.StringVar(top, value=str(suggested_researcher or ""))
+        self.who_combo = ttk.Combobox(body, textvariable=self.who_var,
+                                      values=list(researchers or []))
+        self.who_combo.pack(fill="x", pady=(2, 0))
+        self.who_var.trace_add("write", lambda *_a: self._on_input())
+
         self.busy = tk.Label(body, text="", bg=bg, fg=COLORS["text"],
                              font=fonts.small_bold, anchor="w")
         self.error = tk.Frame(body, bg=bg)
@@ -6073,6 +6128,10 @@ class GithubCloneDialog(object):
         if not self.alive or not result:
             return
         names = [r["name"] for r in (result.get("repos") or [])]
+        # Which token showed each name: a clone of a listed name skips its check.
+        self._listed = {r["name"].lower(): r.get("token_label")
+                        for r in (result.get("repos") or [])
+                        if r.get("token_label") is not None}
         try:
             self.entry.configure(values=names)
             if result.get("status") in ("empty", "rejected", "no_org") and result.get("message"):
@@ -6093,7 +6152,9 @@ class GithubCloneDialog(object):
         shown = full if len(full) <= 50 else "\u2026" + full[-49:]
         self.preview.configure(text=shown or "Choose a folder")
         if not self.running:
-            ready = bool(self.dest and self.repo_name())
+            who = getattr(self, "who_var", None)
+            ready = bool(self.dest and self.repo_name() and who is not None
+                         and who.get().strip())
             self.go_btn.configure(state="normal" if ready else "disabled")
 
     def pick_folder(self):
@@ -6111,7 +6172,7 @@ class GithubCloneDialog(object):
     def _set_busy(self, on, text=""):
         self.running = bool(on)
         state = "disabled" if on else "normal"
-        for widget in (self.entry, self.folder_btn, self.cancel_btn):
+        for widget in (self.entry, self.folder_btn, self.cancel_btn, self.who_combo):
             widget.configure(state=state)
         if on:
             self.go_btn.configure(state="disabled", text="Cloning...")
@@ -6140,6 +6201,11 @@ class GithubCloneDialog(object):
             self.error, text=action or message, bg=bg, fg=COLORS["error"],
             font=self.fonts.small_bold, anchor="w", justify="left", wraplength=420)
         self.error_action.pack(fill="x")
+        # The longer why (e.g. a slow first request) sits behind an info tip.
+        self.error_tip = info_tip(self.error, result["tip"], font=self.fonts.small) \
+            if result.get("tip") else None
+        if self.error_tip is not None:
+            self.error_tip.pack(anchor="w")
         quiet = message if action else result.get("hint")
         if quiet:
             tk.Label(self.error, text=quiet, bg=bg, fg=COLORS["muted"],
@@ -6177,6 +6243,9 @@ class GithubCloneDialog(object):
             self.on_use_existing(path)
 
     def open_login(self):
+        if callable(self.login_dialog):
+            self.login_dialog(self.top, self._login_saved, retry=True)
+            return
         GithubLoginDialog(self.top, self.fonts, on_done=self._login_saved, retry=True,
                           org=self.org)
 
@@ -6203,7 +6272,8 @@ class GithubCloneDialog(object):
             return
         typed = self.repo_var.get().strip()
         repo = self.repo_name()
-        if not repo or not self.dest:
+        who = self.who_var.get().strip()
+        if not repo or not self.dest or not who:
             return
         self._set_busy(True, "Checking that %s/%s exists ..."
                        % core.clone_target(self.org, typed))
@@ -6211,10 +6281,12 @@ class GithubCloneDialog(object):
         # Post back through the (always-alive) parent, not the dialog, so a
         # dialog closed mid-clone still gets its result delivered.
         org, dest, root = self.org, self.dest, self.parent
+        self._who = who
+        known = getattr(self, "_listed", {}).get(typed.lower())
 
         def worker():
             result = core.git_clone_org_repo(
-                org, typed, dest,
+                org, typed, dest, researcher=who, known_label=known,
                 on_phase=lambda phase: root.after(0, self._phase, phase))
             root.after(0, self._done, result)
 
@@ -6227,6 +6299,11 @@ class GithubCloneDialog(object):
 
     def _done(self, result):
         self.running = False
+        if result.get("ok") and result.get("path") and callable(self.on_researcher):
+            try:
+                self.on_researcher(getattr(self, "_who", ""))
+            except Exception:
+                pass
         if result.get("ok") and result.get("path"):
             self._close()
             self.on_finish(result, False)
@@ -6252,27 +6329,31 @@ class GithubCloneDialog(object):
 
 
 class GithubLoginDialog(object):
-    """THE GitHub login dialog (Lab Settings > GitHub, a failed clone, a failed
-    Git Pull, the "could not check" line).
+    """THE GitHub token dialog: ADDS one token to this computer (Lab Settings >
+    GitHub > Add token, a failed clone, a failed Git Pull, the "could not check"
+    line). A computer can hold several tokens; each is deleted on its own in
+    Settings.
 
-    Username + token go through core.github_save_login_checked on a worker
-    thread: core asks GitHub ONCE whether it accepts the token (a rejected one is
-    NOT stored), then hands the login to the SYSTEM credential store. Nothing
-    secret is written to a launcher file or the activity log, and the token
-    field is cleared as soon as it has been sent. Where the token is stored is
-    behind the info tip; "Create the token on GitHub" opens GitHub's own form,
-    prefilled. "Forget GitHub login" asks first (it stops cloning for everybody
-    on a shared PC). ``on_done(ok, message, saved)`` gets the outcome on the UI
-    thread after the dialog closed on success; ``saved`` is True when a login
-    was stored (the opener retries what failed: with ``retry`` the button reads
-    "Save and retry"). It opens on top of another modal and gives the grab back
-    to it when it closes.
+    Two fields: who is adding it (the shared researcher roster: pick or type; a
+    new name joins the roster through ``on_added_by(name)``) and the token. Save
+    runs core.github_add_token on a worker thread: core asks GitHub ONCE whether
+    it accepts the token (a rejected one is NOT stored), then hands it to the
+    SYSTEM credential store under its own label. Nothing secret is written to a
+    launcher file or the activity log, and the token field is cleared as soon as
+    it has been sent. Where tokens are stored is behind the info tip; "Create the
+    token on GitHub" opens GitHub's own form, prefilled. ``on_done(ok, message,
+    saved)`` gets the outcome on the UI thread after the dialog closed on
+    success; ``saved`` is True when a token was stored (the opener retries what
+    failed: with ``retry`` the button reads "Save and retry"). It opens on top of
+    another modal and gives the grab back to it when it closes.
     """
 
-    def __init__(self, parent, fonts, on_done=None, spawn=None, retry=False, org=""):
+    def __init__(self, parent, fonts, on_done=None, spawn=None, retry=False, org="",
+                 researchers=None, suggested_researcher="", on_added_by=None):
         self.parent = parent
         self.fonts = fonts
         self.on_done = on_done
+        self.on_added_by = on_added_by
         self._spawn = spawn or (lambda target: threading.Thread(
             target=target, name="github-login", daemon=True).start())
         self.busy = False
@@ -6293,20 +6374,22 @@ class GithubLoginDialog(object):
                                     core.github_platform_note()) if x)
         self.tip = info_tip(head, note, font=fonts.small)
         self.tip.pack(side="left")
-        tk.Label(body, text="Enter the GitHub username and a token, then Save.", bg=bg,
+        tk.Label(body, text=core.GITHUB_LOGIN_DIALOG_PROMPT, bg=bg,
                  fg=COLORS["text"], font=fonts.small_bold, anchor="w").pack(
             fill="x", pady=(6, 0))
-        tk.Label(body, text="GitHub username", bg=bg, fg=COLORS["muted"],
+        tk.Label(body, text=core.GITHUB_WHO_LABEL, bg=bg, fg=COLORS["muted"],
                  font=fonts.small, anchor="w").pack(fill="x", pady=(12, 0))
-        self.user_var = tk.StringVar(top)
-        self.user_entry = ttk.Entry(body, textvariable=self.user_var, width=44)
-        self.user_entry.pack(fill="x", pady=(2, 0))
+        self.who_var = tk.StringVar(top, value=str(suggested_researcher or ""))
+        self.who_combo = ttk.Combobox(body, textvariable=self.who_var,
+                                      values=list(researchers or []))
+        self.who_combo.pack(fill="x", pady=(2, 0))
         tk.Label(body, text="Token", bg=bg, fg=COLORS["muted"], font=fonts.small,
                  anchor="w").pack(fill="x", pady=(8, 0))
         row = tk.Frame(body, bg=bg)
         row.pack(fill="x", pady=(2, 0))
         self.token_var = tk.StringVar(top)
-        self.token_entry = ttk.Entry(row, textvariable=self.token_var, show=MASK_CHAR)
+        self.token_entry = ttk.Entry(row, textvariable=self.token_var, show=MASK_CHAR,
+                                     width=44)
         self.token_entry.pack(side="left", fill="x", expand=True)
         self.show_token = tk.BooleanVar(top, value=False)
         ttk.Checkbutton(row, text="Show", variable=self.show_token,
@@ -6325,9 +6408,6 @@ class GithubLoginDialog(object):
         self.message.pack(fill="x", pady=(8, 0))
         buttons = tk.Frame(body, bg=bg)
         buttons.pack(fill="x", pady=(10, 0))
-        self.forget_btn = ttk.Button(buttons, text=core.GITHUB_FORGET_LABEL,
-                                     command=self.forget)
-        self.forget_btn.pack(side="left")
         self.save_btn = ttk.Button(
             buttons, text=core.GITHUB_LOGIN_SAVE_RETRY_LABEL if retry else "Save",
             command=self.save)
@@ -6335,7 +6415,7 @@ class GithubLoginDialog(object):
         ttk.Button(buttons, text="Cancel", command=self.close).pack(side="right", padx=(0, 8))
         top.bind("<Return>", lambda _e: self.save())
         top.bind("<Escape>", lambda _e: self.close())
-        self.user_entry.focus_set()
+        (self.token_entry if self.who_var.get().strip() else self.who_combo).focus_set()
         _center_on(parent, top)
         _grab_modal(top)
 
@@ -6346,16 +6426,16 @@ class GithubLoginDialog(object):
     def _set_busy(self, on):
         self.busy = bool(on)
         state = "disabled" if on else "normal"
-        for widget in (self.save_btn, self.forget_btn):
-            widget.configure(state=state)
+        self.save_btn.configure(state=state)
 
     def save(self):
         if self.busy:
             return
-        user = self.user_var.get().strip()
+        who = self.who_var.get().strip()
         token = self.token_var.get().strip()
-        if not user or not token:
-            self.message.configure(text="Enter the GitHub username and the token.",
+        if not who or not token:
+            self.message.configure(text=core.GITHUB_TOKEN_WHO_MISSING if not who
+                                   else core.GITHUB_LOGIN_MISSING_MESSAGE,
                                    fg=COLORS["error"])
             return
         self.token_var.set("")   # sent; never kept in the dialog
@@ -6364,27 +6444,11 @@ class GithubLoginDialog(object):
         root = self.parent
 
         def worker():
-            result = core.github_save_login_checked(user, token)
-            root.after(0, self._finish, result, True)
+            result = core.github_add_token(token, who)
+            root.after(0, self._finish, result, True, who)
         self._spawn(worker)
 
-    def _confirm_forget(self):
-        """Forget is destructive on a shared lab PC: name the consequence first."""
-        return messagebox.askyesno(core.GITHUB_FORGET_LABEL, core.GITHUB_FORGET_CONFIRM,
-                                   default="no", parent=self.top)
-
-    def forget(self):
-        if self.busy or not self._confirm_forget():
-            return
-        self._set_busy(True)
-        root = self.parent
-
-        def worker():
-            result = core.github_forget_login_checked()
-            root.after(0, self._finish, result, False)
-        self._spawn(worker)
-
-    def _finish(self, result, saved=False):
+    def _finish(self, result, saved=False, who=""):
         self._set_busy(False)
         if not result.get("ok"):
             try:
@@ -6394,6 +6458,11 @@ class GithubLoginDialog(object):
                 pass
             return
         self.close()
+        if saved and who and callable(self.on_added_by):
+            try:
+                self.on_added_by(who)          # joins the shared researcher roster
+            except Exception:
+                pass
         if callable(self.on_done):
             _call_login_done(self.on_done, True, result.get("message", ""), saved)
 
@@ -6404,6 +6473,82 @@ class GithubLoginDialog(object):
         try:
             if isinstance(self.parent, tk.Toplevel) and self.parent.winfo_exists():
                 self.parent.grab_set()
+        except tk.TclError:
+            pass
+
+
+class CloneHistoryDialog(object):
+    """"Studies from <org> on this computer": the clone log (core.clone_history_rows),
+    newest first. Per row: repository, researcher, folder (marked when it no
+    longer exists), date, **Open folder** and **Use as study** (off for a folder
+    that is gone). Read-only: nothing is edited or deleted here."""
+
+    def __init__(self, parent, fonts, org, on_use=None, opener=None):
+        self.on_use = on_use
+        self.opener = opener
+        self.rows = core.clone_history_rows()
+        title = core.CLONE_HISTORY_LINK_LABEL % (org or "GitHub")
+        top = self.top = tk.Toplevel(parent)
+        top.title(title)
+        top.configure(bg=COLORS["card"])
+        top.transient(parent)
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        bg = COLORS["card"]
+        body = tk.Frame(top, bg=bg)
+        body.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(body, text=title, bg=bg, fg=COLORS["text"], font=fonts.bold,
+                 anchor="w").grid(row=0, column=0, columnspan=6, sticky="w")
+        self.widgets = []
+        if not self.rows:
+            tk.Label(body, text=core.CLONE_HISTORY_EMPTY_TEXT, bg=bg, fg=COLORS["muted"],
+                     font=fonts.body, anchor="w").grid(row=1, column=0, columnspan=6,
+                                                       sticky="w", pady=(10, 0))
+        else:
+            for col, head in enumerate(("Repository", "Researcher", "Folder", "Date")):
+                tk.Label(body, text=head, bg=bg, fg=COLORS["muted"], font=fonts.small_bold,
+                         anchor="w").grid(row=1, column=col, sticky="w", padx=(0, 12),
+                                          pady=(10, 4))
+        for index, row in enumerate(self.rows, start=2):
+            name = row["name"] + ("  (fresh copy)" if row["fresh_copy"] else "")
+            folder = row["folder"] + ("" if row["exists"] else
+                                      "  (%s)" % core.CLONE_FOLDER_MISSING_TEXT)
+            cells = [tk.Label(body, text=text, bg=bg, anchor="w", font=font,
+                              fg=COLORS["warn"] if (col == 2 and not row["exists"])
+                              else COLORS["text"])
+                     for col, (text, font) in enumerate(((name, fonts.body),
+                                                         (row["researcher"], fonts.body),
+                                                         (folder, fonts.mono),
+                                                         (row["date"], fonts.small)))]
+            for col, cell in enumerate(cells):
+                cell.grid(row=index, column=col, sticky="w", padx=(0, 12), pady=1)
+            state = "normal" if row["exists"] else "disabled"
+            open_btn = ttk.Button(body, text="Open folder", style="Slim.TButton",
+                                  state=state, command=lambda r=row: self.open(r))
+            open_btn.grid(row=index, column=4, padx=(0, 6))
+            use_btn = ttk.Button(body, text="Use as study", style="Slim.TButton",
+                                 state=state, command=lambda r=row: self.use(r))
+            use_btn.grid(row=index, column=5)
+            self.widgets.append({"row": row, "cells": cells, "open": open_btn,
+                                 "use": use_btn})
+        ttk.Button(body, text="Close", command=self.close).grid(
+            row=len(self.rows) + 3, column=0, columnspan=6, sticky="e", pady=(14, 0))
+        top.bind("<Escape>", lambda _e: self.close())
+        _center_on(parent, top)
+        _grab_modal(top)
+
+    def open(self, row):
+        return core.open_folder(row["folder"], opener=self.opener)
+
+    def use(self, row):
+        self.close()
+        if callable(self.on_use):
+            self.on_use(row["folder"])
+
+    def close(self):
+        _modal_close(self.top)
+        try:
+            if isinstance(self.top.master, tk.Toplevel) and self.top.master.winfo_exists():
+                self.top.master.grab_set()
         except tk.TclError:
             pass
 
@@ -9139,17 +9284,18 @@ class LabSettingsDialog(object):
     def _build_github_sync_card(self, outer, row):
         """The GitHub section, collapsed like the others:
 
-            GitHub (i)   demo-lab · login lab-account · token until 30 Sep 2027   [Edit]
+            GitHub (i)   demo-lab · token added 1 Oct 2026 by Julian · valid until …   [Edit]
 
         Inside: the organisation name (the WHOLE setting: a name shows the GitHub
-        button, an empty field hides it; a lab setting in lab_info.json) and who
-        is logged in on this computer, with the ONE "GitHub login…" button
-        (Forget lives inside that dialog). The explanation is behind the tip."""
+        button, an empty field hides it; a lab setting in lab_info.json) and this
+        computer's tokens, one row each with Delete (it asks first, naming who
+        added it and when), and "Add token". Never a GitHub account name. The
+        explanation is behind the tip."""
         fonts = self.fonts
         card = self._card(outer, row, "github", "GitHub", "github")
         body = card.body
         body.columnconfigure(1, weight=1)
-        self._github_stored = None            # the stored login, once looked up
+        self._github_tokens = None            # this computer's tokens, once looked up
         on = self.app._clone_enabled()
         self.gh_org_var = tk.StringVar(
             self.top, value=str(getattr(self.app, "github_org", "") or "") if on else "")
@@ -9163,17 +9309,28 @@ class LabSettingsDialog(object):
         self.gh_status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["faint"],
                                   font=fonts.small, anchor="w")
         self.gh_status.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        tk.Label(body, text="Login", bg=COLORS["card"], fg=COLORS["text"],
-                 font=fonts.body, anchor="w").grid(row=2, column=0, sticky="w")
-        login_row = tk.Frame(body, bg=COLORS["card"])
-        login_row.grid(row=2, column=1, sticky="ew", padx=(10, 0))
-        self.gh_login_who = tk.Label(login_row, text="…", bg=COLORS["card"],
-                                     fg=COLORS["text"], font=fonts.body, anchor="w")
-        self.gh_login_who.pack(side="left")
-        self.gh_login_btn = ttk.Button(login_row, text=core.GITHUB_LOGIN_ACTION_LABEL,
+        tk.Label(body, text=core.GITHUB_TOKENS_ROW_LABEL, bg=COLORS["card"],
+                 fg=COLORS["text"], font=fonts.body, anchor="nw").grid(
+            row=2, column=0, sticky="nw")
+        tokens_box = tk.Frame(body, bg=COLORS["card"])
+        tokens_box.grid(row=2, column=1, sticky="ew", padx=(10, 0))
+        # One row per token ("Token, added <date> by <researcher>" + Delete),
+        # filled by _refresh_gh_status once the tokens are known.
+        self.gh_tokens_frame = tk.Frame(tokens_box, bg=COLORS["card"])
+        self.gh_tokens_frame.pack(fill="x")
+        self.gh_token_rows = []
+        self.gh_login_btn = ttk.Button(tokens_box, text=core.GITHUB_ADD_TOKEN_LABEL,
                                        style="Slim.TButton",
                                        command=self._open_github_login)
-        self.gh_login_btn.pack(side="left", padx=(10, 0))
+        self.gh_login_btn.pack(anchor="w", pady=(4, 0))
+        # The clone log of this computer: which studies are here, who got them.
+        self.gh_history_link = tk.Label(
+            body, text=core.CLONE_HISTORY_LINK_LABEL % (getattr(self.app, "github_org", "")
+                                                         or "GitHub"),
+            bg=COLORS["card"], fg=COLORS["accent"], font=fonts.small, cursor="hand2",
+            anchor="w")
+        self.gh_history_link.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.gh_history_link.bind("<Button-1>", lambda _e: self.open_clone_history())
         self.gh_login_status = tk.Label(body, text="", bg=COLORS["card"],
                                         fg=COLORS["faint"], font=fonts.small, anchor="w",
                                         justify="left", wraplength=560)
@@ -9181,8 +9338,33 @@ class LabSettingsDialog(object):
         self._refresh_gh_status()
 
     def _open_github_login(self):
+        make = getattr(self.app, "make_github_login_dialog", None)
+        if callable(make):
+            make(self.top, self._github_login_done)
+            return
         GithubLoginDialog(self.top, self.fonts, on_done=self._github_login_done,
                           org=getattr(self.app, "github_org", ""))
+
+    def open_clone_history(self):
+        use = getattr(self.app, "_use_existing_folder", None)
+
+        def use_folder(path):
+            self._close()
+            if callable(use):
+                use(path)
+        return CloneHistoryDialog(self.top, self.fonts,
+                                  getattr(self.app, "github_org", ""), on_use=use_folder)
+
+    def _confirm_delete_token(self, row):
+        return messagebox.askyesno(core.GITHUB_DELETE_TOKEN_LABEL, row["confirm"],
+                                   default="no", parent=self.top)
+
+    def _delete_github_token(self, row):
+        """Delete ONE token; it asks first, naming who added it and when."""
+        if not self._confirm_delete_token(row):
+            return
+        result = core.github_delete_token(row["id"])
+        self._github_login_done(bool(result.get("ok")), result.get("message", ""))
 
     def _github_login_done(self, ok, message, saved=False):
         try:
@@ -9211,33 +9393,58 @@ class LabSettingsDialog(object):
                 status.config(text=("On for %s. Saved in the lab settings."
                                     % self.app.github_org) if on
                               else "Off. Saved in the lab settings.")
-            stored = self._github_stored
+            tokens = self._github_tokens
             sync = {"enabled": self.app.github_sync_enabled, "org": self.app.github_org}
-            info = core.github_login_info()
-            summary = core.github_summary(sync, stored, info) if stored is not None \
+            summary = core.github_summary(sync, tokens) if tokens is not None \
                 else (self.app.github_org if on else "Off")
             self.cards["github"].set_summary(
-                summary, warn=bool(on and stored is not None and not stored.get("has_login")))
-            if stored is not None:
-                who = (stored.get("username") or "a login is stored") \
-                    if stored.get("has_login") else "No login on this computer"
-                self.gh_login_who.configure(text=who)
+                summary, warn=bool(on and tokens is not None and not tokens))
+            if tokens is not None:
+                self._render_github_tokens(tokens)
         except (tk.TclError, KeyError):
             pass
 
-    def _refresh_github(self, may_open=False):
-        """Ask git's credential store who is logged in (in the background), then
-        repaint the summary. An organisation that is set but has no login on this
-        computer is a to-do: with ``may_open`` the section opens itself when no
-        other section is open."""
-        lookup = getattr(self.app, "_github_login_lookup", None) or core.github_stored_login
+    def _render_github_tokens(self, tokens):
+        """One row per token: "Token, added <date> by <researcher> · valid until
+        <date>" and its Delete button."""
+        frame = self.gh_tokens_frame
+        for child in list(frame.winfo_children()):
+            child.destroy()
+        self.gh_token_rows = []
+        if not tokens:
+            tk.Label(frame, text=core.GITHUB_NO_TOKENS_TEXT, bg=COLORS["card"],
+                     fg=COLORS["muted"], font=self.fonts.body, anchor="w").pack(fill="x")
+            return
+        for entry in tokens:
+            row = {"id": entry["id"], "text": core.github_token_text(entry),
+                   "confirm": core.github_delete_confirm_text(entry)}
+            line = tk.Frame(frame, bg=COLORS["card"])
+            line.pack(fill="x", pady=(0, 2))
+            label = tk.Label(line, text=row["text"], bg=COLORS["card"],
+                             fg=COLORS["text"], font=self.fonts.body, anchor="w")
+            label.pack(side="left")
+            button = ttk.Button(line, text=core.GITHUB_DELETE_TOKEN_LABEL,
+                                style="Slim.TButton",
+                                command=lambda r=row: self._delete_github_token(r))
+            button.pack(side="left", padx=(10, 0))
+            row.update(label=label, button=button)
+            self.gh_token_rows.append(row)
 
-        def done(stored):
-            self._github_stored = stored or {"has_login": False, "username": ""}
+    def _refresh_github(self, may_open=False):
+        """Look up this computer's tokens (in the background: an older single
+        login in git's credential store is taken over as one token), then repaint
+        the summary and the list. An organisation that is set but has no token on
+        this computer is a to-do: with ``may_open`` the section opens itself when
+        no other section is open."""
+        lookup = getattr(self.app, "_github_tokens_lookup", None) or \
+            (lambda: core.github_tokens(adopt=True))
+
+        def done(tokens):
+            self._github_tokens = list(tokens or [])
             self._refresh_gh_status()
             try:
                 if may_open and self.app._clone_enabled() \
-                        and not self._github_stored.get("has_login") \
+                        and not self._github_tokens \
                         and not any(card.is_open for card in self.cards.values()):
                     self.cards["github"].set_open(True)
             except (tk.TclError, KeyError):

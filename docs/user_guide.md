@@ -33,8 +33,8 @@ update never touches it:
 - **`machine.json` - this computer only.** Which lab this computer is, which
   labs it shows, the light/dark theme, the Postgres superuser login, and this
   computer's databases with their passwords (plus the folder GitHub studies were
-  last saved into and the GitHub login's username and token expiry date, never
-  the token). Never copy it to another computer.
+  last saved into and, per GitHub token, who added it, when and its expiry
+  date, never the token). Never copy it to another computer.
 - **`saved_configs.json` - this computer's saved configs.** Each config points at
   one of this computer's databases by name (id) and keeps its own oTree admin
   login.
@@ -165,14 +165,19 @@ takes the setup.
      **type the organisation name**. That is the whole setting (an empty field
      is off). It is a lab setting, saved in `data/lab_info.json`, so it travels
      with that file.
-   - **Still in that section, click "GitHub login…"**, enter the lab account and
-     its read-only token, and **Save**. **Create the token on GitHub** in that
+   - **Still in that section, click "Add token"**, pick who you are under
+     **Added by**, paste the lab account's read-only token (no GitHub username
+     needed), and **Save**. **Create the token on GitHub** in that
      dialog opens GitHub's own form already filled in (the organisation,
      *Contents: Read-only*, the expiry): choose *All repositories*, generate,
      copy, paste. The launcher **asks GitHub once whether the token is right**:
      a wrong one is not saved (*"GitHub did not accept this token… Nothing was
-     saved."*). **Never** use a personal account on a shared PC; the Settings
-     line shows who is logged in, so anyone can check.
+     saved."*). **A computer can hold several tokens** (the lab token, plus a
+     researcher's own for a private repository): Settings lists each as
+     *Token, added <date> by <name>*, with **Delete** (it asks first, naming
+     who added it and when). Getting a study uses the first token that can
+     open it. **Never** use a personal account's token on a shared PC unless
+     its owner deletes it again afterwards.
 
    **The full step-by-step setup is in
    [GitHub: setup and use](github_org_sync.md)** (organisation settings, the lab
@@ -180,9 +185,9 @@ takes the setup.
    moving repos between organisations, troubleshooting).
    **The launcher never keeps a token itself**: the login goes to the computer's
    own credential store (Windows Credential Manager, the macOS Keychain). The
-   launcher remembers only the username and the token's **expiry date**, and
-   warns from 14 days before it (*"The GitHub token on this computer expires on
-   …"*). Git never asks for a login by itself, on Windows or on a Mac: the
+   launcher remembers only who added each token, when, and its **expiry date**,
+   and warns from 14 days before it (*"The GitHub token added 1 Oct 2026 by
+   Julian expires on …"*). Git never asks for a login by itself, on Windows or on a Mac: the
    **GitHub login…** dialog is the one place for it, and it is offered wherever
    a login is what is missing.
 
@@ -191,8 +196,8 @@ takes the setup.
    and git's own output in a collapsed **Git output** block:
 
    - **Get a study.** Click **GitHub**, **pick the study from the list** (the
-     organisation's repositories this computer's login can see) or type its
-     name, and press **Enter**. The folder it is saved into is already filled in
+     organisation's repositories this computer's tokens can see) or type its
+     name, **pick your name under Researcher** (required), and press **Enter**. The folder it is saved into is already filled in
      (the one used last time, else the launcher's git-ignored `local/` folder);
      **Change…** picks another. On success the dialog closes and the new folder
      is selected. If something is wrong the dialog **stays open**, says what to
@@ -202,6 +207,11 @@ takes the setup.
      or choose another folder* when the study is **already on this computer**
      (**Use that folder** selects it); *Add a GitHub login for this computer*.
      After a login is saved from here, the clone is retried by itself.
+   - **Which studies are on this computer.** **Settings -> GitHub -> Studies
+     from <org> on this computer** lists each study cloned here (and each fresh
+     copy): repository, researcher, folder, date, with **Open folder** and **Use
+     as study**. A folder that is gone is marked *folder no longer exists*. The
+     log stays on this computer (`data/clone_history.jsonl`).
    - **Is this study up to date?** Every study folder that is a git repository
      is checked in the background when it is selected, and again when Launch is
      pressed if the last check is more than ten minutes old (**whether or not
@@ -305,6 +315,35 @@ Three things, in order. Read the first line of each, do it, and move on. The
 
 *Note:* the GitHub button is only there if your lab manager has set the lab's
 GitHub organisation in Settings. If it does not work, ask your lab manager.
+
+#### Bring your study to the lab with GitHub
+
+If your study lives in a GitHub repository, you do not need a USB stick.
+(Details and screenshots of GitHub's side: [GitHub: setup and
+use](github_org_sync.md).)
+
+1. **Add your study to the lab's GitHub organisation** (`<your-org>`). Ask the
+   lab manager to give you access first. Then create an empty repository there
+   and push your study into it:
+   [section 4 of the GitHub guide](github_org_sync.md#4-researcher-put-a-study-into-the-organisation).
+2. **On the lab computer: click GitHub, pick `<your-study>` from the list (or
+   type its name), choose your name under Researcher, press Clone.** The study
+   is saved on that computer and selected at once.
+3. **It stays up to date.** Each time the study is selected, the launcher
+   checks GitHub. If there is a newer version, it says so: **click Update**.
+   **Git Pull** does the same by hand.
+4. **Optional, on your own computer: one push updates both copies.** In your
+   study folder, after the first push of step 1:
+
+   ```
+   git remote set-url --add --push origin <your current URL>
+   git remote set-url --add --push origin https://github.com/<your-org>/<your-study>.git
+   ```
+
+   **Run the first line too**: as soon as a push URL is added, git stops
+   pushing to the original unless it is added back. `git remote -v` should show
+   two `(push)` lines. From then on, every `git push` goes to your own copy AND
+   the lab copy. `git pull` still comes from your own copy.
 
 **(ii) Save or pick a config.** A config is your study's saved settings (folder,
 lab, database, seats). Saving one with **Save as new config...** (top right)

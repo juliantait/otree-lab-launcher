@@ -14,10 +14,10 @@ launcher, with no terminal.
 **On each lab PC, once, in the launcher** (sections 3 and 5a):
 
 1. **Gear -> Settings -> GitHub -> Edit. Type the organisation name.**
-2. **Click "GitHub login…"**, then **"Create the token on GitHub"** (signed in
+2. **Click "Add token"**, then **"Create the token on GitHub"** (signed in
    as the lab account): choose *All repositories*, generate, copy.
-3. **Paste the username and the token, Save.** The launcher checks the token
-   with GitHub before it stores it.
+3. **Pick who you are under "Added by", paste the token, Save.** The launcher
+   checks the token with GitHub before it stores it.
 
 **Researcher** (sections 4 and 5):
 
@@ -38,7 +38,7 @@ that the shared lab PCs use (sections 2.5 and 3a). Replace them with your own.
 
 1. [What an organisation is, and why use one](#1-what-an-organisation-is-and-why-use-one)
 2. [Lab manager: set up the organisation](#2-lab-manager-set-up-the-organisation)
-3. [Give each computer a GitHub login](#3-give-each-computer-a-github-login)
+3. [Give each computer a GitHub token](#3-give-each-computer-a-github-token)
 4. [Researcher: put a study into the organisation](#4-researcher-put-a-study-into-the-organisation)
 5. [Using it in the launcher](#5-using-it-in-the-launcher)
 6. [Good practice](#6-good-practice)
@@ -103,19 +103,23 @@ Do this once, on the GitHub website.
 
 ---
 
-## 3. Give each computer a GitHub login
+## 3. Give each computer a GitHub token
 
 Git needs a stored GitHub login to open the organisation's private repos. It is
 set up **once per computer** and stored by the operating system (Windows
 Credential Manager, the macOS Keychain). The launcher itself **never stores a
-token**: it hands what you type to that system store and runs git, which uses
-what the computer has stored. The launcher remembers only the **username** and
-the token's **expiry date**.
+token**: it hands what you paste to that system store and runs git, which uses
+what the computer has stored. **No GitHub username is asked for or shown.** For
+each token the launcher remembers only **who added it** (a name from the
+researcher list), **when**, and the token's **expiry date**; Settings shows it as
+*Token, added 1 Oct 2026 by Julian · valid until 30 Sep 2027*. **A computer can
+hold several tokens** (3d).
 
 **Git never asks for a login by itself**, on Windows or on a Mac: the launcher
 runs git with every prompt switched off, so no sign-in window can pop up in the
 middle of a session. With no login stored, a clone or an update says so and
-offers **GitHub login…**, the one dialog for it.
+offers **GitHub login…**, which opens the one dialog for it (**Add a GitHub
+token**; in Settings the same dialog is **Add token**).
 
 **Which login to use:**
 
@@ -143,7 +147,7 @@ you allow. One token, made by the lab account, serves every lab PC.
 **Create the token (lab manager, once)**
 
 1. **Sign in to GitHub as `<lab-account>`.**
-2. In the launcher: **gear -> Settings -> GitHub -> GitHub login… -> Create the
+2. In the launcher: **gear -> Settings -> GitHub -> Add token -> Create the
    token on GitHub.** GitHub's form opens **already filled in**: the
    organisation as *Resource owner*, *Contents: Read-only* (GitHub adds
    *Metadata: Read-only* itself) and the expiry.
@@ -159,22 +163,26 @@ Fine-grained tokens -> Generate new token*, with the same choices.
 
 **Store it on each lab PC (once)**
 
-1. **Gear -> Settings -> GitHub -> GitHub login…**
-2. **Enter `<lab-account>` and paste the token. Save.**
+1. **Gear -> Settings -> GitHub -> Add token**
+2. **Added by: pick your name** from the list (or type a new one; it joins the
+   researcher list). **Paste the token. Save.** (No GitHub username: GitHub
+   ignores it for a token.)
 
 The launcher asks GitHub once whether it accepts the token:
 
 | It says | Meaning |
 |---|---|
-| **Saved… GitHub accepts it. The token is valid until 30 Sep 2027.** | Stored. The Settings line now reads *`<your-org>` · login `<lab-account>` · token until 30 Sep 2027*. |
+| **Token saved, added by Julian. GitHub accepts it. Valid until 30 Sep 2027.** | Stored. Settings lists *Token, added 1 Oct 2026 by Julian · valid until 30 Sep 2027*. |
 | **GitHub did not accept this token (mistyped, expired or revoked). Nothing was saved.** | Paste it again, or make a new one. |
-| **Saved… Not checked: GitHub could not be reached.** | Stored without the check (the PC was offline). |
+| **Token saved, added by Julian. Not checked: GitHub could not be reached.** | Stored without the check (the PC was offline); no expiry date is shown for it. |
+| **This token is already on this computer (added … by …). Nothing new was saved.** | Nothing to do. |
 
 **Renewing.** From **14 days before the expiry date** the launcher shows an
 amber notice when it starts (*"The GitHub token on this computer expires on …"*).
 On GitHub, as `<lab-account>`, **open the token and click "Regenerate token"**
-(same settings, new value and expiry), then on each lab PC **GitHub login…**,
-paste, Save. Saving a login replaces the old one.
+(same settings, new value and expiry), then on each lab PC **Add token**, paste,
+Save, and **Delete** the old one in the list. The start-up notice names the
+token (*"The GitHub token added 1 Oct 2026 by Julian expires on …"*).
 
 **Revoke it** (a PC is lost, or the token leaked): **delete the token** on
 GitHub under the lab account's *Settings -> Developer settings -> Fine-grained
@@ -183,9 +191,9 @@ Personal access tokens -> Active tokens*. It stops working immediately; then
 issue a new one.
 [GitHub: reviewing and revoking tokens](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/reviewing-and-revoking-personal-access-tokens-in-your-organization)
 
-**Forget the login on a PC:** **GitHub login… -> Forget GitHub login**. It asks
-first, because cloning and updating stop on that PC until a login is added
-again.
+**Remove a token from a PC:** **Settings -> GitHub**, **Delete** next to that
+token. It asks first, naming who added it and when, because studies only that
+token can open stop updating on that PC.
 
 ### 3b. A researcher's own computer
 
@@ -195,8 +203,7 @@ do**: the launcher's git reuses that sign-in.
 
 Otherwise either:
 
-- **In the launcher:** **GitHub login…**, your own username and a token of your
-  own, Save. Or
+- **In the launcher:** **Add token**, your name, a token of your own, Save. Or
 - **Sign in once outside the launcher**, then use the launcher:
   - **Windows:** install [Git for Windows](https://git-scm.com/download/win)
     (default options include Git Credential Manager), clone any private repo of
@@ -206,19 +213,43 @@ Otherwise either:
     **`gh auth login`** (GitHub.com, HTTPS, authenticate git: Yes, web
     browser), then **`gh auth setup-git`**.
 
-**Switch account:** **GitHub login…** with the other login (it replaces the
-stored one), or **Forget GitHub login** there.
+**Switch account:** **Add token** with the other token, then **Delete** the old
+one.
 
 ### 3c. Without the launcher's dialog (fallback)
 
 The dialog needs git's credential store, which Git for Windows and the git that
 comes with macOS both have. If the launcher says *"git on this computer has no
 credential store set up"*, or you prefer a terminal: clone any study of the
-organisation once in *Git Bash* / *Terminal* and enter `<lab-account>` as the
-username and the token as the password; the system stores it. To remove a
+organisation once in *Git Bash* / *Terminal*; when git asks, enter
+`<lab-account>` as the username (GitHub ignores it for a token, any name works)
+and the token as the password; the system stores it. To remove a
 stored login by hand: Windows **Control Panel -> Credential Manager -> Windows
 Credentials**, remove `git:https://github.com`; macOS **Keychain Access**,
-search `github.com`, delete the entry.
+search `github.com`, delete the entry. A login added this way shows in
+Settings as *Token, added before <date> by unknown*.
+
+### 3d. Several tokens on one computer
+
+A computer can hold **several tokens**: the lab's read-only token plus, for
+example, a researcher's own token for a private repository of their own.
+**Settings -> GitHub** lists each one by **who added it and when**; **Add token**
+adds one, **Delete** removes one.
+
+**Which token git uses:**
+
+- **Getting a study** tries the tokens in the order they were added (then a
+  login stored outside the launcher) and uses the **first one that can open
+  it**. That token is remembered in the study folder's link to GitHub, so its
+  updates use the same token by themselves.
+- **Update / the update check:** if GitHub refuses that token (it was deleted,
+  or the folder was cloned before), the launcher tries this computer's other
+  tokens for that one update. Nothing in the study folder changes.
+- **The study list** in the GitHub dialog shows what **any** of the tokens can
+  see.
+
+A login stored **before** this version (one login per computer) keeps working
+and shows as one token *"added before <date> by unknown"* until it is deleted.
 
 ---
 
@@ -267,6 +298,9 @@ git push lab --tags
 From then on, `git push lab` sends new work to the lab copy. (Use your branch
 name if it is not `main`.)
 
+Or let every plain `git push` update both copies: see *Bring your study to the
+lab with GitHub* in the [user guide](user_guide.md#bring-your-study-to-the-lab-with-github).
+
 [GitHub: add local code to GitHub](https://docs.github.com/en/migrations/importing-source-code/using-the-command-line-to-import-source-code/adding-locally-hosted-code-to-github)
 
 **Alternative: Import repository.** On GitHub, **+ → Import repository** copies
@@ -293,9 +327,9 @@ use the second-remote route above. See also section 7.
 It is a lab setting, saved with the rest of the lab setup in
 `data/lab_info.json` (keys `github_sync_enabled` and `github_org`), so it
 travels with that file: every computer of the lab that uses the same
-`lab_info.json` gets it. The login does **not** travel (it is per computer): on
-a PC that has the organisation but no login, the Settings line reads
-*`<your-org>` · no login on this computer* and the section opens itself.
+`lab_info.json` gets it. The tokens do **not** travel (they are per computer):
+on a PC that has the organisation but no token, the Settings line reads
+*`<your-org>` · no token on this computer* and the section opens itself.
 
 A **GitHub** button now appears next to **Browse**.
 
@@ -305,7 +339,11 @@ A **GitHub** button now appears next to **Browse**.
 2. **Pick the study** from the list (the organisation's repositories this
    computer's login can see), or **type its name**. Pasting a full GitHub link
    works too, also for a repository outside the organisation.
-3. **Press Enter** (or **Clone**).
+3. **Researcher: pick your name** (or type a new one; it joins the researcher
+   list). It is required: the computer keeps a log of who got which study (5f).
+4. **Press Enter** (or **Clone**).
+
+A study **picked from the list** is cloned straight away: the list already proved this computer's token can read it. A typed name or a pasted link is checked first (at most 20 s).
 
 **Saves to** shows the folder that will be created. It is already filled in:
 the folder used last time on this computer, and the first time the launcher's
@@ -321,7 +359,8 @@ Git's own output sits in a collapsed **Git output** block if you need it.
 | The dialog says (bold) | What it means | What to do |
 |---|---|---|
 | **Check the name, or use another GitHub login.** | No repository of that name, **or** this PC's login has no access to it. **A login without access looks exactly like a missing repo**: GitHub gives the same answer for both, on purpose. | **Check the spelling first** (or pick from the list). If it is right: is the repo owned by the organisation (section 4a)? Is this PC's token for this organisation (sections 2, 3)? **GitHub login…** right there changes the login and retries. |
-| **Add a GitHub login for this computer.** | No login is stored, or it was not accepted (expired or revoked token). | **Click GitHub login…**, enter a valid login, **Save and retry**. |
+| **GitHub did not answer in time. If a system window asked for permission (Keychain / Credential Manager), allow it and press Retry.** | The check took more than 20 s. Usually the first GitHub request on a computer: Git Credential Manager starting up on Windows, or a Keychain question on a Mac hidden behind the launcher. | **Look for that window, allow it, press Retry** (it is usually quick the second time). The activity log lists every git step with how long it took. |
+| **Add a GitHub login for this computer.** | No login is stored, or it was not accepted (expired or revoked token). | **Click GitHub login…**, add a valid token, **Save and retry**. |
 | **Use that folder, or choose another folder.** | The study is already on this computer. | **Click Use that folder**: it is selected, and the update check says whether it is behind. |
 | **Could not reach GitHub.** | No network. | **Check the internet connection**, then Retry. |
 
@@ -396,7 +435,20 @@ folder stays exactly as it is (delete it yourself once you are sure nothing in
 it is needed).
 
 A fresh copy that does not yet carry the lab block gets the usual **Get ready
-for the lab** offer.
+for the lab** offer. It is added to this computer's clone log (5f) as a fresh
+copy, under the researcher who got the old folder.
+
+### 5f. Which studies are on this computer
+
+**Settings -> GitHub -> Studies from `<your-org>` on this computer** lists every
+study cloned on this computer (and every fresh copy), newest first:
+repository, **researcher**, folder, date. A folder that has since been deleted
+or moved is marked *folder no longer exists*. Per row: **Open folder** (in
+Explorer / Finder) and **Use as study** (selects it, like Browse).
+
+The log is `data/clone_history.jsonl` on this computer (one line per clone,
+never copied to other PCs, never committed). It records which token was used by
+its label only, never the token.
 
 ---
 
@@ -451,11 +503,11 @@ What carries over, and what you must redo:
   permission Read, and allow fine-grained tokens there too (section 2).
 - **A token belongs to one organisation, so make a new one.** The old lab token
   (resource owner = the old organisation) cannot read the new one. **Create a
-  new token with the new organisation as resource owner** (3a) and **store it on
-  each lab PC** with **GitHub login…** (it replaces the old one).
+  new token with the new organisation as resource owner** (3a), **add it on each
+  lab PC** (**Add token**) and **Delete** the old one there.
 - **Update the launcher:** in **Settings → GitHub**, **change the organisation
-  name** (once, in the `lab_info.json` the lab PCs share) and store the new
-  token on each lab PC with **GitHub login…**.
+  name** (once, in the `lab_info.json` the lab PCs share) and add the new token
+  on each lab PC with **Add token**.
 - **Never create a new repo with the old name in the old organisation.** That
   breaks the redirect, and old clones would start pulling from the new, unrelated
   repo.
@@ -472,9 +524,9 @@ What carries over, and what you must redo:
 
 | Message | Likely cause | Fix |
 |---|---|---|
-| **Check the name, or use another GitHub login.** (clone) / *GitHub has no such repository …* (update) | Name misspelt, repo not in the organisation, or this PC's login has no access to it: the token is for a different organisation, not approved yet, or the account is not a member (a private repo looks "missing" to a login without access). | Pick the study from the list instead of typing; check the repo's owner is `<your-org>`; check this PC's login in **Settings → GitHub**, or change it with **GitHub login…**. |
-| **Add a GitHub login for this computer.** / **GitHub did not accept this computer's login** / **Could not check for a newer version: the login was not accepted.** | **The lab token expired or was revoked**, is still waiting for owner approval, or no login is stored. | **GitHub login…** (it is offered right there): store a valid login. Lab manager: regenerate the token first (3a). |
-| **GitHub did not accept this token (mistyped, expired or revoked). Nothing was saved.** | The token pasted into the login dialog is wrong. | Paste it again; if it still fails, make a new one (**Create the token on GitHub**). |
+| **Check the name, or use another GitHub login.** (clone) / *GitHub has no such repository …* (update) | Name misspelt, repo not in the organisation, or this PC's login has no access to it: the token is for a different organisation, not approved yet, or the account is not a member (a private repo looks "missing" to a login without access). | Pick the study from the list instead of typing; check the repo's owner is `<your-org>`; check this PC's tokens in **Settings → GitHub**, or add one with **GitHub login…**. |
+| **Add a GitHub login for this computer.** / **GitHub did not accept this computer's login** / **Could not check for a newer version: the login was not accepted.** | **The lab token expired or was revoked**, is still waiting for owner approval, or no login is stored. | **GitHub login…** (it is offered right there): add a valid token, then delete the old one in Settings. Lab manager: regenerate the token first (3a). |
+| **GitHub did not accept this token (mistyped, expired or revoked). Nothing was saved.** | The token pasted into the token dialog is wrong. | Paste it again; if it still fails, make a new one (**Create the token on GitHub**). |
 | **The GitHub token on this computer expires on …** (amber, at start) | The stored token's expiry date is less than 14 days away. | Regenerate it on GitHub and store the new one on each lab PC (3a, Renewing). |
 | **Not saved: git on this computer has no credential store set up** | The login dialog found no git credential helper, so git could not remember a login. | Install Git for Windows with its default options (they include Git Credential Manager); on a Mac use the git that comes with macOS or `gh auth setup-git` (3c). |
 | ***file* was changed on this computer and in the newer version.** / **Local changes to `<file>` … would be overwritten** | Someone edited that file on the lab PC, and it also changed online. Nothing was changed. | **Get a fresh copy** (5e). If the local edit is needed, commit it to the study repo from your own computer instead (section 6). |

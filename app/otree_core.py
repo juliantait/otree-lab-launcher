@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -101,6 +101,8 @@ STORAGE_VERSION = SCHEMA_VERSION
 MACHINE_FILENAME = "machine.json"
 SAVED_CONFIGS_FILENAME = "saved_configs.json"
 LAUNCH_HISTORY_FILENAME = "launch_history.jsonl"
+# Every study cloned from GitHub on this computer (and every fresh copy).
+CLONE_HISTORY_FILENAME = "clone_history.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
 LOCKS_DIRNAME = "locks"
 RETIRED_DIRNAME = "retired"
@@ -2994,6 +2996,141 @@ def read_sessions(limit=50, path=None):
 
 
 # ---------------------------------------------------------------------------
+# Clone history (2026-10-01): one JSON line per study cloned from GitHub on THIS
+# computer (and per "Get a fresh copy"), so Settings > GitHub can list which
+# studies are here, who got them, and where. Like the launch history: append
+# only, fail-soft both ways (writing can never break a clone; a missing or
+# partly corrupt file never breaks the app, bad lines are skipped). Never a
+# token: only the LABEL of the token the clone used.
+# ---------------------------------------------------------------------------
+
+CLONE_RESEARCHER_MISSING = "Enter or pick a researcher: who is getting this study."
+CLONE_HISTORY_LINK_LABEL = "Studies from %s on this computer"
+CLONE_HISTORY_EMPTY_TEXT = "No study has been cloned from GitHub on this computer yet."
+CLONE_FOLDER_MISSING_TEXT = "folder no longer exists"
+
+
+def clone_history_path():
+    """data/clone_history.jsonl; OTREE_LAB_CLONE_HISTORY overrides it (tests)."""
+    override = os.environ.get("OTREE_LAB_CLONE_HISTORY")
+    if override:
+        return override
+    return os.path.join(data_dir(), CLONE_HISTORY_FILENAME)
+
+
+def record_clone(org, repo, researcher, folder, token_label="", fresh_copy=False,
+                 path=None, when=None):
+    """Append ONE line for a successful clone / fresh copy: when, organisation,
+    repository, researcher, the folder (the one the faces select), the LABEL of
+    the token used (never a token) and the fresh-copy flag. Fail-soft: returns the
+    entry, or None when nothing could be written."""
+    try:
+        entry = {"timestamp": when or now_iso(),
+                 "org": str(org or "").strip(),
+                 "repo": str(repo or "").strip(),
+                 "researcher": str(researcher or "").strip(),
+                 "folder": str(folder or "").strip(),
+                 "token_label": str(token_label or "").strip(),
+                 "fresh_copy": bool(fresh_copy)}
+        target = path or clone_history_path()
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return entry
+    except Exception:
+        return None
+
+
+def read_clone_history(limit=None, path=None):
+    """The clone log, NEWEST FIRST. Read-only and fail-soft: a missing or
+    unreadable file gives []; lines that are not a JSON object are skipped."""
+    entries = []
+    try:
+        with open(path or clone_history_path(), "r", encoding="utf-8",
+                  errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    entries.append(obj)
+    except OSError:
+        return []
+    entries.reverse()
+    return entries if limit is None else entries[:max(0, int(limit))]
+
+
+def clone_history_rows(limit=None, path=None):
+    """The clone log as the faces show it, newest first::
+
+        {"when", "date", "org", "repo", "name", "researcher", "folder",
+         "exists", "fresh_copy", "status"}
+
+    ``name`` is "org/repo"; ``exists`` False marks a folder that is gone
+    (``status`` then says so); ``date`` is "1 Oct 2026, 14:05"."""
+    rows = []
+    for entry in read_clone_history(limit=limit, path=path):
+        folder = str(entry.get("folder") or "")
+        org = str(entry.get("org") or "")
+        repo = str(entry.get("repo") or "")
+        when = str(entry.get("timestamp") or "")
+        try:
+            moment = _dt.datetime.fromisoformat(when)
+            date = "%d %s" % (moment.day, moment.strftime("%b %Y, %H:%M"))
+        except (TypeError, ValueError):
+            date = when
+        exists = bool(folder) and os.path.isdir(folder)
+        rows.append({"when": when, "date": date, "org": org, "repo": repo,
+                     "name": "%s/%s" % (org, repo) if org else repo,
+                     "researcher": str(entry.get("researcher") or ""),
+                     "folder": folder, "exists": exists,
+                     "fresh_copy": bool(entry.get("fresh_copy")),
+                     "status": "" if exists else CLONE_FOLDER_MISSING_TEXT})
+    return rows
+
+
+def open_folder(folder, opener=None):
+    """Show ``folder`` in the computer's file browser (Explorer / Finder / the
+    desktop's). Returns ``{"ok", "message"}``; a folder that is gone is refused
+    with a plain message. ``opener(argv_or_path)`` replaces the real call in
+    tests."""
+    folder = str(folder or "").strip()
+    if not folder or not os.path.isdir(folder):
+        return {"ok": False, "message": "This folder no longer exists: %s" % folder}
+    try:
+        if opener is not None:
+            opener(folder)
+        elif sys.platform.startswith("win"):
+            os.startfile(folder)                       # noqa: an Explorer window
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    except Exception as error:
+        return {"ok": False, "message": "Could not open the folder: %s" % error}
+    return {"ok": True, "message": "Opened %s." % folder}
+
+
+def clone_researcher_for(folder, path=None):
+    """Who got the study in ``folder`` (or the repository it was cloned into),
+    from the clone log: "" when it is not in the log."""
+    def norm(value):
+        return os.path.normcase(os.path.realpath(str(value or ""))) if value else ""
+    wanted = norm(folder)
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) if folder else None
+    tops = {wanted, norm(top) if top else ""} - {""}
+    for entry in read_clone_history(path=path):
+        if norm(entry.get("folder")) in tops:
+            return str(entry.get("researcher") or "")
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Version + once-a-day update check (fable review I). A quiet, FAIL-SOFT nudge:
 # ask GitHub for the LATEST RELEASE at most once a day (cached in data/), read its
 # tag_name (e.g. "v1.2.0") and compare it to APP_VERSION with a small semver
@@ -3253,8 +3390,8 @@ def is_git_install(repo=None):
     """
     repo = repo if repo is not None else repo_root()
     try:
-        result = subprocess.run(
-            ["git", "-C", str(repo), "status"],
+        result = _timed_run(
+            subprocess.run, ["git", "-C", str(repo), "status"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=10, creationflags=_no_window_flags())
@@ -3467,8 +3604,8 @@ def is_git_repo(folder):
     if not folder:
         return False
     try:
-        result = subprocess.run(
-            ["git", "-C", folder, "rev-parse", "--is-inside-work-tree"],
+        result = _timed_run(
+            subprocess.run, ["git", "-C", folder, "rev-parse", "--is-inside-work-tree"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=10, creationflags=_no_window_flags())
@@ -3480,6 +3617,113 @@ def is_git_repo(folder):
     if isinstance(output, (bytes, bytearray)):
         output = output.decode("utf-8", "replace")
     return output.strip().lower() == "true"
+
+
+# ---------------------------------------------------------------------------
+# Every git command the launcher runs goes to the activity log (2026-10-01):
+# what ran, how long it took, how it ended. So a slow case (Julian's first clone
+# on a Windows lab PC: a minute on "Checking ...") shows where the time went.
+# Never a secret: URL credentials (user:password@ / the token label) are taken
+# out of the URL (a label is named separately: it is not a secret), anything
+# shaped like a GitHub token is masked, and git credential's stdin is never
+# shown. The faces subscribe with add_git_command_listener(fn(line, level)).
+# ---------------------------------------------------------------------------
+
+_GIT_LISTENERS = []
+_GIT_LISTENERS_LOCK = threading.Lock()
+_URL_USERINFO_RE = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.-]*://)([^/@\s]+)@")
+_TOKEN_SHAPED_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})")
+
+
+def add_git_command_listener(listener):
+    """Call ``listener(line, level)`` after every git command (``level`` is
+    "info" when it worked, "warn" when it failed or was stopped). A bound method
+    is held WEAKLY, so a face that goes away stops listening by itself."""
+    import weakref
+    ref = weakref.WeakMethod(listener) if hasattr(listener, "__self__") else \
+        (lambda fn=listener: fn)
+    with _GIT_LISTENERS_LOCK:
+        _GIT_LISTENERS.append(ref)
+    return ref
+
+
+def remove_git_command_listener(ref):
+    with _GIT_LISTENERS_LOCK:
+        if ref in _GIT_LISTENERS:
+            _GIT_LISTENERS.remove(ref)
+
+
+def git_command_text(args):
+    """``git <args>`` as safe text: credentials out of every URL (a token label
+    is named once at the end), token-shaped strings masked."""
+    labels = []
+
+    def strip(match):
+        label = match.group(2).split(":", 1)[0]
+        if label and label not in labels:
+            labels.append(label)
+        return match.group(1)
+    parts = []
+    for arg in args:
+        text = _TOKEN_SHAPED_RE.sub("********", _URL_USERINFO_RE.sub(strip, str(arg)))
+        parts.append(text if text and " " not in text else '"%s"' % text)
+    line = "git " + " ".join(parts)
+    if labels:
+        line += " (token %s)" % ", ".join(labels)
+    return line
+
+
+def git_command_line(args, seconds, code=None, timed_out=False, error=None):
+    """One activity-log line: "git ls-remote https://github.com/o/r HEAD: ok,
+    1.4 s" / "failed (exit 128), 3.0 s" / "stopped after 20.0 s (too slow)"."""
+    if timed_out:
+        end = "stopped after %.1f s (too slow)" % seconds
+    elif error is not None:
+        end = "could not run (%s), %.1f s" % (type(error).__name__, seconds)
+    elif code == 0:
+        end = "ok, %.1f s" % seconds
+    else:
+        end = "failed (exit %s), %.1f s" % (code, seconds)
+    return "%s: %s" % (git_command_text(args), end)
+
+
+def _note_git(args, started, code=None, timed_out=False, error=None):
+    """Tell the listeners how one git command went. Never raises."""
+    with _GIT_LISTENERS_LOCK:
+        refs = list(_GIT_LISTENERS)
+    if not refs:
+        return
+    try:
+        line = git_command_line(args, time.monotonic() - started, code=code,
+                                timed_out=timed_out, error=error)
+    except Exception:
+        return
+    level = "info" if (code == 0 and not timed_out and error is None) else "warn"
+    for ref in refs:
+        listener = ref()
+        if listener is None:
+            remove_git_command_listener(ref)
+            continue
+        try:
+            listener(line, level)
+        except Exception:
+            pass
+
+
+def _timed_run(run, argv, **kwargs):
+    """``run(argv, **kwargs)`` (subprocess.run or a test runner), reported to the
+    git listeners with its duration. Re-raises whatever ``run`` raises."""
+    started = time.monotonic()
+    try:
+        result = run(argv, **kwargs)
+    except subprocess.TimeoutExpired:
+        _note_git(argv[1:], started, timed_out=True)
+        raise
+    except Exception as error:
+        _note_git(argv[1:], started, error=error)
+        raise
+    _note_git(argv[1:], started, code=getattr(result, "returncode", None))
+    return result
 
 
 def _no_prompt_env():
@@ -3505,10 +3749,10 @@ def _run_git(args, runner=None, timeout=60, no_prompt=False):
     :func:`_no_prompt_env` (clone, pull, fetch: git can never ask for a login)."""
     run = runner if runner is not None else subprocess.run
     extra = {"env": _no_prompt_env()} if no_prompt else {}
-    result = run(["git"] + list(args),
-                 stdin=subprocess.DEVNULL,
-                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                 timeout=timeout, creationflags=_no_window_flags(), **extra)
+    result = _timed_run(run, ["git"] + list(args),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        timeout=timeout, creationflags=_no_window_flags(), **extra)
     output = getattr(result, "stdout", b"") or b""
     if isinstance(output, (bytes, bytearray)):
         output = output.decode("utf-8", "replace")
@@ -3824,6 +4068,16 @@ def git_update_study(folder):
         # a login (the GitHub login dialog is the one place for that).
         code, output = _run_git(["-C", folder, "pull", "--ff-only"], timeout=120,
                                 no_prompt=True)
+        if code != 0:
+            # GitHub refused the token the folder's URL names (deleted, or an
+            # older clone with none): try this computer's other tokens for this
+            # one pull. Nothing in the folder's settings changes.
+            retry, again = _retry_with_other_tokens(
+                _upstream_remote(folder)[2], lambda extra: _run_git(
+                    extra + ["-C", folder, "pull", "--ff-only"], timeout=120,
+                    no_prompt=True), output)
+            if retry is not None:
+                code, output = retry, again
     except FileNotFoundError:
         return failed("no_git", "git is not installed on this computer.")
     except subprocess.TimeoutExpired:
@@ -3927,7 +4181,7 @@ def _run_git_no_prompt(args, timeout):
     update check, where a login window popping up unasked would be worse than no
     answer. Returns ``(returncode, output)``; raises what subprocess raises."""
     env = _no_prompt_env()
-    result = subprocess.run(["git"] + list(args), stdin=subprocess.DEVNULL,
+    result = _timed_run(subprocess.run, ["git"] + list(args), stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             env=env, timeout=timeout, creationflags=_no_window_flags())
     output = result.stdout or b""
@@ -4080,6 +4334,11 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
         return out                       # no upstream branch: nothing to compare with
     try:
         code, output = _run_git_no_prompt(["-C", folder, "fetch", "--quiet"], timeout)
+        if code != 0:   # another token may open it (see git_update_study)
+            retry, again = _retry_with_other_tokens(url, lambda extra: _run_git_no_prompt(
+                extra + ["-C", folder, "fetch", "--quiet"], timeout), output)
+            if retry is not None:
+                code, output = retry, again
     except (OSError, ValueError, subprocess.SubprocessError):
         return out                       # git missing / timeout: say nothing
     moment = now or _dt.datetime.now()
@@ -4217,14 +4476,18 @@ def fresh_copy_plan(folder, today=None):
     return plan
 
 
-def git_fresh_copy(folder, runner=None, on_phase=None, today=None):
+def git_fresh_copy(folder, runner=None, on_phase=None, today=None, researcher=None):
     """Clone ``folder``'s repository again into a NEW folder next to it.
 
     Returns the same shape as :func:`git_clone_org_repo`
     (``{"ok", "status", "message", "action", "hint", "output", "path"}``):
     on success ``path`` is the study folder inside the new clone, for the face
     to select. NOTHING in the old folder is read for content, changed or
-    removed. Never asks for a login; bounded by timeouts; never raises."""
+    removed. Never asks for a login; bounded by timeouts; never raises.
+
+    A fresh copy is written to the clone log (fresh_copy True) with
+    ``researcher``, or, when that is None, whoever got the old folder (the log),
+    else "". The result carries ``token_label``."""
     def outcome(status, message, hint="", output="", path="", action=""):
         return {"ok": status == "ok", "status": status, "message": message,
                 "action": action, "hint": hint, "output": (output or "").strip(),
@@ -4238,12 +4501,28 @@ def git_fresh_copy(folder, runner=None, on_phase=None, today=None):
             on_phase("cloning")
         except Exception:
             pass
-    args = ["clone"]
-    if plan["branch"]:
-        args += ["--branch", plan["branch"]]
-    args += [plan["url"], plan["target"]]
+    def clone_args(url):
+        args = ["clone"]
+        if plan["branch"]:
+            args += ["--branch", plan["branch"]]
+        return args + [url, plan["target"]]
     try:
-        code, output = _run_git(args, runner=runner, timeout=600, no_prompt=True)
+        code, output = _run_git(clone_args(plan["url"]), runner=runner, timeout=600,
+                                no_prompt=True)
+        if code != 0 and classify_git_error(output)["code"] in ("auth", "not_found"):
+            # The token in the old folder's URL may be gone: the fresh copy is a
+            # NEW clone, so it takes the first token that opens it, in its URL.
+            current = github_url_user(plan["url"])
+            for url in github_clone_candidates(github_url_with_label(plan["url"], "")
+                                               or plan["url"]):
+                if url == plan["url"] or (current and github_url_user(url) == current):
+                    continue
+                shutil.rmtree(plan["target"], ignore_errors=True)
+                code, again = _run_git(clone_args(url), runner=runner, timeout=600,
+                                       no_prompt=True)
+                if code == 0:
+                    output = again
+                    break
     except FileNotFoundError:
         return outcome("no_git", "git is not installed on this computer.",
                        "Ask the lab manager to install git.")
@@ -4261,8 +4540,27 @@ def git_fresh_copy(folder, runner=None, on_phase=None, today=None):
     if not os.path.isdir(plan["path"]):
         return outcome("error", "The fresh copy does not contain this study folder.",
                        "", output)
-    return outcome("ok", "Fresh copy saved in %s. The old folder was not changed."
-                   % plan["target"], output=output, path=plan["path"])
+    used = _git_text(plan["target"], "remote", "get-url", "origin", timeout=10) or plan["url"]
+    label = github_url_user(used) or ""
+    owner, name = _repo_owner_and_name(used)
+    who = researcher if researcher is not None else clone_researcher_for(folder)
+    record_clone(owner, name, who, plan["path"], token_label=label, fresh_copy=True)
+    result = outcome("ok", "Fresh copy saved in %s. The old folder was not changed."
+                     % plan["target"], output=output, path=plan["path"])
+    result["token_label"] = label
+    return result
+
+
+def _repo_owner_and_name(url):
+    """``(owner, name)`` from a remote URL (https / ssh / a local path: owner ""
+    when there is none)."""
+    text = str(url or "").strip().rstrip("/")
+    if text.lower().endswith(".git"):
+        text = text[:-4]
+    parts = [p for p in re.split(r"[/:]", text) if p]
+    name = parts[-1] if parts else ""
+    owner = parts[-2] if len(parts) >= 2 and git_remote_host(url) else ""
+    return owner, name
 
 
 def study_version(folder):
@@ -4423,23 +4721,36 @@ def clone_repo_name(repo):
 # command line, into a launcher file, the activity log or a returned message.
 
 GITHUB_CREDENTIAL_HOST = "github.com"
+# The username stored with a token when GitHub could not tell us the account
+# (offline / check switched off). GitHub ignores the username for token auth
+# over HTTPS, so any name works; this is the one GitHub itself documents.
+GITHUB_TOKEN_USERNAME = "x-access-token"
 # ONE name for the login dialog wherever it is offered (Settings, a failed clone,
 # a failed pull, the "could not check" line). It also fits the first time, when
 # there is no login yet to be "different" from.
 GITHUB_LOGIN_ACTION_LABEL = "GitHub login…"
-GITHUB_LOGIN_DIALOG_TITLE = "GitHub login for this computer"
+GITHUB_LOGIN_DIALOG_TITLE = "Add a GitHub token"
 GITHUB_LOGIN_SAVE_RETRY_LABEL = "Save and retry"
-GITHUB_FORGET_LABEL = "Forget GitHub login"
-GITHUB_FORGET_CONFIRM = ("Forget the GitHub login on this computer? Clone and Git Pull "
-                         "stop working until a login is added again.")
+# Settings > GitHub: the token list (several per computer, 2026-10-01).
+GITHUB_ADD_TOKEN_LABEL = "Add token"
+GITHUB_DELETE_TOKEN_LABEL = "Delete"
+GITHUB_TOKENS_ROW_LABEL = "Tokens"
+GITHUB_NO_TOKENS_TEXT = "No token on this computer"
+GITHUB_WHO_LABEL = "Added by"
+GITHUB_TOKEN_WHO_MISSING = "Enter or pick who is adding this token."
 GITHUB_TOKEN_LINK_LABEL = "Create the token on GitHub"
 GITHUB_NO_LOGIN_HINT = ("If the name is right, add a login with \"%s\"."
                         % GITHUB_LOGIN_ACTION_LABEL)
 # The login dialog's explanation (both faces show it behind the info tip).
 GITHUB_LOGIN_DIALOG_NOTE = (
     "Saved in this computer's own credential store (Windows Credential Manager or "
-    "the macOS Keychain), never in a launcher file. Use a lab account that is a "
-    "member of the organisation, and a read-only token as the password.")
+    "the macOS Keychain), never in a launcher file. A computer can hold several "
+    "tokens (the lab's read-only token, a researcher's own token); a clone uses "
+    "the first one that can open the study. Make the lab token with the lab "
+    "account, a member of the organisation.")
+# The dialog's one visible line (bold: the action) and the empty-field message.
+GITHUB_LOGIN_DIALOG_PROMPT = "Say who is adding the token, paste it, then Save."
+GITHUB_LOGIN_MISSING_MESSAGE = "Paste the token."
 GITHUB_MAC_NOTE = (
     "The launcher's git never asks for a login by itself: with none stored, a "
     "clone fails with a login error. Add one here (or run gh auth login in "
@@ -4470,12 +4781,11 @@ def _run_git_credential(action, fields, runner=None, timeout=30):
     """Run ``git credential <action>`` with ``fields`` on stdin.
 
     Returns ``(returncode, output)``. Prompts are switched off
-    (GIT_TERMINAL_PROMPT=0) and no console window opens on Windows. Raises what
+    (:func:`_no_prompt_env`) and no console window opens on Windows. Raises what
     subprocess raises; the callers turn that into a result."""
     run = runner if runner is not None else subprocess.run
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    result = run(["git", "credential", action],
+    env = _no_prompt_env()
+    result = _timed_run(run, ["git", "credential", action],
                  input=_credential_payload(fields).encode("utf-8"),
                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                  env=env, timeout=timeout, creationflags=_no_window_flags())
@@ -4506,11 +4816,15 @@ def _scrub(text, secret):
     return text
 
 
-def github_forget_login(runner=None):
-    """Forget the stored github.com login (``git credential reject``).
+def github_forget_login(runner=None, username=""):
+    """Forget a stored github.com login (``git credential reject``). With
+    ``username`` only the login stored under that name goes (one token of
+    several); without it, whatever git's store hands back for github.com.
 
     Returns ``{"ok", "status", "message"}``; ``status`` is ok / no_git / error."""
     fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST)]
+    if str(username or "").strip():
+        fields.append(("username", str(username).strip()))
     try:
         code, output = _run_git_credential("reject", fields, runner=runner)
     except FileNotFoundError:
@@ -4521,33 +4835,36 @@ def github_forget_login(runner=None):
                 "message": "Could not run git: %s" % error}
     if code != 0:
         return {"ok": False, "status": "error",
-                "message": "git could not forget the GitHub login: %s"
+                "message": "git could not remove the GitHub token: %s"
                            % (output.strip() or "exit code %s" % code)}
     return {"ok": True, "status": "ok",
-            "message": "Forgot the GitHub login stored on this computer. The next "
-                       "clone or Git Pull needs a login again."}
+            "message": "Removed the GitHub token from this computer."}
 
 
 def github_save_login(username, token, runner=None):
-    """Hand a GitHub username + token to the system credential store.
+    """Hand a GitHub token to the system credential store under ``username``.
 
-    First ``git credential reject`` (forget the old github.com login), then
-    ``git credential approve`` with protocol=https, host=github.com, the
-    username and the token as the password -- all on stdin. Nothing is written
-    to any launcher file and the token is never part of the returned result.
+    First ``git credential reject`` for that SAME username (replace an older
+    token stored under it; the other tokens of this computer are left alone),
+    then ``git credential approve`` with protocol=https, host=github.com, the
+    username and the token as the password -- all on stdin. GitHub ignores the
+    username for token auth over HTTPS, so the launcher uses it as the token's
+    LABEL (``otree-lab-<id>``); a blank one is stored as
+    :data:`GITHUB_TOKEN_USERNAME`. Nothing is written to any launcher file and
+    the token is never part of the returned result.
 
     Returns ``{"ok", "status", "message"}``; ``status`` is ok / missing /
     bad_input / no_git / no_helper / error. ``no_helper``: git has no
     credential helper configured, so it could not remember a login at all."""
-    username = str(username or "").strip()
+    username = str(username or "").strip() or GITHUB_TOKEN_USERNAME
     token = str(token or "").strip()
-    if not username or not token:
+    if not token:
         return {"ok": False, "status": "missing",
-                "message": "Enter the GitHub username and the token."}
+                "message": GITHUB_LOGIN_MISSING_MESSAGE}
     if any(ch in value for value in (username, token) for ch in "\r\n\0"):
         return {"ok": False, "status": "bad_input",
-                "message": "The username or token contains a line break. Paste it "
-                           "again as one line."}
+                "message": "The token contains a line break. Paste it again as one "
+                           "line."}
     helpers = git_credential_helpers(runner=runner)
     if helpers is None:
         return {"ok": False, "status": "no_git",
@@ -4556,10 +4873,10 @@ def github_save_login(username, token, runner=None):
     if not helpers:
         return {"ok": False, "status": "no_helper",
                 "message": "Not saved: git on this computer has no credential store "
-                           "set up, so it cannot remember a login. Install Git for "
+                           "set up, so it cannot remember a token. Install Git for "
                            "Windows (with Git Credential Manager) or use the Mac's "
                            "own git, then try again."}
-    forgot = github_forget_login(runner=runner)
+    forgot = github_forget_login(runner=runner, username=username)
     if not forgot["ok"] and forgot["status"] == "no_git":
         return forgot
     fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST),
@@ -4574,26 +4891,43 @@ def github_save_login(username, token, runner=None):
                 "message": _scrub("Could not run git: %s" % error, token)}
     if code != 0:
         return {"ok": False, "status": "error",
-                "message": _scrub("git could not store the login: %s"
+                "message": _scrub("git could not store the token: %s"
                                   % (output.strip() or "exit code %s" % code), token)}
     return {"ok": True, "status": "ok",
-            "message": "Saved the GitHub login for %s in this computer's credential "
-                       "store." % username}
+            "message": "Saved the GitHub token in this computer's credential store."}
 
 
 # ---------------------------------------------------------------------------
-# Checking a token when it is saved, who is logged in, and the token's expiry
-# (2026-10-01).
+# Several GitHub tokens per computer (2026-10-01)
 #
-# A wrong token used to be stored without a word and surfaced later as a failed
-# clone. Now the login dialog asks GitHub ONCE, with the token just typed (it is
-# in memory at that moment anyway), before anything is stored:
-#   accepted  -> stored; the answer also carries the token's expiry date
-#   rejected  -> NOTHING is stored
-#   unchecked -> GitHub could not be reached: stored, and the message says so
-# Only the username and the expiry DATE are kept (machine.json, this computer):
-# never the token. Settings shows who is logged in by asking git's credential
-# store (the password part of that answer is dropped at once).
+# A computer can hold several tokens: the lab's read-only token plus, say, a
+# researcher's own token for a private repository elsewhere. Each token lives in
+# the SYSTEM credential store under its own username LABEL ``otree-lab-<id>``
+# (git's store keeps one secret per host + username, and GitHub ignores the
+# username for token auth over HTTPS). machine.json (this computer only) keeps,
+# per token, only: id, label, who added it (from the researcher roster), the
+# date, the expiry date and what GitHub said when it was checked. NEVER the
+# token; the GitHub account a token belongs to is kept for the record but never
+# shown (the faces show "Token, added <date> by <researcher>").
+#
+# Which token does git use?
+#   * clone: each token in turn (``git ls-remote``), then the computer's plain
+#     login; the clone is made with the label of the first that works IN its
+#     URL (https://otree-lab-<id>@github.com/org/repo), so later pulls and
+#     update checks ask git's store for that same token by themselves;
+#   * pull / update check: as the folder's URL says; when GitHub refuses (a
+#     deleted token, an older clone without a label), each other token is tried
+#     for that one command (``git -c url.<labelled>.insteadOf=<url>``): nothing
+#     in the study folder is changed;
+#   * the clone dialog's repository list: what EVERY token can see, merged.
+#
+# Saving a token asks GitHub ONCE (with the token just typed) before anything is
+# stored: accepted -> stored with its expiry date; rejected -> NOTHING stored;
+# unchecked (GitHub unreachable) -> stored, and the message says so.
+#
+# An install from before (ONE login stored, username = a real GitHub account or
+# x-access-token, no list in machine.json) keeps working and shows as one token
+# "added before <date> by unknown" until it is deleted or replaced.
 # ---------------------------------------------------------------------------
 
 GITHUB_API_URL = "https://api.github.com"
@@ -4684,10 +5018,14 @@ def format_day(iso_date):
     return "%d %s" % (when.day, when.strftime("%b %Y"))
 
 
-def github_login_info():
-    """What this computer remembers about its GitHub login:
-    ``{"username", "token_expires"}`` (both "" when nothing is recorded). Never
-    a token."""
+GITHUB_TOKENS_KEY = "github_tokens"
+GITHUB_TOKEN_LABEL_PREFIX = "otree-lab-"
+GITHUB_TOKEN_UNKNOWN_BY = "unknown"
+
+
+def _legacy_github_login_info():
+    """The pre-multi-token record (machine.json ``github_login``: username +
+    expiry date), read ONLY to carry its expiry date over to the adopted token."""
     try:
         info = load_machine().get(GITHUB_LOGIN_INFO_KEY)
     except Exception:
@@ -4697,76 +5035,215 @@ def github_login_info():
             "token_expires": str(info.get("token_expires") or "")}
 
 
-def save_github_login_info(username, token_expires=""):
-    """Record the username and the token's expiry DATE (machine.json). Fail-soft."""
-    value = {"username": str(username or "").strip(),
-             "token_expires": str(token_expires or "").strip()}
+def _normalize_token_entry(raw):
+    if not isinstance(raw, dict) or not str(raw.get("id") or "").strip():
+        return None
+    return {"id": str(raw.get("id")).strip(),
+            "label": str(raw.get("label") or "").strip(),
+            "added_by": str(raw.get("added_by") or "").strip(),
+            "added_on": str(raw.get("added_on") or "").strip(),
+            "seen_before": str(raw.get("seen_before") or "").strip(),
+            "expires": str(raw.get("expires") or "").strip(),
+            "checked": str(raw.get("checked") or "").strip(),
+            "github_account": str(raw.get("github_account") or "").strip(),
+            "adopted": bool(raw.get("adopted"))}
+
+
+def _stored_token_entries():
     try:
-        update_machine(lambda m: m.__setitem__(GITHUB_LOGIN_INFO_KEY, value))
+        raw = load_machine().get(GITHUB_TOKENS_KEY)
+    except Exception:
+        raw = None
+    entries = [_normalize_token_entry(item) for item in (raw if isinstance(raw, list) else [])]
+    return [entry for entry in entries if entry]
+
+
+def _save_token_entries(entries):
+    """Write the token list (machine.json). Also drops the old single-login
+    record, which the list replaces. Raises what update_machine raises."""
+    value = [dict(entry) for entry in entries]
+
+    def mutate(machine):
+        machine[GITHUB_TOKENS_KEY] = value
+        machine.pop(GITHUB_LOGIN_INFO_KEY, None)
+    update_machine(mutate)
+
+
+def _new_token_id(existing):
+    import secrets
+    taken = {entry["id"] for entry in existing}
+    while True:
+        token_id = secrets.token_hex(3)
+        if token_id not in taken:
+            return token_id
+
+
+def _adopt_existing_login(runner=None, today=None):
+    """An older install (or a sign-in made outside the launcher) has ONE login in
+    git's store and no token list: record it as one token "added before <today>
+    by unknown", so it shows and can be deleted. Returns the entry or None."""
+    username, password = _github_stored_credential(runner=runner)
+    if not password:
+        return None
+    legacy = _legacy_github_login_info()
+    entry = _normalize_token_entry({
+        "id": "before-" + _new_token_id([]), "label": username,
+        "seen_before": (today or _dt.date.today()).isoformat(),
+        "expires": legacy["token_expires"], "checked": "adopted", "adopted": True})
+    try:
+        _save_token_entries([entry])
     except Exception:
         pass
+    return entry
 
 
-def clear_github_login_info():
+def github_tokens(adopt=False, runner=None, today=None):
+    """The GitHub tokens of this computer (machine.json metadata, never a
+    secret), in the order they were added. With ``adopt`` (Settings), an older
+    single login found in git's store while the list is empty is taken over as
+    one "added before" token (that asks the credential store: only where the
+    old "who is logged in" lookup ran)."""
+    entries = _stored_token_entries()
+    if not entries and adopt:
+        found = _adopt_existing_login(runner=runner, today=today)
+        if found:
+            entries = [found]
+    return entries
+
+
+def _token_expired(entry, today=None):
     try:
-        if GITHUB_LOGIN_INFO_KEY in load_machine():
-            update_machine(lambda m: m.pop(GITHUB_LOGIN_INFO_KEY, None))
-    except Exception:
-        pass
+        return _dt.date.fromisoformat(entry.get("expires", "")[:10]) < (today or _dt.date.today())
+    except (TypeError, ValueError):
+        return False
 
 
-def github_save_login_checked(username, token, checker=None):
-    """What the login dialog's Save does: ask GitHub about the token, then store
-    the login unless GitHub rejected it.
+def github_token_who(entry):
+    """'added 1 Oct 2026 by Julian' / 'added before 1 Oct 2026 by unknown'."""
+    by = entry.get("added_by") or GITHUB_TOKEN_UNKNOWN_BY
+    if entry.get("added_on"):
+        return "added %s by %s" % (format_day(entry["added_on"]), by)
+    if entry.get("seen_before"):
+        return "added before %s by %s" % (format_day(entry["seen_before"]), by)
+    return "added by %s" % by
 
-    Returns :func:`github_save_login`'s result plus ``check`` (the
-    :func:`github_check_token` answer, or state "skipped"). A REJECTED token
-    returns ``ok`` False, status "rejected", and nothing is stored. ``checker``
-    replaces the GitHub request in tests."""
-    username = str(username or "").strip()
+
+def github_token_text(entry, today=None):
+    """One token as the faces show it: "Token, added 1 Oct 2026 by Julian ·
+    valid until 30 Sep 2027" (expiry only when known). Never the token, never a
+    GitHub account name."""
+    text = "Token, " + github_token_who(entry)
+    if entry.get("expires"):
+        text += " · %s %s" % ("expired" if _token_expired(entry, today) else "valid until",
+                              format_day(entry["expires"]))
+    return text
+
+
+def github_token_rows(adopt=True, runner=None, today=None):
+    """The token list for Settings: ``[{"id", "text", "expired", "confirm"}]``
+    (``confirm`` is the in-app question the Delete button asks)."""
+    return [{"id": entry["id"], "text": github_token_text(entry, today),
+             "expired": _token_expired(entry, today),
+             "confirm": github_delete_confirm_text(entry)}
+            for entry in github_tokens(adopt=adopt, runner=runner, today=today)]
+
+
+def github_delete_confirm_text(entry):
+    return ("Delete the GitHub token %s? Studies that only this token can open can "
+            "no longer be cloned or updated on this computer." % github_token_who(entry))
+
+
+def github_add_token(token, added_by, checker=None, runner=None, today=None):
+    """What the "Add token" dialog's Save does. ``added_by`` (who is adding it,
+    from the researcher roster or typed) is required.
+
+    Asks GitHub about the token first (unless the check is switched off): a
+    REJECTED token is not stored (``ok`` False, status "rejected"). Otherwise the
+    token goes to the credential store under a new label and its metadata to
+    machine.json. A token that is already on this computer is not added twice
+    (status "duplicate"). Returns ``{"ok", "status", "message", "token"}`` where
+    ``token`` is the new row (:func:`github_token_rows` shape); no secret and no
+    GitHub account name in it. ``checker`` replaces the GitHub request in tests."""
     token = str(token or "").strip()
+    added_by = str(added_by or "").strip()
+    if not token:
+        return {"ok": False, "status": "missing", "message": GITHUB_LOGIN_MISSING_MESSAGE}
+    if not added_by:
+        return {"ok": False, "status": "missing_who", "message": GITHUB_TOKEN_WHO_MISSING}
+    existing = github_tokens()
+    for entry in existing:
+        if entry["label"] and _github_stored_credential(runner=runner,
+                                                        username=entry["label"])[1] == token:
+            return {"ok": False, "status": "duplicate",
+                    "message": "This token is already on this computer (%s). Nothing "
+                               "new was saved." % github_token_who(entry)}
     check = {"state": "skipped", "login": "", "expires": ""}
-    if username and token and (checker is not None or github_token_check_enabled()):
+    if checker is not None or github_token_check_enabled():
         check = (checker or github_check_token)(token)
     if check["state"] == "rejected":
-        return {"ok": False, "status": "rejected",
-                "message": GITHUB_TOKEN_REJECTED_MESSAGE, "check": check}
-    result = dict(github_save_login(username, token))
-    result["check"] = check
-    if not result.get("ok"):
-        return result
-    save_github_login_info(username, check.get("expires", ""))
+        return {"ok": False, "status": "rejected", "message": GITHUB_TOKEN_REJECTED_MESSAGE}
+    token_id = _new_token_id(existing)
+    label = GITHUB_TOKEN_LABEL_PREFIX + token_id
+    stored = github_save_login(label, token, runner=runner)
+    if not stored.get("ok"):
+        return {"ok": False, "status": stored.get("status", "error"),
+                "message": stored.get("message", "")}
+    entry = _normalize_token_entry({
+        "id": token_id, "label": label, "added_by": added_by,
+        "added_on": (today or _dt.date.today()).isoformat(),
+        "expires": check.get("expires", ""), "checked": check["state"],
+        "github_account": check.get("login", "")})
+    try:
+        _save_token_entries(existing + [entry])
+    except Exception as error:
+        github_forget_login(runner=runner, username=label)   # keep store + list in step
+        return {"ok": False, "status": "error",
+                "message": "Could not record the token on this computer: %s" % error}
+    message = "Token saved, added by %s." % added_by
     if check["state"] == "accepted":
-        note = " GitHub accepts it"
-        if check.get("login") and check["login"].lower() != username.lower():
-            note += " (as %s)" % check["login"]
-        note += "."
+        message += " GitHub accepts it."
         if check.get("expires"):
-            note += " The token is valid until %s." % format_day(check["expires"])
-        result["message"] = str(result.get("message") or "") + note
+            message += " Valid until %s." % format_day(check["expires"])
     elif check["state"] == "unchecked":
-        result["message"] = (str(result.get("message") or "")
-                             + " Not checked: GitHub could not be reached.")
-    return result
+        message += " Not checked: GitHub could not be reached."
+    return {"ok": True, "status": "ok", "message": message,
+            "token": {"id": entry["id"], "text": github_token_text(entry, today),
+                      "expired": _token_expired(entry, today),
+                      "confirm": github_delete_confirm_text(entry)}}
 
 
-def github_forget_login_checked():
-    """What the dialog's Forget does: remove the stored login AND what this
-    computer remembered about it."""
-    result = github_forget_login()
-    if result.get("ok"):
-        clear_github_login_info()
-    return result
+def github_delete_token(token_id, runner=None):
+    """Delete one token: from git's credential store (``git credential reject``
+    for its label) and from this computer's list. Returns ``{"ok", "status",
+    "message"}``; status "not_found" when no token has that id."""
+    entries = _stored_token_entries()
+    entry = next((e for e in entries if e["id"] == str(token_id or "")), None)
+    if entry is None:
+        return {"ok": False, "status": "not_found",
+                "message": "That token is no longer on this computer."}
+    result = github_forget_login(runner=runner, username=entry["label"])
+    if not result.get("ok") and result.get("status") == "no_git":
+        return result
+    try:
+        _save_token_entries([e for e in entries if e["id"] != entry["id"]])
+    except Exception as error:
+        return {"ok": False, "status": "error",
+                "message": "Could not update this computer's token list: %s" % error}
+    return {"ok": True, "status": "ok",
+            "message": "Deleted the GitHub token %s." % github_token_who(entry)}
 
 
-def _github_stored_credential(runner=None):
-    """``(username, password)`` git's credential store holds for github.com, or
-    ``("", "")``. Asks ``git credential fill`` with every prompt switched off,
-    so nothing can pop up. Callers must not keep or show the password."""
+def _github_stored_credential(runner=None, username=""):
+    """``(username, password)`` git's credential store holds for github.com (for
+    ``username`` when given), or ``("", "")``. Asks ``git credential fill`` with
+    every prompt switched off, so nothing can pop up. Callers must not keep or
+    show the password."""
     run = runner if runner is not None else subprocess.run
     fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST)]
+    if str(username or "").strip():
+        fields.append(("username", str(username).strip()))
     try:
-        result = run(["git", "-c", "core.askPass=", "credential", "fill"],
+        result = _timed_run(run, ["git", "-c", "core.askPass=", "credential", "fill"],
                      input=_credential_payload(fields).encode("utf-8"),
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                      env=_no_prompt_env(), timeout=15,
@@ -4788,34 +5265,39 @@ def _github_stored_credential(runner=None):
     return found.get("username", ""), found["password"]
 
 
-def github_stored_login(runner=None):
-    """Who is logged in to GitHub on this computer: ``{"has_login", "username"}``.
-    The lab's rule is "never a personal account on a shared PC"; this is what
-    lets someone check it. The password part is dropped here."""
-    username, password = _github_stored_credential(runner=runner)
-    return {"has_login": bool(password), "username": username if password else ""}
-
-
-def github_token_expiry_notice(today=None, info=None):
-    """The amber notice about the stored token's expiry date: "" until
-    :data:`GITHUB_TOKEN_WARN_DAYS` days before it, then a line that says when it
-    expires (or that it has) and where to renew it. A silent lab-wide outage
-    becomes a planned renewal."""
-    info = info if info is not None else github_login_info()
-    expires = info.get("token_expires") or ""
-    try:
-        when = _dt.date.fromisoformat(expires[:10])
-    except (TypeError, ValueError):
+def github_token_expiry_notice(today=None, tokens=None):
+    """The amber start-up notice about a token's expiry date: "" until
+    :data:`GITHUB_TOKEN_WARN_DAYS` days before the FIRST expiry, then one line
+    naming that token (who added it, when) and saying when it expires (or that
+    it has) and what to do. A silent lab-wide outage becomes a planned renewal."""
+    today = today or _dt.date.today()
+    if tokens is None:
+        tokens = github_tokens()
+        if not tokens:
+            legacy = _legacy_github_login_info()   # an install not yet looked at in Settings
+            if legacy["token_expires"]:
+                tokens = [{"id": "", "added_by": "", "added_on": "", "seen_before": "",
+                           "expires": legacy["token_expires"]}]
+    soonest = None
+    for entry in tokens:
+        try:
+            when = _dt.date.fromisoformat(str(entry.get("expires") or "")[:10])
+        except (TypeError, ValueError):
+            continue
+        if soonest is None or when < soonest[0]:
+            soonest = (when, entry)
+    if soonest is None or (soonest[0] - today).days > GITHUB_TOKEN_WARN_DAYS:
         return ""
-    days = (when - (today or _dt.date.today())).days
-    if days > GITHUB_TOKEN_WARN_DAYS:
-        return ""
-    where = "Renew it on GitHub, then store the new one in Settings > GitHub."
-    if days < 0:
-        return ("The GitHub token on this computer expired on %s: studies can no "
-                "longer be cloned or updated. %s" % (format_day(expires), where))
-    return ("The GitHub token on this computer expires on %s. %s"
-            % (format_day(expires), where))
+    when, entry = soonest
+    name = ("The GitHub token %s" % github_token_who(entry)
+            if entry.get("added_by") or entry.get("added_on") else
+            "The GitHub token on this computer")
+    where = ("Make a new one on GitHub, add it in Settings > GitHub, then delete the "
+             "old one.")
+    if when < today:
+        return ("%s expired on %s: studies it opens can no longer be cloned or "
+                "updated. %s" % (name, format_day(when.isoformat()), where))
+    return "%s expires on %s. %s" % (name, format_day(when.isoformat()), where)
 
 
 def github_clone_enabled(sync=None):
@@ -4833,31 +5315,23 @@ def save_github_org(org, path=None):
     return save_github_sync_settings(bool(org), org, path)
 
 
-def github_summary(sync=None, stored=None, info=None, today=None):
-    """The collapsed GitHub card in Settings: "Off", or
-    "demo-lab · login lab-account · token until 30 Sep 2027", or
-    "demo-lab · no login on this computer"."""
+def github_summary(sync=None, tokens=None, today=None):
+    """The collapsed GitHub card in Settings: "Off", "demo-lab · no token on this
+    computer", "demo-lab · token added 1 Oct 2026 by Julian · valid until 30 Sep
+    2027" or "demo-lab · 2 tokens". Never a GitHub account name."""
     sync = sync if sync is not None else load_github_sync()
     if not github_clone_enabled(sync):
         return "Off"
-    parts = [str(sync.get("org") or "").strip()]
-    stored = stored if stored is not None else {"has_login": False, "username": ""}
-    if stored.get("has_login"):
-        parts.append("login %s" % (stored.get("username") or "stored"))
-        info = info if info is not None else github_login_info()
-        expires = info.get("token_expires") or ""
-        same = (not info.get("username") or not stored.get("username")
-                or info["username"].lower() == stored["username"].lower())
-        if expires and same:
-            try:
-                past = _dt.date.fromisoformat(expires[:10]) < (today or _dt.date.today())
-            except (TypeError, ValueError):
-                past = False
-            parts.append("token %s %s" % ("expired" if past else "until",
-                                          format_day(expires)))
-    else:
-        parts.append("no login on this computer")
-    return " · ".join(parts)
+    org = str(sync.get("org") or "").strip()
+    tokens = list(tokens if tokens is not None else github_tokens())
+    if not tokens:
+        return "%s · no token on this computer" % org
+    if len(tokens) == 1:
+        text = github_token_text(tokens[0], today)
+        return "%s · %s" % (org, text[0].lower() + text[1:])
+    expired = sum(1 for entry in tokens if _token_expired(entry, today))
+    return "%s · %d tokens%s" % (org, len(tokens),
+                                 (" (%d expired)" % expired) if expired else "")
 
 
 def github_token_create_url(org, days=365):
@@ -4877,26 +5351,9 @@ def github_token_create_url(org, days=365):
             + urllib.parse.urlencode(query))
 
 
-def github_list_org_repos(org, credential=None, fetcher=None, limit=300):
-    """The repositories of ``org`` that this computer's GitHub login can see,
-    newest work first, for the clone dialog's list (typing the name still works).
-
-    Returns ``{"ok", "status", "repos": [{"name", "private", "description"}],
-    "message"}``. ``status``: "ok"; "empty" (the login sees nothing there: no
-    access, or the token is for another organisation / not approved yet);
-    "rejected" (the login was not accepted); "no_org" (no such organisation);
-    "network" (GitHub could not be reached: the dialog just shows no list).
-    The stored token is read into memory for this request only; it is never
-    returned, logged or written. ``credential`` / ``fetcher`` are test seams."""
-    org = str(org or "").strip().strip("/")
+def _list_org_repos_with(org, token, fetch, limit):
+    """One token's view of the organisation (see github_list_org_repos)."""
     out = {"ok": False, "status": "network", "repos": [], "message": ""}
-    if not org:
-        out["status"] = "no_org"
-        return out
-    if credential is None:
-        credential = _github_stored_credential()
-    token = credential[1] if credential else ""
-    fetch = fetcher or _github_api_get
     repos, page = [], 1
     try:
         while len(repos) < limit:
@@ -4934,8 +5391,149 @@ def github_list_org_repos(org, credential=None, fetcher=None, limit=300):
     return out
 
 
+def github_list_org_repos(org, credential=None, fetcher=None, limit=300):
+    """The repositories of ``org`` that this computer's GitHub tokens can see,
+    newest work first, for the clone dialog's list (typing the name still works).
+    With several tokens, what EVERY token sees, merged (one entry per name).
+
+    Returns ``{"ok", "status", "repos": [{"name", "private", "description",
+    "token_label"}], "message"}`` (``token_label``: the label of the first token
+    whose list had it, "" for the plain login, None when no token was used). ``status``: "ok"; "empty" (no token sees anything there: no
+    access, or the token is for another organisation / not approved yet);
+    "rejected" (the login was not accepted); "no_org" (no such organisation);
+    "network" (GitHub could not be reached: the dialog just shows no list).
+    Each stored token is read into memory for its request only; it is never
+    returned, logged or written. ``credential`` / ``fetcher`` are test seams."""
+    org = str(org or "").strip().strip("/")
+    if not org:
+        return {"ok": False, "status": "no_org", "repos": [], "message": ""}
+    fetch = fetcher or _github_api_get
+    if credential is not None:
+        labels = [credential[0] if credential else ""]
+        secrets_ = [credential[1] if credential else ""]
+    else:
+        labels = [entry["label"] for entry in github_tokens() if entry["label"]]
+        if labels:
+            secrets_ = [_github_stored_credential(username=label)[1] for label in labels]
+        else:
+            labels = [""]
+            secrets_ = [_github_stored_credential()[1]]
+    results = [_list_org_repos_with(org, token, fetch, limit) for token in secrets_]
+    merged, seen = [], set()
+    for label, token, result in zip(labels, secrets_, results):
+        for repo in result["repos"]:
+            if repo["name"].lower() not in seen:
+                seen.add(repo["name"].lower())
+                # Which token showed it (a LABEL, never the token; "" = the plain
+                # login): a clone of a listed repo skips its check and uses it.
+                merged.append(dict(repo, token_label=label if token else None))
+    if merged:
+        return {"ok": True, "status": "ok", "repos": merged[:limit], "message": ""}
+    for status in ("empty", "no_org", "rejected", "network"):
+        for result in results:
+            if result["status"] == status:
+                return result
+    return results[0]
+
+
+# The GitHub URL forms the token logic rewrites: https://[user@]github.com/...
+_GITHUB_HTTPS_RE = re.compile(r"^https://(?:([^@/]*)@)?github\.com(?=/|$)", re.IGNORECASE)
+
+
+def github_url_user(url):
+    """The username (token label) in an https github.com URL, "" when it has
+    none, None when the URL is not an https github.com URL."""
+    match = _GITHUB_HTTPS_RE.match(str(url or "").strip())
+    if not match:
+        return None
+    import urllib.parse
+    return urllib.parse.unquote(match.group(1) or "")
+
+
+def github_url_with_label(url, label):
+    """``url`` with ``label`` as its username (https://<label>@github.com/...),
+    or None when ``url`` is not an https github.com URL. An empty label gives
+    the plain URL."""
+    url = str(url or "").strip()
+    match = _GITHUB_HTTPS_RE.match(url)
+    if not match:
+        return None
+    import urllib.parse
+    rest = url[match.end():]
+    label = str(label or "").strip()
+    who = (urllib.parse.quote(label, safe="") + "@") if label else ""
+    return "https://%sgithub.com%s" % (who, rest)
+
+
+def github_clone_candidates(url):
+    """The URLs a NEW clone tries, in order: each token's labelled URL (as the
+    tokens were added), then the plain URL (an older login, or a sign-in made
+    outside the launcher). Just ``[url]`` for anything that is not an https
+    github.com URL, or when there are no tokens."""
+    labels = [entry["label"] for entry in github_tokens() if entry["label"]]
+    if github_url_user(url) is None or not labels:
+        return [url]
+    out = [github_url_with_label(url, label) for label in labels]
+    plain = github_url_with_label(url, "")
+    if plain not in out:
+        out.append(plain)
+    return out
+
+
+def github_retry_configs(url):
+    """For a pull / fetch that GitHub refused: one ``["-c", "url.<x>.insteadOf=<y>"]``
+    per OTHER token, so that one command runs with that token instead of the one
+    the folder's URL names. Nothing in the study folder changes. [] when the
+    remote is not https github.com or there is no other token."""
+    current = github_url_user(url)
+    if current is None:
+        return []
+    match = _GITHUB_HTTPS_RE.match(str(url).strip())
+    prefix = str(url).strip()[:match.end()] + "/"
+    out = []
+    for entry in github_tokens():
+        label = entry["label"]
+        if label and label != current:
+            out.append(["-c", "url.%s.insteadOf=%s" % (
+                github_url_with_label("https://github.com/", label), prefix)])
+    return out
+
+
+def _retry_with_other_tokens(url, run, output):
+    """After git refused ``url`` (``output``), run ``run(extra_args)`` once per
+    other token until one works. Returns ``(code, output)`` of the first success,
+    or ``(None, output)`` (the ORIGINAL failure) when none works or a retry does
+    not apply (not a login problem, not GitHub, no other token)."""
+    if classify_git_error(output)["code"] not in ("auth", "not_found"):
+        return None, output
+    for extra in github_retry_configs(url):
+        try:
+            code, again = run(extra)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        if code == 0:
+            return code, again
+    return None, output
+
+
+# The clone's "does it exist?" check (git ls-remote). It used to wait 60 s; on
+# a Windows lab PC the first one sat the whole minute (Git Credential Manager
+# starting up, or a permission window behind the launcher), so stop sooner and
+# say what to do.
+GIT_PRECHECK_TIMEOUT = 20
+CLONE_PRECHECK_TIMEOUT_ACTION = ("GitHub did not answer in time. If a system window "
+                                 "asked for permission (Keychain / Credential "
+                                 "Manager), allow it and press Retry.")
+CLONE_PRECHECK_TIMEOUT_TIP = (
+    "The first GitHub request on a computer can be slow: on Windows, Git "
+    "Credential Manager starts up (and may show a window of its own); on a Mac, "
+    "the Keychain may ask whether git may use the saved token, in a window that "
+    "can sit behind the launcher. Retry is usually quick. The activity log shows "
+    "how long each git step took.")
+
+
 def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
-                       on_phase=None):
+                       on_phase=None, researcher="", known_label=None):
     """Check, then clone, ``https://github.com/<org>/<repo>`` into a new
     ``<repo>`` subfolder of ``dest_parent`` using the machine's already-stored
     read-only git credential (plain git -- the launcher never handles a token).
@@ -4954,6 +5552,17 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
     is called with "checking" then "cloning" so a dialog can show progress.
     ``runner`` lets tests inject a fake spawn; ``url_template`` lets them clone
     from local bare repos. Bounded by timeouts; never raises.
+
+    A successful clone is written to the clone log (:func:`record_clone`) with
+    ``researcher`` (who got it) and the label of the token used; the result
+    carries ``token_label``.
+
+    ``known_label`` (a token label, "" for the plain login): the repository was
+    picked from the list that token just fetched from GitHub, which already
+    proves it exists and that token can read it, so the ``ls-remote`` check is
+    SKIPPED and the clone runs with that token at once (one git + credential
+    helper start fewer: on Windows that is Git Credential Manager starting). If
+    that clone is refused anyway, the normal check runs after all.
     """
     def outcome(status, message, hint="", output="", path="", action="", **more):
         # ``action`` is the line the dialog shows in BOLD (what to do);
@@ -5029,34 +5638,76 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
                 "Check the internet connection, then try again."),
         }
 
+    def clone_into(clone_url):
+        """``(code, output)`` of the clone, or an outcome dict when git could not
+        be run / was too slow."""
+        try:
+            return _run_git(["clone", clone_url, target], runner=runner, timeout=600,
+                            no_prompt=True)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+            shutil.rmtree(target, ignore_errors=True)   # drop a half-made clone
+            return spawn_errors("Cloning")[type(error)]
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            shutil.rmtree(target, ignore_errors=True)
+            return outcome("error", "Could not run git clone.", str(error))
+
+    def succeeded(clone_url, output):
+        if not os.path.isdir(target):
+            return outcome("error", "git clone reported success but the folder is "
+                                    "missing.", "", output)
+        label = github_url_user(clone_url) or ""
+        record_clone(org, name, researcher, target, token_label=label)
+        return outcome("ok", "Cloned %s/%s into %s." % (org, name, target),
+                       output=output, path=target, token_label=label)
+
+    if known_label is not None:
+        # Picked from the list this token fetched: it exists and the token can
+        # read it, so no separate check.
+        direct = github_url_with_label(url, known_label) or url
+        phase("cloning")
+        done = clone_into(direct)
+        if isinstance(done, dict):
+            return done
+        code, output = done
+        if code == 0:
+            return succeeded(direct, output)
+        if classify_git_error(output)["code"] not in ("auth", "not_found"):
+            return git_failure(output)
+        shutil.rmtree(target, ignore_errors=True)       # then check as usual
+
     phase("checking")
-    try:
-        code, output = _run_git(["ls-remote", url, "HEAD"], runner=runner,
-                                timeout=60, no_prompt=True)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
-        return spawn_errors("Checking the repository")[type(error)]
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return outcome("error", "Could not run git.", str(error))
+    # Several tokens: try each in turn (then the plain login) and clone with the
+    # first that can open the repository, its label IN the URL, so later pulls
+    # and update checks use that same token by themselves.
+    for candidate in github_clone_candidates(url):
+        try:
+            code, output = _run_git(["ls-remote", candidate, "HEAD"], runner=runner,
+                                    timeout=GIT_PRECHECK_TIMEOUT, no_prompt=True)
+        except subprocess.TimeoutExpired:
+            return outcome("timeout", "Checking %s/%s took longer than %d s and was "
+                           "stopped." % (org, name, GIT_PRECHECK_TIMEOUT),
+                           action=CLONE_PRECHECK_TIMEOUT_ACTION,
+                           tip=CLONE_PRECHECK_TIMEOUT_TIP)
+        except FileNotFoundError as error:
+            return spawn_errors("Checking the repository")[type(error)]
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            return outcome("error", "Could not run git.", str(error))
+        if code == 0:
+            url = candidate
+            break
+        if classify_git_error(output)["code"] not in ("auth", "not_found"):
+            break                         # offline etc.: another token will not help
     if code != 0:
         return git_failure(output)
 
     phase("cloning")
-    try:
-        code, output = _run_git(["clone", url, target], runner=runner, timeout=600,
-                                no_prompt=True)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
-        shutil.rmtree(target, ignore_errors=True)   # drop a half-made clone
-        return spawn_errors("Cloning")[type(error)]
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        shutil.rmtree(target, ignore_errors=True)
-        return outcome("error", "Could not run git clone.", str(error))
+    done = clone_into(url)
+    if isinstance(done, dict):
+        return done
+    code, output = done
     if code != 0:
         return git_failure(output)
-    if not os.path.isdir(target):
-        return outcome("error", "git clone reported success but the folder is "
-                                "missing.", "", output)
-    return outcome("ok", "Cloned %s/%s into %s." % (org, name, target),
-                   output=output, path=target)
+    return succeeded(url, output)
 
 
 # ---------------------------------------------------------------------------

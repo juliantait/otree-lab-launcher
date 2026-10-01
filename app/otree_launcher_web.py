@@ -256,10 +256,20 @@ def _ui_text():
         "github_login_action": core.GITHUB_LOGIN_ACTION_LABEL,
         "github_login_title": core.GITHUB_LOGIN_DIALOG_TITLE,
         "github_login_save_retry": core.GITHUB_LOGIN_SAVE_RETRY_LABEL,
-        "github_forget": core.GITHUB_FORGET_LABEL,
-        "github_forget_confirm": core.GITHUB_FORGET_CONFIRM,
+        "clone_researcher_missing": core.CLONE_RESEARCHER_MISSING,
+        "clone_history_link": core.CLONE_HISTORY_LINK_LABEL,
+        "clone_history_empty": core.CLONE_HISTORY_EMPTY_TEXT,
+        "clone_folder_missing": core.CLONE_FOLDER_MISSING_TEXT,
+        "github_add_token": core.GITHUB_ADD_TOKEN_LABEL,
+        "github_delete_token": core.GITHUB_DELETE_TOKEN_LABEL,
+        "github_tokens_row": core.GITHUB_TOKENS_ROW_LABEL,
+        "github_no_tokens": core.GITHUB_NO_TOKENS_TEXT,
+        "github_who_label": core.GITHUB_WHO_LABEL,
+        "github_who_missing": core.GITHUB_TOKEN_WHO_MISSING,
         "github_token_link": core.GITHUB_TOKEN_LINK_LABEL,
         "github_login_note": core.GITHUB_LOGIN_DIALOG_NOTE,
+        "github_login_prompt": core.GITHUB_LOGIN_DIALOG_PROMPT,
+        "github_login_missing": core.GITHUB_LOGIN_MISSING_MESSAGE,
         "github_platform_note": core.github_platform_note(),
         # The study update check / Git Pull wording (core owns it).
         "git_pull_button": core.GIT_PULL_BUTTON_LABEL,
@@ -641,6 +651,12 @@ class Api(object):
         self._update_lock = threading.Lock()
         self._update_status = {}
         self._update_pending = {}
+        # Which token showed each repository in the clone dialog's list
+        # ({org: {name_lower: label}}): a clone of a listed name skips its check.
+        self._listed_repos = {}
+        # Every git command the launcher runs goes into the activity log, with
+        # its duration (core strips credentials). Held weakly by core.
+        core.add_git_command_listener(self._log_git_command)
         self.presets, self.store_extra = core.load_store(self.store_path)
         # The saved_configs.json mtime at load, so _mutate_store can tell when ANOTHER
         # process (e.g. the headless one-click shortcut) wrote the store and merge
@@ -786,6 +802,10 @@ class Api(object):
         """Run work off the WebView thread (dialogs, streaming launches)."""
         LOG.info("spawn worker: %s", name)
         threading.Thread(target=target, name=name, daemon=True).start()
+
+    def _log_git_command(self, line, level):
+        """core reports a finished git command: one quiet activity-log line."""
+        self._log("warn" if level == "warn" else "", line)
 
     def _log(self, level, text):
         """Push one line into the page's activity log. Worker threads only."""
@@ -1443,18 +1463,20 @@ class Api(object):
 
     def _github_state(self, with_login=True):
         """Everything the GitHub card in Settings shows, decided by core: the
-        organisation (empty = off), who is logged in on this computer (asked from
-        git's credential store; no password leaves core), the one-line summary,
-        the token-expiry notice and the prefilled "create the token" link."""
+        organisation (empty = off), this computer's tokens ("Token, added <date>
+        by <researcher>": never a token, never a GitHub account name), the
+        one-line summary, the token-expiry notice and the prefilled "create the
+        token" link. ``with_login`` also takes over an older single login found
+        in git's credential store (asks the store: Settings only, not at start)."""
         sync = core.load_github_sync()
         on = core.github_clone_enabled(sync)
-        stored = core.github_stored_login() if with_login else \
-            {"has_login": False, "username": ""}
-        info = core.github_login_info()
+        tokens = core.github_tokens(adopt=with_login)
         return {"ok": True, "enabled": on, "org": sync["org"] if on else "",
-                "login": stored, "token_expires": info.get("token_expires", ""),
-                "summary": core.github_summary(sync, stored, info),
-                "expiry_notice": core.github_token_expiry_notice(info=info),
+                "tokens": [{"id": e["id"], "text": core.github_token_text(e),
+                            "confirm": core.github_delete_confirm_text(e)}
+                           for e in tokens],
+                "summary": core.github_summary(sync, tokens),
+                "expiry_notice": core.github_token_expiry_notice(tokens=tokens or None),
                 "token_url": core.github_token_create_url(sync["org"]),
                 "clone_parent": core.clone_parent_default()}
 
@@ -1486,35 +1508,43 @@ class Api(object):
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
 
     @api_call
-    def github_save_login(self, username, token):
-        """Hand a GitHub username + token to the SYSTEM credential store
-        (core.github_save_login: git credential reject, then approve). The token
-        is never logged (api_call logs no arguments), never written to a
-        launcher file and never part of the result.
-
-        Before storing, core asks GitHub ONCE whether it accepts the token
-        (core.github_save_login_checked): a rejected token is not stored. Only
-        the username and the token's expiry DATE are remembered."""
-        result = dict(core.github_save_login_checked(username, token))
+    def github_add_token(self, token, added_by):
+        """Add one GitHub token (core.github_add_token): core asks GitHub ONCE
+        whether it accepts it (a rejected one is not stored), then hands it to the
+        SYSTEM credential store under its own label. ``added_by`` joins the shared
+        researcher roster, as everywhere else. The token is never logged
+        (api_call logs no arguments), never written to a launcher file and never
+        part of the result."""
+        result = dict(core.github_add_token(token, added_by))
         if result.get("ok"):
+            name = str(added_by or "").strip()
+            try:
+                self._mutate_store(lambda: core.add_researcher(self.store_extra, name))
+            except Exception:
+                pass                       # the token is stored; the roster can wait
+            result["researchers"] = core.list_researchers(self.store_extra, self.presets)
             result["github"] = self._github_state()
         return result
 
     @api_call
-    def github_forget_login(self):
-        """Forget the stored github.com login (git credential reject) and what
-        this computer remembered about it."""
-        result = dict(core.github_forget_login_checked())
-        if result.get("ok"):
-            result["github"] = self._github_state()
+    def github_delete_token(self, token_id):
+        """Delete one token (git credential reject for its label, and its line in
+        machine.json). The page asked first, naming who added it and when."""
+        result = dict(core.github_delete_token(token_id))
+        result["github"] = self._github_state()
         return result
 
     @api_call
     def list_org_repos(self):
         """The repositories of the configured organisation that this computer's
-        login can see, for the clone dialog's list (core.github_list_org_repos;
+        tokens can see (all of them, merged), for the clone dialog's list (core.github_list_org_repos;
         typing a name still works when the list cannot be fetched)."""
-        return core.github_list_org_repos(core.load_github_org())
+        org = core.load_github_org()
+        result = core.github_list_org_repos(org)
+        self._listed_repos[org.lower()] = {
+            repo["name"].lower(): repo.get("token_label")
+            for repo in result.get("repos") or [] if repo.get("token_label") is not None}
+        return result
 
     @api_call
     def git_update_study(self, project_path):
@@ -1623,7 +1653,7 @@ class Api(object):
         return {"ok": True, "cancelled": False, "path": path}
 
     @api_call
-    def clone_org_repo(self, repo, dest_parent=""):
+    def clone_org_repo(self, repo, dest_parent="", researcher=""):
         """GitHub Organisation Sync, step 2 of 2: clone ``<org>/<repo>`` into the
         ALREADY-chosen ``dest_parent`` in the BACKGROUND.
 
@@ -1649,11 +1679,16 @@ class Api(object):
         if not dest_parent:
             return {"ok": False,
                     "message": "Choose a parent folder for the clone first."}
-        self._spawn(lambda: self._do_clone_org_repo(org, repo, dest_parent),
+        researcher = str(researcher or "").strip()
+        if not researcher:
+            # Who gets the study (the clone log on this computer records it).
+            return {"ok": False, "field": "researcher",
+                    "message": core.CLONE_RESEARCHER_MISSING}
+        self._spawn(lambda: self._do_clone_org_repo(org, repo, dest_parent, researcher),
                     "git-clone")
         return {"ok": True, "pending": True}
 
-    def _do_clone_org_repo(self, org, repo, dest_parent):
+    def _do_clone_org_repo(self, org, repo, dest_parent, researcher=""):
         """Worker: clone into the ALREADY-chosen ``dest_parent`` and push
         pywOnCloneDone.
 
@@ -1669,13 +1704,21 @@ class Api(object):
         self._status("", "Cloning %s/%s into %s ..." % (org, repo, dest))
         # Checking -> cloning phases drive the busy line INSIDE the clone dialog,
         # which stays open until the clone has succeeded.
+        # A name picked from the list that a token just fetched needs no check.
+        known = self._listed_repos.get(str(org or "").lower(), {}).get(repo.lower()) \
+            if "/" not in repo and ":" not in repo else None
         result = core.git_clone_org_repo(
-            org, repo, dest,
+            org, repo, dest, researcher=researcher, known_label=known,
             on_phase=lambda phase: self._callback(
                 "pywOnCloneProgress", {"phase": phase, "org": org, "repo": repo}))
         if result.get("ok") and result.get("path"):
             path = result["path"]
             core.remember_clone_parent(dest)      # prefilled next time (this PC)
+            try:   # a new name joins the shared researcher roster, as elsewhere
+                self._mutate_store(lambda: core.add_researcher(self.store_extra, researcher))
+            except Exception:
+                pass
+            result["researchers"] = core.list_researchers(self.store_extra, self.presets)
             result["project"] = project_status(path)
             result["settings"] = core.inspect_settings(path, self._lab_room_for())
         self._callback("pywOnCloneDone", result)
@@ -1686,7 +1729,24 @@ class Api(object):
         (the one used last time on this computer, else local/) and the
         organisation."""
         return {"ok": True, "parent": core.clone_parent_default(),
-                "org": core.load_github_org()}
+                "org": core.load_github_org(),
+                "researchers": core.list_researchers(self.store_extra, self.presets),
+                "suggested": (str(self.store_extra.get("last_author", "")).strip()
+                              or self._default_author())}
+
+    @api_call
+    def clone_history(self):
+        """The studies cloned from GitHub on this computer, newest first
+        (core.clone_history_rows; a missing or partly corrupt log never breaks
+        this). Each row says whether its folder still exists."""
+        org = core.load_github_org()
+        return {"ok": True, "rows": core.clone_history_rows(), "org": org,
+                "title": core.CLONE_HISTORY_LINK_LABEL % (org or "GitHub")}
+
+    @api_call
+    def open_folder(self, path):
+        """Show a folder in the computer's file browser (core.open_folder)."""
+        return core.open_folder(path)
 
     @api_call
     def fresh_copy(self, project_path=""):

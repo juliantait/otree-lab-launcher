@@ -437,15 +437,22 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .gh-top{align-items:start}
 .gh-top>label{padding-top:9px}
 .gh-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-/* GitHub login dialog: the token link and the inline "Forget?" confirm. */
+/* GitHub token dialog: the token link. Settings: the token list, each row with
+   its own Delete and an inline confirm naming who added it and when. */
 .gh-token-link{font-size:12px;margin:-2px 0 10px 162px}
 .gh-token-link a{color:var(--accent);font-weight:600}
 @media (max-width:560px){.gh-token-link{margin-left:0}}
-.gh-forget-ask{display:none;margin-top:10px;padding:9px 11px;border-radius:var(--r-sm);background:var(--warn-soft);
+.gh-del-ask{margin-top:6px;padding:9px 11px;border-radius:var(--r-sm);background:var(--warn-soft);
   border:1px solid var(--warn-line);color:var(--warn);font-size:12.5px;line-height:1.45}
-.gh-forget-ask .gh-actions{justify-content:flex-end}
-.gh-login-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px}
-.gh-login-line .who{font-size:12.5px;color:var(--text)}
+.gh-del-ask .gh-actions{justify-content:flex-end}
+.gh-tokens{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.gh-token-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gh-token-row .who{font-size:12.5px;color:var(--text);flex:1;min-width:0}
+.gh-token-row .who.expired{color:var(--warn)}
+.gh-history-link{margin:10px 0 2px;font-size:12.5px}
+.gh-history-link a{color:var(--accent);font-weight:600}
+.clone-missing{color:var(--warn);font-size:11.5px}
+.gh-tokens .none{font-size:12.5px;color:var(--text-faint,var(--text))}
 .git-result{margin-top:8px;padding-top:7px;border-top:1px solid var(--line-soft);font-size:11.5px;line-height:1.45}
 .git-result .gr-head{color:var(--text-strong)}
 .git-result .gr-head b{font-weight:700}
@@ -1587,24 +1594,21 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
 
 <!-- ==================== GITHUB LOGIN / TOKEN ==================== -->
 <!-- Its own overlay (not the generic #infoModal) so it can open ON TOP of the
-     clone dialog and Lab Settings without replacing them. The username + token
-     go straight to core.github_save_login (git credential approve, the SYSTEM
-     credential store); the page keeps no copy and the token is cleared from the
-     field as soon as it is sent. -->
+     clone dialog and Lab Settings without replacing them. It ADDS one token
+     (a computer can hold several): who is adding it (the shared researcher
+     roster, or a new name) + the token. core.github_add_token stores it in the
+     SYSTEM credential store under its own label; the page keeps no copy and the
+     token is cleared from the field as soon as it is sent. -->
 <div class="modal" id="ghLoginModal" hidden onclick="if(event.target===this)closeGhLogin()">
   <div class="modal-card" id="ghLoginCard">
     <button class="modal-x" onclick="closeGhLogin()" aria-label="Close">&times;</button>
-    <h3 class="modal-title"><span id="ghLoginTitle">GitHub login for this computer</span><span id="ghLoginTip"></span></h3>
-    <p class="modal-desc"><b>Enter the GitHub username and a token, then Save.</b></p>
-    <div class="mfield"><label for="ghLoginUser">GitHub username</label><input id="ghLoginUser" type="text" autocomplete="off" placeholder="the lab account"></div>
+    <h3 class="modal-title"><span id="ghLoginTitle">Add a GitHub token</span><span id="ghLoginTip"></span></h3>
+    <p class="modal-desc"><b id="ghLoginPrompt">Say who is adding the token, paste it, then Save.</b></p>
+    <div class="mfield"><label for="ghLoginWhoIn">Added by</label><input id="ghLoginWhoIn" type="text" list="ghRosterList" autocomplete="off"><datalist id="ghRosterList"></datalist></div>
     <div class="mfield"><label for="ghLoginToken">Token</label><div class="pwrap"><input id="ghLoginToken" type="password" autocomplete="off" placeholder="read-only token"><button type="button" class="pw-toggle" onclick="togglePw2('ghLoginToken',this)">Show</button></div></div>
     <div class="gh-token-link"><a id="ghTokenLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create the token on GitHub</a></div>
     <div class="gh-login-msg" id="ghLoginMsg"></div>
-    <div class="gh-forget-ask" id="ghForgetAsk"><span id="ghForgetText"></span>
-      <div class="gh-actions"><button class="btn tiny" onclick="cancelGhForget()">Cancel</button>
-        <button class="btn tiny danger" id="ghForgetGo" onclick="doGhForget()">Forget</button></div></div>
-    <div class="cta"><button class="btn" id="ghForgetBtn" onclick="askGhForget()" style="margin-right:auto">Forget GitHub login</button>
-      <button class="btn" onclick="closeGhLogin()">Cancel</button>
+    <div class="cta"><button class="btn" onclick="closeGhLogin()">Cancel</button>
       <button class="btn accent" id="ghLoginSave" onclick="doGhSaveLogin()">Save</button></div>
   </div>
 </div>
@@ -1874,17 +1878,27 @@ var UI_TEXT={
   pg_blank_password_hint:"Leave blank if this Postgres user has no password (e.g. Postgres.app on a Mac, or a trust login).",
   pg_new_user_password_hint:"Optional. Leave blank only if this Postgres lets users in without a password (e.g. Postgres.app on a Mac); on a standard Windows install, set one.",
   github_login_action:"GitHub login…",
-  github_login_title:"GitHub login for this computer",
+  github_login_title:"Add a GitHub token",
   github_login_save_retry:"Save and retry",
-  github_forget:"Forget GitHub login",
-  github_forget_confirm:"Forget the GitHub login on this computer? Clone and Git Pull stop working until a login is added again.",
+  clone_researcher_missing:"Enter or pick a researcher: who is getting this study.",
+  clone_history_link:"Studies from %s on this computer",
+  clone_history_empty:"No study has been cloned from GitHub on this computer yet.",
+  clone_folder_missing:"folder no longer exists",
+  github_add_token:"Add token",
+  github_delete_token:"Delete",
+  github_tokens_row:"Tokens",
+  github_no_tokens:"No token on this computer",
+  github_who_label:"Added by",
+  github_who_missing:"Enter or pick who is adding this token.",
   github_token_link:"Create the token on GitHub",
   git_pull_button:"Git Pull",
   git_update_action:"Update",
   git_fresh_copy:"Get a fresh copy",
   update_check:"Check for updates",
   update_discard:"Discard these changes and update",
-  github_login_note:"Saved in this computer's own credential store (Windows Credential Manager or the macOS Keychain), never in a launcher file. Use a lab account that is a member of the organisation, and a read-only token as the password.",
+  github_login_note:"Saved in this computer's own credential store (Windows Credential Manager or the macOS Keychain), never in a launcher file. A computer can hold several tokens (the lab's read-only token, a researcher's own token); a clone uses the first one that can open the study. Make the lab token with the lab account, a member of the organisation.",
+  github_login_prompt:"Say who is adding the token, paste it, then Save.",
+  github_login_missing:"Paste the token.",
   github_platform_note:"",
   admin_login_note:"Uses the Postgres admin login from this computer.",
   admin_login_missing:"This database uses the Postgres admin login from this computer, but no admin login is stored. Add it in Settings > Postgres admin.",
@@ -1978,6 +1992,7 @@ window.pywOnCloneDone=function(r){
     return;
   }
   if(r.ok&&r.path){
+    if(r.researchers)RESEARCHERS=r.researchers;
     if(ghCloneDialogOpen())closeModal();   /* success: the ONLY path that closes the dialog */
     window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
     window.pywStatus("ok",r.message||("Cloned into "+r.path+" and selected it as the study folder."),"github");
@@ -2893,6 +2908,11 @@ function onGithubOrgClone(){
     '<div class="mfield"><label>Saves to</label>'+
       '<div class="gh-dest"><span class="mono-line" id="ghDestPreview"></span>'+
       '<button class="btn tiny" type="button" id="ghPickBtn" onclick="onGhPickFolder()">Change…</button></div></div>'+
+    /* Who gets the study (required): the shared researcher roster, pick or
+       type; a new name joins it. Recorded in this computer's clone log. */
+    '<div class="mfield"><label for="ghWho">Researcher</label>'+
+      '<input id="ghWho" type="text" list="ghWhoList" autocomplete="off" oninput="updateGhCloneState()">'+
+      '<datalist id="ghWhoList"></datalist></div>'+
     '<div class="modal-err" id="ghRepoErr"></div>'+
     '<div class="gh-busy" id="ghBusy"><span class="spin"></span><span id="ghBusyMsg">Checking…</span></div>'+
     '<div class="gh-err" id="ghCloneErr"></div>'+
@@ -2903,7 +2923,9 @@ function onGithubOrgClone(){
   var r=el("ghRepo");if(r)r.focus();
   if(NATIVE&&API&&API.clone_dialog_state)API.clone_dialog_state().then(function(st){
     if(st&&st.ok&&st.parent&&!ghClonePath){ghClonePath=st.parent;GITHUB_CLONE_PARENT=st.parent;}
+    if(st&&st.ok)fillGhWho(st.researchers||[],st.suggested||"");
     updateGhClonePreview();updateGhCloneState();});
+  else fillGhWho(typeof PREVIEW_RESEARCHERS!=="undefined"?PREVIEW_RESEARCHERS:[],"");
   /* The list is a help, never a requirement: no answer just means no list. */
   if(NATIVE&&API&&API.list_org_repos)API.list_org_repos().then(function(res){
     if(!ghCloneDialogOpen())return;
@@ -2945,11 +2967,17 @@ function updateGhClonePreview(){
      path is the tooltip. */
   p.textContent=full.length>40?("\u2026"+full.slice(full.length-39)):full;p.title=full;
 }
-/* Enable Clone once a name is typed (the folder is prefilled). */
+/* The researcher roster for the clone dialog (prefilled with the last author). */
+function fillGhWho(roster,suggested){
+  var list=el("ghWhoList");if(!list)return;
+  list.innerHTML=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+  var w=el("ghWho");if(w&&!w.value)w.value=suggested||"";
+}
+/* Enable Clone once a name and a researcher are there (the folder is prefilled). */
 function updateGhCloneState(){
   var go=el("ghCloneGo");if(!go)return;
-  var repo=(val("ghRepo")||"").trim();
-  go.disabled=!(ghClonePath&&repo);
+  var repo=(val("ghRepo")||"").trim(),who=(val("ghWho")||"").trim();
+  go.disabled=!(ghClonePath&&repo&&who);
 }
 function onGhCloneInput(){updateGhClonePreview();updateGhCloneState();renderGhRepoList();}
 /* True while the clone dialog is the open modal. */
@@ -2960,7 +2988,7 @@ var ghCloneRunning=false;
 function ghCloneBusy(on){
   ghCloneRunning=!!on;
   var b=el("ghBusy");if(b)b.style.display=on?"block":"none";
-  ["ghRepo","ghCloneCancel","ghPickBtn"].forEach(function(id){var x=el(id);if(x)x.disabled=!!on;});
+  ["ghRepo","ghWho","ghCloneCancel","ghPickBtn"].forEach(function(id){var x=el(id);if(x)x.disabled=!!on;});
   var go=el("ghCloneGo");if(go){go.disabled=!!on;if(on)go.textContent="Cloning…";}
   if(on){var e=el("ghCloneErr");if(e)e.style.display="none";var m=el("ghRepoErr");if(m)m.style.display="none";
     var l=el("ghRepoList");if(l)l.hidden=true;}
@@ -2971,7 +2999,8 @@ function ghCloneBusy(on){
    Retry. A folder that already exists offers itself ("Use that folder"). */
 function ghShowCloneError(r){
   var e=el("ghCloneErr");if(!e)return;
-  var html='<b>'+escapeHtml(r.action||r.message||"Could not clone the repository.")+'</b>';
+  var html='<b>'+escapeHtml(r.action||r.message||"Could not clone the repository.")+'</b>'+
+    (r.tip?infoBadge(r.tip):"");   /* the longer why (e.g. a slow first request) */
   if(r.action&&r.message)html+='<div class="gh-hint">'+escapeHtml(r.message)+'</div>';
   else if(r.hint)html+='<div class="gh-hint">'+escapeHtml(r.hint)+'</div>';
   if(r.status==="exists"&&r.existing_path)html+='<div class="gh-actions"><button type="button" class="btn tiny accent" onclick="useExistingClone('+jsQuote(r.existing_path)+')">Use that folder</button>'+
@@ -3008,6 +3037,8 @@ function doGithubOrgClone(){
   var repo=(val("ghRepo")||"").trim(),e=el("ghRepoErr");
   if(!repo){if(e){e.style.display="block";e.textContent="Enter the repository name.";}return;}
   if(!ghClonePath){if(e){e.style.display="block";e.textContent="Choose a folder to save it into.";}return;}
+  var who=(val("ghWho")||"").trim();
+  if(!who){if(e){e.style.display="block";e.textContent=UI_TEXT.clone_researcher_missing;}var w=el("ghWho");if(w)w.focus();return;}
   if(!NATIVE||!API||!API.clone_org_repo){closeModal();window.pywStatus("","Cloning works in the app, not the static preview.");return;}
   if(ghCloneRunning)return;
   var dest=ghClonePath;
@@ -3017,7 +3048,7 @@ function doGithubOrgClone(){
   ghCloneBusy(true);window.pywOnCloneProgress({phase:"checking"});
   var g=el("githubOrgBtn");if(g){g.disabled=true;g.innerHTML=GH_LOGO_SVG+'<span>Cloning…</span>';}
   window.pywStatus("","Cloning "+repo+" into "+dest+"…");
-  API.clone_org_repo(repo,dest).then(function(r){
+  API.clone_org_repo(repo,dest,who).then(function(r){
     /* Native pushes the real result via pywOnCloneDone; this promise only carries
        the "pending" ack (or an immediate error). */
     if(r&&r.ok&&r.pending){GITHUB_CLONE_PARENT=dest;return;}
@@ -3025,7 +3056,7 @@ function doGithubOrgClone(){
   });
 }
 /* ---------------- GitHub login (system credential store) ----------------
-   The launcher never keeps a token: core hands the username + token to git's own
+   The launcher never keeps a token: core hands the token to git's own
    credential helper and returns no secret. Before storing, core asks GitHub once
    whether it accepts the token (a rejected one is NOT stored). The field is
    cleared as soon as it has been sent. ONE dialog, opened from Settings, a
@@ -3047,44 +3078,58 @@ function openGhLogin(from){
   el("ghLoginTip").innerHTML=note?infoBadge(note):"";
   var link=el("ghTokenLink");
   if(link){link.textContent=UI_TEXT.github_token_link;if(GITHUB_STATE&&GITHUB_STATE.token_url)link.href=GITHUB_STATE.token_url;}
-  el("ghForgetBtn").textContent=UI_TEXT.github_forget;
-  el("ghForgetText").textContent=UI_TEXT.github_forget_confirm;
-  cancelGhForget();
-  el("ghLoginUser").value="";el("ghLoginToken").value="";
+  el("ghLoginPrompt").textContent=UI_TEXT.github_login_prompt;
+  el("ghLoginToken").value="";
   var m=el("ghLoginMsg");m.style.display="none";m.textContent="";
   var retry=(ghLoginFrom==="clone"||ghLoginFrom==="pull");
   el("ghLoginSave").textContent=retry?UI_TEXT.github_login_save_retry:"Save";
-  el("ghLoginSave").disabled=false;el("ghForgetBtn").disabled=false;
-  el("ghLoginModal").hidden=false;el("ghLoginUser").focus();
+  el("ghLoginSave").disabled=false;
+  el("ghLoginModal").hidden=false;
+  /* Who is adding it: the SAME shared researcher roster as Save-as-new and the
+     create-database dialog (select or type; a new name joins the roster). */
+  function fill(roster,suggested){
+    el("ghRosterList").innerHTML=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+    var w=el("ghLoginWhoIn");w.value=suggested||"";
+    (w.value?el("ghLoginToken"):w).focus();
+  }
+  if(NATIVE&&API&&API.list_researchers){
+    API.list_researchers().then(function(r){fill((r&&r.researchers)||[],(r&&r.suggested)||"");});
+  }else{fill(typeof PREVIEW_RESEARCHERS!=="undefined"?PREVIEW_RESEARCHERS:[],"");}
 }
 function closeGhLogin(){el("ghLoginToken").value="";el("ghLoginModal").hidden=true;}
 function ghLoginMsg(ok,text){var m=el("ghLoginMsg");m.className="gh-login-msg "+(ok?"ok":"err");m.textContent=text||"";m.style.display=text?"block":"none";}
 function doGhSaveLogin(){
-  var user=(val("ghLoginUser")||"").trim(),token=(val("ghLoginToken")||"").trim();
-  if(!user||!token){ghLoginMsg(false,"Enter the GitHub username and the token.");return;}
-  if(!NATIVE||!API||!API.github_save_login){ghLoginMsg(false,"Saving a GitHub login works in the app, not the static preview.");return;}
+  var who=(val("ghLoginWhoIn")||"").trim(),token=(val("ghLoginToken")||"").trim();
+  if(!who){ghLoginMsg(false,UI_TEXT.github_who_missing);return;}
+  if(!token){ghLoginMsg(false,UI_TEXT.github_login_missing);return;}
+  if(!NATIVE||!API||!API.github_add_token){ghLoginMsg(false,"Adding a GitHub token works in the app, not the static preview.");return;}
   var save=el("ghLoginSave"),label=save.textContent;
-  save.disabled=true;save.textContent="Checking…";el("ghForgetBtn").disabled=true;
+  save.disabled=true;save.textContent="Checking…";
   el("ghLoginToken").value="";   /* sent; never kept in the page */
-  API.github_save_login(user,token).then(function(r){
-    r=r||{};save.disabled=false;save.textContent=label;el("ghForgetBtn").disabled=false;
-    if(!r.ok){ghLoginMsg(false,r.message||"Could not save the GitHub login.");return;}
+  API.github_add_token(token,who).then(function(r){
+    r=r||{};save.disabled=false;save.textContent=label;
+    if(!r.ok){ghLoginMsg(false,r.message||"Could not save the GitHub token.");return;}
+    if(r.researchers)RESEARCHERS=r.researchers;
     if(r.github)applyGithubState(r.github);
-    closeGhLogin();ghLoginDone(true,r.message||"Saved the GitHub login.",true);
+    closeGhLogin();ghLoginDone(true,r.message||"Token saved.",true);
   });
 }
-/* Forget is destructive on a shared lab PC (cloning stops for everybody), so it
-   asks first, inside the dialog, naming the consequence. */
-function askGhForget(){var a=el("ghForgetAsk");if(a)a.style.display="block";}
-function cancelGhForget(){var a=el("ghForgetAsk");if(a)a.style.display="none";}
-function doGhForget(){
-  cancelGhForget();
-  if(!NATIVE||!API||!API.github_forget_login){ghLoginMsg(false,"Forgetting the GitHub login works in the app, not the static preview.");return;}
-  API.github_forget_login().then(function(r){
+/* Delete ONE token (Settings > GitHub). It asks first, in place, naming who
+   added it and when (core's confirm text): a study only that token opens stops
+   updating on this computer. */
+function askGhDelete(id){
+  var box=el("ghDelAsk_"+id);if(box)box.hidden=false;
+}
+function cancelGhDelete(id){var box=el("ghDelAsk_"+id);if(box)box.hidden=true;}
+function doGhDelete(id){
+  cancelGhDelete(id);
+  if(!NATIVE||!API||!API.github_delete_token)return;
+  API.github_delete_token(id).then(function(r){
     r=r||{};
-    if(!r.ok){ghLoginMsg(false,r.message||"Could not forget the GitHub login.");return;}
     if(r.github)applyGithubState(r.github);
-    closeGhLogin();ghLoginDone(true,r.message||"",false);
+    var st=el("ghLoginStatus");
+    if(st){st.textContent=r.message||"";st.style.color=r.ok?"var(--ok)":"var(--err)";}
+    window.pywStatus(r.ok?"ok":"err",r.message||"","github");
   });
 }
 /* Show the outcome where the user came from, and after a SAVED login retry what
@@ -3926,16 +3971,20 @@ function openLabSettings(openCard){
         '<div class="ls-status" id="pgStatus"></div></div>')+
     /* GitHub: ONE summary row + Edit like every other section. The whole
        setting is the organisation name (a lab setting in lab_info.json; empty =
-       off, there is no tick box). Under it, who is logged in on this computer
-       and the ONE GitHub login button (Forget lives inside that dialog). */
+       off, there is no tick box). Under it, this computer's tokens ("Token,
+       added <date> by <researcher>", never a GitHub account name), each with
+       Delete, and the Add token button. */
     lsCard("github","GitHub","github",
       '<div class="mfield" style="grid-template-columns:150px 1fr"><label for="ghSyncOrg">Organisation name</label>'+
       '<input id="ghSyncOrg" type="text" placeholder="empty = off" autocomplete="off" onchange="saveGithubOrg()"></div>'+
       '<div class="ls-status" id="ghSyncStatus"></div>'+
-      /* GitHub login: handed to the SYSTEM credential store, never a launcher file. */
-      '<div class="mfield" style="grid-template-columns:150px 1fr"><label>Login</label>'+
-      '<div class="gh-login-line"><span class="who" id="ghLoginWho">…</span>'+
-        '<button class="btn tiny" onclick="openGhLogin(\'settings\')">'+escapeHtml(UI_TEXT.github_login_action)+'</button></div></div>'+
+      /* Tokens: in the SYSTEM credential store, never a launcher file. */
+      '<div class="mfield gh-top" style="grid-template-columns:150px 1fr"><label>'+escapeHtml(UI_TEXT.github_tokens_row)+'</label>'+
+      '<div><div class="gh-tokens" id="ghTokenList"><span class="none">…</span></div>'+
+        '<div class="gh-actions"><button class="btn tiny" onclick="openGhLogin(\'settings\')">'+escapeHtml(UI_TEXT.github_add_token)+'</button></div></div></div>'+
+      /* The clone log of this computer: which studies are here, who got them. */
+      '<div class="gh-history-link"><a href="#" id="ghHistoryLink" onclick="openCloneHistory();return false;">'+
+        escapeHtml(UI_TEXT.clone_history_link.replace("%s",GITHUB_ORG||"GitHub"))+'</a></div>'+
       '<div class="ls-status" id="ghLoginStatus"></div>')+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
@@ -4004,18 +4053,26 @@ function renderGithubCard(){
   if(sum){var t=g.summary||(GITHUB_SYNC_ENABLED?(GITHUB_ORG||""):"Off");sum.textContent=t;sum.title=t;}
   var org=el("ghSyncOrg");
   if(org&&document.activeElement!==org)org.value=GITHUB_SYNC_ENABLED?(GITHUB_ORG||""):"";
-  var who=el("ghLoginWho");
-  if(who){
-    var l=g.login;
-    who.textContent=!l?"…":(l.has_login?((l.username||"a login is stored")+(g.token_expires?(" · token "+(/expired/.test(g.summary||"")?"expired":"until")+" "+fmtDay(g.token_expires)):"")):"No login on this computer");
+  var list=el("ghTokenList");
+  if(list){
+    var rows=g.tokens;
+    list.innerHTML=!rows?'<span class="none">…</span>':(!rows.length?'<span class="none">'+escapeHtml(UI_TEXT.github_no_tokens)+'</span>':
+      rows.map(function(t){
+        var id=escapeHtml(t.id);
+        return '<div><div class="gh-token-row"><span class="who'+(/· expired /.test(t.text)?' expired':'')+'">'+escapeHtml(t.text)+'</span>'+
+          '<button class="btn tiny" onclick="askGhDelete(\''+id+'\')">'+escapeHtml(UI_TEXT.github_delete_token)+'</button></div>'+
+          '<div class="gh-del-ask" id="ghDelAsk_'+id+'" hidden>'+escapeHtml(t.confirm||"")+
+          '<div class="gh-actions"><button class="btn tiny" onclick="cancelGhDelete(\''+id+'\')">Cancel</button>'+
+          '<button class="btn tiny danger" onclick="doGhDelete(\''+id+'\')">'+escapeHtml(UI_TEXT.github_delete_token)+'</button></div></div></div>';
+      }).join(""));
   }
 }
 function fmtDay(iso){
   var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||""));if(!m)return String(iso||"");
   return parseInt(m[3],10)+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m[2],10)-1]+" "+m[1];
 }
-/* Take over what core decided (Api.github_state / set_github_org / a saved or
-   forgotten login): the button, the Settings card, the clone folder. */
+/* Take over what core decided (Api.github_state / set_github_org / an added
+   or deleted token): the button, the Settings card, the clone folder. */
 function applyGithubState(r){
   if(!r)return;
   GITHUB_STATE=r;
@@ -4024,15 +4081,16 @@ function applyGithubState(r){
   applyGithubSyncButtons();
   renderGithubCard();
 }
-/* Settings opened: ask core who is logged in (a git credential lookup, so not
-   done at start). An organisation that is set but has no login on this computer
-   is a to-do: the section opens itself (when nothing else is open). */
+/* Settings opened: ask core for this computer's tokens (it may take over an
+   older login from git's credential store, so not done at start). An
+   organisation that is set but has no token on this computer is a to-do: the
+   section opens itself (when nothing else is open). */
 function refreshGithubState(mayOpen){
   if(!NATIVE||!API||!API.github_state)return;
   API.github_state().then(function(r){
     if(!r||!r.ok)return;
     applyGithubState(r);
-    if(mayOpen&&r.enabled&&r.login&&!r.login.has_login&&el("lsBody_github")&&el("lsBody_github").hidden)lsToggle("github");
+    if(mayOpen&&r.enabled&&r.tokens&&!r.tokens.length&&el("lsBody_github")&&el("lsBody_github").hidden)lsToggle("github");
   });
 }
 /* Persist the organisation name (API.set_github_org -> lab_info.json): a name
@@ -4304,6 +4362,38 @@ function checkForUpdateNow(){
 }
 /* The read-only launch history viewer (fable review F): recent launches, newest
    first. It is a passive VIEWER; it never manages or re-runs anything. */
+/* Studies cloned from GitHub on THIS computer (core.clone_history_rows, newest
+   first). Per row: open the folder, or use it as the study. A folder that is
+   gone is marked and its buttons are off. */
+var CLONE_ROWS=[];
+function openCloneHistory(){
+  var title=UI_TEXT.clone_history_link.replace("%s",GITHUB_ORG||"GitHub");
+  openModal(title,'<div class="ls-card"><div id="cloneHistBody">Loading…</div></div>'+
+    '<div class="cta"><button class="btn" onclick="openLabSettings(\'github\')">Back to Settings</button><button class="btn" onclick="closeModal()">Close</button></div>',true);
+  if(!NATIVE||!API||!API.clone_history){el("cloneHistBody").textContent="The clone log is available in the app, not the static preview.";return;}
+  API.clone_history().then(function(r){CLONE_ROWS=(r&&r.rows)||[];renderCloneHistory();});
+}
+function renderCloneHistory(){
+  var body=el("cloneHistBody");if(!body)return;
+  if(!CLONE_ROWS.length){body.innerHTML='<p class="d">'+escapeHtml(UI_TEXT.clone_history_empty)+'</p>';return;}
+  var rows=CLONE_ROWS.map(function(r,i){
+    var off=r.exists?'':' disabled';
+    var folder='<span class="mono">'+escapeHtml(r.folder)+'</span>'+(r.exists?'':' <span class="clone-missing">('+escapeHtml(UI_TEXT.clone_folder_missing)+')</span>');
+    return '<tr><td>'+escapeHtml(r.name)+(r.fresh_copy?' <span class="hist-kept">fresh copy</span>':'')+'</td><td>'+escapeHtml(r.researcher||"")+
+      '</td><td>'+folder+'</td><td>'+escapeHtml(r.date)+'</td>'+
+      '<td class="c"><button class="btn tiny" onclick="cloneHistOpen('+i+')"'+off+'>Open folder</button> '+
+      '<button class="btn tiny accent" onclick="cloneHistUse('+i+')"'+off+'>Use as study</button></td></tr>';
+  }).join("");
+  body.innerHTML='<table class="presets-table"><thead><tr><th>Repository</th><th>Researcher</th><th>Folder</th><th>Date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+function cloneHistOpen(i){
+  var r=CLONE_ROWS[i];if(!r||!API||!API.open_folder)return;
+  API.open_folder(r.folder).then(function(res){if(res&&!res.ok)window.pywStatus("err",res.message||"","github");});
+}
+function cloneHistUse(i){
+  var r=CLONE_ROWS[i];if(!r)return;
+  useExistingClone(r.folder);   /* same path as "Use that folder" */
+}
 function openLaunchHistory(){
   openModal("Launch history",'<div class="ls-card"><div id="histBody">Loading…</div></div>'+
     '<div class="cta"><button class="btn" onclick="openLabSettings()">Back to Settings</button><button class="btn" onclick="closeModal()">Close</button></div>',true);
