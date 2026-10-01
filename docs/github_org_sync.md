@@ -1,13 +1,34 @@
-# GitHub Organisation Sync: setup and use
+# GitHub: setup and use
 
-This guide explains how to let lab PCs download ("clone") and update ("pull")
-experiment code from your lab's GitHub organisation, straight from the launcher,
-with no terminal.
+This guide explains how to let lab PCs download ("clone") experiment code from
+your lab's GitHub organisation and keep it up to date, straight from the
+launcher, with no terminal.
 
-It is written for a **lab manager** (sections 2 and 3, done once) and for
-**researchers** (section 3 for their own computer, then sections 4 to 6). You do not need much git experience. Where a
-step happens on GitHub's website, this guide links GitHub's own instructions
-instead of copying their screenshots, because GitHub changes its pages often.
+## The quick path
+
+**Lab manager, once, on GitHub** (section 2):
+
+1. **Create an organisation**, base member permission **Read**.
+2. **Make the lab's own GitHub account a member**, and allow fine-grained tokens.
+
+**On each lab PC, once, in the launcher** (sections 3 and 5a):
+
+1. **Gear -> Settings -> GitHub -> Edit. Type the organisation name.**
+2. **Click "GitHub login…"**, then **"Create the token on GitHub"** (signed in
+   as the lab account): choose *All repositories*, generate, copy.
+3. **Paste the username and the token, Save.** The launcher checks the token
+   with GitHub before it stores it.
+
+**Researcher** (sections 4 and 5):
+
+1. **Create the study's repository in the organisation** and push to it.
+2. **In the launcher: GitHub, pick the study, Enter.**
+3. Later: when the project box says **A newer version of this study is
+   available**, click **Update**.
+
+The rest of this guide is the detail. Where a step happens on GitHub's website,
+it links GitHub's own instructions instead of copying their screenshots, because
+GitHub changes its pages often.
 
 Throughout, `<your-org>` means your organisation's name, `<study-repo>` the
 name of one study's repository, and `<lab-account>` the lab's own GitHub account
@@ -17,7 +38,7 @@ that the shared lab PCs use (sections 2.5 and 3a). Replace them with your own.
 
 1. [What an organisation is, and why use one](#1-what-an-organisation-is-and-why-use-one)
 2. [Lab manager: set up the organisation](#2-lab-manager-set-up-the-organisation)
-3. [Give each computer access to GitHub](#3-give-each-computer-access-to-github)
+3. [Give each computer a GitHub login](#3-give-each-computer-a-github-login)
 4. [Researcher: put a study into the organisation](#4-researcher-put-a-study-into-the-organisation)
 5. [Using it in the launcher](#5-using-it-in-the-launcher)
 6. [Good practice](#6-good-practice)
@@ -82,43 +103,36 @@ Do this once, on the GitHub website.
 
 ---
 
-## 3. Give each computer access to GitHub
+## 3. Give each computer a GitHub login
 
 Git needs a stored GitHub login to open the organisation's private repos. It is
 set up **once per computer** and stored by the operating system (Windows
 Credential Manager, the macOS Keychain). The launcher itself **never stores a
-password, token or login**: it runs git, which uses what the computer has
-stored. The one exception is the launcher's own **Use a different GitHub login
-or token** dialog (3e): what you type there is handed straight to that same
-system store and is not kept in any launcher file or log.
+token**: it hands what you type to that system store and runs git, which uses
+what the computer has stored. The launcher remembers only the **username** and
+the token's **expiry date**.
 
-**The first time, with no login stored yet:**
+**Git never asks for a login by itself**, on Windows or on a Mac: the launcher
+runs git with every prompt switched off, so no sign-in window can pop up in the
+middle of a session. With no login stored, a clone or an update says so and
+offers **GitHub login…**, the one dialog for it.
 
-- **Windows:** Git Credential Manager **opens its own GitHub sign-in window** the
-  first time the launcher clones or pulls, with a choice of **signing in with
-  your browser or pasting a token**.
-- **macOS:** the launcher runs git **without a terminal**, so git **cannot ask
-  for a login**: with none stored, a clone simply **fails with a login error**.
-  **Store a login first**: with the launcher's dialog (3e), with `gh auth login`
-  (3c), or with a first clone in Terminal (3a).
-
-**Which option to use:**
+**Which login to use:**
 
 | Computer | Use |
 |---|---|
-| **Shared lab PC** | **Recommended: the lab's read-only token (3a)**, stored with a first clone or from inside the launcher (3e). Simpler alternative: sign the lab account in (3d). **Never** sign in with a personal account. |
-| **A researcher's own computer** | **Sign in with your own GitHub account** (3b Windows, 3c macOS). |
+| **Shared lab PC** | **The lab's read-only token (3a).** **Never** a personal account. |
+| **A researcher's own computer** | **Your own GitHub account** (3b): a sign-in git already has is used as it is, or a token of your own in the same dialog. |
 
 Why never a personal account on a shared PC: everyone who later uses that PC
 would be acting as that person on GitHub, including with their write access to
-other repos.
+other repos. **Settings -> GitHub shows who is logged in on this computer**, so
+anyone can check.
 
-### 3a. Shared lab PCs (recommended): one read-only lab token
+### 3a. Shared lab PCs: one read-only lab token
 
 A **fine-grained personal access token** is a password that can only do what
 you allow. One token, made by the lab account, serves every lab PC.
-
-Why this is the recommended setup:
 
 - **It can only read this organisation's code**, nothing else, and can never
   change anything.
@@ -126,156 +140,85 @@ Why this is the recommended setup:
   person.
 - **No personal login is ever left on a shared PC.**
 
-**Lab manager, once: create the token**
+**Create the token (lab manager, once)**
 
-1. **Sign in to GitHub as `<lab-account>`** and go to **Settings → Developer
-   settings → Personal access tokens → Fine-grained tokens → Generate new
-   token**.
-   [GitHub: create a fine-grained token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token)
-2. **Resource owner: `<your-org>`** (not the lab account itself).
-3. **Expiration:** set a date (up to a year is typical) and **put a renewal
-   reminder in the lab calendar**. When it expires, cloning and pulling stop
-   working on every lab PC until you renew it.
-4. **Repository access: All repositories.** This also covers study repos added
-   later, so you never have to edit the token.
-5. **Permissions → Repository permissions → Contents: Read-only.** Nothing else.
-   (GitHub adds *Metadata: Read-only* automatically; that is expected.)
-6. **Generate the token and copy it.** GitHub shows it only once; keep it with
+1. **Sign in to GitHub as `<lab-account>`.**
+2. In the launcher: **gear -> Settings -> GitHub -> GitHub login… -> Create the
+   token on GitHub.** GitHub's form opens **already filled in**: the
+   organisation as *Resource owner*, *Contents: Read-only* (GitHub adds
+   *Metadata: Read-only* itself) and the expiry.
+3. **Repository access: choose "All repositories".** This also covers study
+   repos added later.
+4. **Generate the token and copy it.** GitHub shows it only once; keep it with
    the lab's admin passwords. If the organisation requires approval (step 2.6),
    **approve it** in the organisation settings.
 
-**On each lab PC, once: store the token**
+(By hand instead: *Settings -> Developer settings -> Personal access tokens ->
+Fine-grained tokens -> Generate new token*, with the same choices.
+[GitHub: create a fine-grained token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token))
 
-1. **Open a terminal**: *Git Bash* on Windows, *Terminal* on macOS.
-2. **Clone any study from the organisation once:**
+**Store it on each lab PC (once)**
 
-   ```
-   cd ~/Desktop
-   git clone https://github.com/<your-org>/<study-repo>.git
-   ```
+1. **Gear -> Settings -> GitHub -> GitHub login…**
+2. **Enter `<lab-account>` and paste the token. Save.**
 
-3. **When asked to log in, enter `<lab-account>` as the username and paste the
-   token as the password.**
-   - **Windows:** Git Credential Manager opens a sign-in window; **choose
-     "Token"** and paste it. It is stored in **Windows Credential Manager**.
-   - **macOS:** type the username at `Username`; at `Password` paste the token
-     (nothing appears while you paste) and press Enter. It is stored in the
-     **macOS Keychain**.
-4. **Delete the test folder.** From now on the launcher's **GitHub** and **Git
-   Pull** buttons work without asking.
+The launcher asks GitHub once whether it accepts the token:
 
-**Or, with no terminal:** in the launcher, **Lab Settings → GitHub Organisation
-Sync → Use a different GitHub login or token**, enter `<lab-account>` and paste
-the token (3e).
+| It says | Meaning |
+|---|---|
+| **Saved… GitHub accepts it. The token is valid until 30 Sep 2027.** | Stored. The Settings line now reads *`<your-org>` · login `<lab-account>` · token until 30 Sep 2027*. |
+| **GitHub did not accept this token (mistyped, expired or revoked). Nothing was saved.** | Paste it again, or make a new one. |
+| **Saved… Not checked: GitHub could not be reached.** | Stored without the check (the PC was offline). |
 
-**Renew or replace the token**
-
-1. On GitHub, as `<lab-account>`, **open the token and click "Regenerate
-   token"** (same settings, new value and expiry), or make a new one as above.
-2. On each lab PC, **remove the old stored login**:
-   - Windows: **Control Panel → Credential Manager → Windows Credentials**,
-     remove `git:https://github.com`.
-   - macOS: **Keychain Access**, search `github.com`, delete the entry.
-3. **Repeat "store the token"** above with the new token.
-
-In the launcher, **Use a different GitHub login or token** (3e) does steps 2 and
-3 in one go: it forgets the old github.com login and stores the new one.
+**Renewing.** From **14 days before the expiry date** the launcher shows an
+amber notice when it starts (*"The GitHub token on this computer expires on …"*).
+On GitHub, as `<lab-account>`, **open the token and click "Regenerate token"**
+(same settings, new value and expiry), then on each lab PC **GitHub login…**,
+paste, Save. Saving a login replaces the old one.
 
 **Revoke it** (a PC is lost, or the token leaked): **delete the token** on
-GitHub under the lab account's *Settings → Developer settings → Fine-grained
-tokens*, or as an organisation owner under the organisation's *Settings →
-Personal access tokens → Active tokens*. It stops working immediately; then
+GitHub under the lab account's *Settings -> Developer settings -> Fine-grained
+tokens*, or as an organisation owner under the organisation's *Settings ->
+Personal access tokens -> Active tokens*. It stops working immediately; then
 issue a new one.
 [GitHub: reviewing and revoking tokens](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/reviewing-and-revoking-personal-access-tokens-in-your-organization)
 
-### 3b. Windows: sign in with a GitHub account
+**Forget the login on a PC:** **GitHub login… -> Forget GitHub login**. It asks
+first, because cloning and updating stop on that PC until a login is added
+again.
 
-Git for Windows ships with **Git Credential Manager**, which handles the
-sign-in for you.
+### 3b. A researcher's own computer
 
-1. **Install Git for Windows** from [git-scm.com](https://git-scm.com/download/win)
-   with the default options (they include Git Credential Manager).
-2. **Clone any private repo from the organisation once**, in *Git Bash*:
+**If this computer is already signed in to GitHub for git** (you clone or push
+with git, use GitHub Desktop, or ran `gh auth login`), **there is nothing to
+do**: the launcher's git reuses that sign-in.
 
-   ```
-   cd ~/Desktop
-   git clone https://github.com/<your-org>/<study-repo>.git
-   ```
+Otherwise either:
 
-3. **A GitHub sign-in window opens. Choose "Sign in with your browser"** and
-   log in with your account. The login is saved in **Windows Credential
-   Manager**.
-4. **Delete the test folder.** From now on the launcher's **GitHub** and **Git
-   Pull** buttons work without asking.
+- **In the launcher:** **GitHub login…**, your own username and a token of your
+  own, Save. Or
+- **Sign in once outside the launcher**, then use the launcher:
+  - **Windows:** install [Git for Windows](https://git-scm.com/download/win)
+    (default options include Git Credential Manager), clone any private repo of
+    the organisation once in *Git Bash*, and choose **Sign in with your
+    browser** in the window that opens.
+  - **macOS:** install [GitHub CLI](https://cli.github.com), run
+    **`gh auth login`** (GitHub.com, HTTPS, authenticate git: Yes, web
+    browser), then **`gh auth setup-git`**.
 
-**Sign out or switch account:** in the launcher, **Forget GitHub login** or
-**Use a different GitHub login or token** (3e). Or by hand: open **Control
-Panel → Credential Manager → Windows Credentials**, find `git:https://github.com`
-and **Remove** it. The next clone opens the sign-in window again, so you can log
-in as a different account.
+**Switch account:** **GitHub login…** with the other login (it replaces the
+stored one), or **Forget GitHub login** there.
 
-[Git Credential Manager](https://github.com/git-ecosystem/git-credential-manager)
+### 3c. Without the launcher's dialog (fallback)
 
-### 3c. macOS: sign in with a GitHub account
-
-**If this Mac is already signed in to GitHub for git** (you already clone or
-push with git, or use GitHub Desktop), **there is nothing to do**: the launcher
-reuses that sign-in, with nothing new to type (confirmed on macOS).
-
-Otherwise, sign in once with GitHub's command-line tool, `gh`. (The git that
-comes with macOS asks for a password in the terminal, and **GitHub no longer
-accepts account passwords for git**.)
-
-1. **Install GitHub CLI** from [cli.github.com](https://cli.github.com) (or
-   `brew install gh` if you use Homebrew).
-2. In *Terminal*, run **`gh auth login`** and answer:
-   - *Where do you use GitHub?* **GitHub.com**
-   - *Preferred protocol for Git operations?* **HTTPS**
-   - *Authenticate Git with your GitHub credentials?* **Yes**
-   - *How would you like to authenticate?* **Login with a web browser**. Copy
-     the one-time code shown, press Enter, and **sign in in the browser**.
-3. Run **`gh auth setup-git`** so git always uses this login.
-
-Signing in to [GitHub Desktop](https://desktop.github.com) works too; the
-launcher reuses that sign-in as well.
-
-**Sign out or switch account:** in the launcher, **Use a different GitHub login
-or token** (3e). Or run **`gh auth logout`**, then `gh auth login` again as the
-other account. (If git still uses an old login, open **Keychain
-Access**, search `github.com` and delete the old entry.)
-
-[GitHub CLI: gh auth login](https://cli.github.com/manual/gh_auth_login) ·
-[gh auth setup-git](https://cli.github.com/manual/gh_auth_setup-git)
-
-### 3e. From inside the launcher: switch login or add a token
-
-**Lab Settings → GitHub Organisation Sync** has two buttons, and the clone
-dialog offers the first one whenever a clone fails with *not found* or a login
-error:
-
-- **Use a different GitHub login or token.** **Enter the GitHub username and a
-  token, then Save.** The launcher first forgets the github.com login this
-  computer has stored, then hands the new one to the system credential store
-  (Windows Credential Manager, the macOS Keychain), exactly as a first clone in
-  a terminal would. Nothing is written to a launcher file or the activity log.
-  In the clone dialog, **click Retry** afterwards.
-- **Forget GitHub login.** Removes the stored github.com login. The next clone
-  or Git Pull needs a login again (on Windows the sign-in window opens; on a
-  Mac, store one with the first button).
-
-For a shared lab PC, use `<lab-account>` and the lab's read-only token (3a). On
-your own computer you may use your own account with a token of your own
-([GitHub: create a fine-grained token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token)).
-The buttons need git's credential store to be set up, which it is with Git for
-Windows and with the git that comes with macOS; otherwise the launcher says so
-and saves nothing.
-
-### 3d. Shared lab PCs, simpler alternative: sign the lab account in
-
-Instead of the token, you can **sign each lab PC in as `<lab-account>`** using
-3b (Windows) or 3c (macOS). It is quicker to set up, but the PC then holds a full
-login to the lab account rather than a key that can only read code, so the token
-(3a) is preferred.
+The dialog needs git's credential store, which Git for Windows and the git that
+comes with macOS both have. If the launcher says *"git on this computer has no
+credential store set up"*, or you prefer a terminal: clone any study of the
+organisation once in *Git Bash* / *Terminal* and enter `<lab-account>` as the
+username and the token as the password; the system stores it. To remove a
+stored login by hand: Windows **Control Panel -> Credential Manager -> Windows
+Credentials**, remove `git:https://github.com`; macOS **Keychain Access**,
+search `github.com`, delete the entry.
 
 ---
 
@@ -340,61 +283,120 @@ use the second-remote route above. See also section 7.
 
 ## 5. Using it in the launcher
 
-### 5a. Turn it on (once per lab PC)
+### 5a. Turn it on (the organisation name)
 
-1. Open **gear → Lab Settings → GitHub Organisation Sync**.
-2. **Tick "Enable GitHub Organisation Sync".**
-3. **Type the organisation name** exactly as it appears in the address
-   `https://github.com/<your-org>`.
+1. Open **gear -> Settings -> GitHub -> Edit**.
+2. **Type the organisation name** exactly as it appears in the address
+   `https://github.com/<your-org>`. That is the whole setting: **an empty field
+   is off**.
 
-Both are lab settings, saved with the rest of the lab setup in
-`data/lab_info.json` (keys `github_sync_enabled` and `github_org`), so they
-travel with that file: every computer of the lab that uses the same
-`lab_info.json` gets them. A **GitHub** button now appears next to
-**Browse**, and a **Git Pull** button appears in the project status box once a
-study folder is selected.
+It is a lab setting, saved with the rest of the lab setup in
+`data/lab_info.json` (keys `github_sync_enabled` and `github_org`), so it
+travels with that file: every computer of the lab that uses the same
+`lab_info.json` gets it. The login does **not** travel (it is per computer): on
+a PC that has the organisation but no login, the Settings line reads
+*`<your-org>` · no login on this computer* and the section opens itself.
 
-### 5b. Clone a study
+A **GitHub** button now appears next to **Browse**.
+
+### 5b. Get a study (clone)
 
 1. Click **GitHub** (next to Browse).
-2. **Type the repository name** (`<study-repo>`, without the organisation).
-3. **Choose the parent folder.** The study is cloned into a new
-   `<study-repo>` folder inside it. The folder picker opens in the launcher's
-   `local/` folder: a scratch folder git ignores, so a study kept there never
-   gets committed and is never touched by updating the launcher. Pick any
-   other folder if you prefer.
-4. **Click Clone.**
+2. **Pick the study** from the list (the organisation's repositories this
+   computer's login can see), or **type its name**. Pasting a full GitHub link
+   works too, also for a repository outside the organisation.
+3. **Press Enter** (or **Clone**).
+
+**Saves to** shows the folder that will be created. It is already filled in:
+the folder used last time on this computer, and the first time the launcher's
+`local/` folder (a scratch folder git ignores, never touched by updating the
+launcher). **Change…** picks another.
 
 The dialog stays open and shows *Checking that `<your-org>/<study-repo>`
 exists…*, then *Cloning…*. **On success it closes and the new folder is selected
-as your study folder.** If something goes wrong, the dialog stays open with the
-name still filled in, shows the reason in bold, and the button becomes **Retry**.
+as your study folder.** If something goes wrong it stays open with the name
+still filled in, says **what to do in bold**, and the button becomes **Retry**.
 Git's own output sits in a collapsed **Git output** block if you need it.
 
-| The dialog says | What it means | What to do |
+| The dialog says (bold) | What it means | What to do |
 |---|---|---|
-| **No repository called X found in `<your-org>`, or this login has no access to it.** | Either the name is wrong, **or** the repo is private and this PC's login (the lab token, or the signed-in account) has no access to it. **A login without access looks exactly like a missing repo**: GitHub gives the same answer for both, on purpose, so it does not reveal which private repos exist. | **Check the spelling first.** If it is right: is the repo owned by the organisation (section 4a)? Is this PC's token for this organisation, or is the signed-in account a member (sections 2, 3)? To try another login, **click Use a different GitHub login or token** (3e), then **Retry**. |
-| **Could not open … GitHub asked for a login this computer does not have** | No login stored on this PC (on a Mac the launcher cannot ask for one), the lab token expired or was revoked, or the wrong account is signed in. | **Check the name, then click Use a different GitHub login or token** (3e) and enter a valid login, then **Retry**. |
-| **A folder named X already exists in …** | You cloned this study here before. | **Pick another parent folder**, or use the existing folder with Browse and Git Pull. |
+| **Check the name, or use another GitHub login.** | No repository of that name, **or** this PC's login has no access to it. **A login without access looks exactly like a missing repo**: GitHub gives the same answer for both, on purpose. | **Check the spelling first** (or pick from the list). If it is right: is the repo owned by the organisation (section 4a)? Is this PC's token for this organisation (sections 2, 3)? **GitHub login…** right there changes the login and retries. |
+| **Add a GitHub login for this computer.** | No login is stored, or it was not accepted (expired or revoked token). | **Click GitHub login…**, enter a valid login, **Save and retry**. |
+| **Use that folder, or choose another folder.** | The study is already on this computer. | **Click Use that folder**: it is selected, and the update check says whether it is behind. |
 | **Could not reach GitHub.** | No network. | **Check the internet connection**, then Retry. |
-| **Set the GitHub organisation name … first** | The organisation name is empty. | **Fill it in** (section 5a). |
 
-### 5c. Update a study with Git Pull
+If the list is empty with *"This computer's login sees no repositories in
+`<your-org>`"*, the login works but has no access: the token is for another
+organisation, or still waits for owner approval (section 2.6).
 
-With the study folder selected, **click Git Pull**. A result appears at the
-bottom of the project status box:
+### 5c. Is this study up to date?
 
-- **Nothing new: already up to date.** The folder already has the latest version.
-- **Pulled N changed files.** It also shows the date and subject of the newest
-  commit that came in, and a collapsed **Changes pulled from Git** list with each
-  file marked *added*, *modified* or *deleted*, plus lines added and removed.
+You do not have to remember to update. **Each time you select a study folder or
+a saved config, and again when you press Launch if the last check is more than
+ten minutes old**, the launcher quietly checks, in the background, whether the
+folder is behind its online copy. It never slows down or blocks choosing a study
+or launching.
+
+This works for **every study folder that is a git repository**, whatever its
+origin: cloned with the GitHub button, in a terminal, with GitHub Desktop, or
+from another git server. It does not need the organisation name.
+
+**What the check does.** It runs `git fetch` and compares the folder with what
+is online. **Fetch only downloads what is new into git's own storage; it does
+not change your experiment files.** The check can never ask for a login.
+
+**What you see in the project status box:**
+
+| You see | It means | What to do |
+| --- | --- | --- |
+| **Experiment up to date · checked 14:02** (small, grey) | The folder has everything the online copy has. | Nothing. |
+| **A newer version of this study is available. Update?** with an **Update** button (amber) | A newer version exists and updating will work. Edits to *other* files on this computer (for example the lab block that **Get ready for the lab** added to `settings.py`) do not get in the way. | **Click Update.** The line turns into the result: *Pulled N changed files.* |
+| ***settings.py* was changed on this computer and in the newer version.** with **Get a fresh copy** | The same file was edited here and online, so the folder cannot simply be updated. (Or: *This folder has changes of its own that are not in the online copy*.) | **Click Get a fresh copy** (5e), or have the researcher put the edits into the study. |
+| **Could not check for a newer version: the login was not accepted.** with **GitHub login…** (grey) | This computer's login was rejected: typically the lab token expired. | **Click GitHub login…** and store a valid one. |
+| *Nothing at all* | Nothing to say: the folder is not a git repository, has no online branch to compare with, the computer is offline, or the check took too long. | Nothing. No message means no check result, not an error. |
+
+**Before you launch.** If a newer version is waiting, the **Before you launch**
+screen shows an amber reminder, **"A newer version of this study is available.
+Update before launch."**, with an **Update** button. It is a warning, not a
+stop: update there, or launch the version you have.
+
+**The one-click shortcut** asks the same question before it launches a saved
+config with a newer version waiting: a box *"… Launch anyway?"*. Offline, not a
+git folder or a login problem: no question. (See the user guide.)
+
+### 5d. Update (Git Pull)
+
+The banner's **Update** button and the standing **Git Pull** button in the
+project box do the same thing; only one of them is on screen at a time. They
+**move the folder forward to the newest version and never do anything else**:
+no merge, no change to a file that was edited on this computer. The result
+appears in the project status box:
+
+- **Nothing new: already up to date.**
+- **Pulled N changed files.** with the date and subject of the newest commit
+  that came in, and a collapsed **Changes pulled from Git** list with each file
+  marked *added*, *modified* or *deleted*, plus lines added and removed.
   **Check the date and subject are the version you expect** before launching.
-- **Git pull failed**, with the reason (see [Troubleshooting](#8-troubleshooting))
-  and git's raw output collapsed underneath. **Nothing was changed** in the
-  folder when it fails.
+- **Git pull failed**, with the reason and, right under it, **the button that
+  fixes it**: **GitHub login…** for a login problem, **Get a fresh copy** when
+  the folder was changed on this computer. **Nothing was changed** in the folder
+  when it fails.
 
 The result stays while that study folder is selected and clears when you choose
 a different one.
+
+### 5e. Get a fresh copy
+
+When a file was edited on this computer and also in the newer version, or
+someone committed on the lab PC, the folder cannot be moved forward. **The
+launcher never commits, pushes, merges or discards anything in a study folder.**
+Instead, **Get a fresh copy** downloads the study again into a **new folder next
+to the old one**, named `<study-repo>_fresh_<date>`, and selects it. The old
+folder stays exactly as it is (delete it yourself once you are sure nothing in
+it is needed).
+
+A fresh copy that does not yet carry the lab block gets the usual **Get ready
+for the lab** offer.
 
 ---
 
@@ -405,12 +407,13 @@ a different one.
   pull fail or mix versions. To undo a change, make a new commit that reverts it
   (`git revert`).
 - **Do not edit study files on the lab PC.** If a file on the lab PC has local
-  edits and the same file changes on GitHub, **Git Pull refuses** ("local changes
-  … would be overwritten") and names the file. Make changes on your own computer,
-  push them, then Git Pull in the lab.
-- **Commit the lab block into the study repo.** The launcher's **Add block to
-  settings.py** button edits `settings.py`. Done on a lab PC, that is exactly the
-  kind of local edit that later blocks Git Pull. The clean setup is to **add the
+  edits and the same file changes on GitHub, the folder cannot be updated: the
+  launcher names the file and offers **Get a fresh copy** (5e). Make changes on
+  your own computer, push them, then update in the lab.
+- **Commit the lab block into the study repo.** The launcher's **Get ready for
+  the lab** button adds the lab block to `settings.py`. Done on a lab PC, updates
+  keep working as long as the newer version does not change `settings.py` too;
+  when it does, the lab PC needs a fresh copy. The clean setup is to **add the
   block once on your own computer and commit it** to the study repo. It is inert
   off the lab (it does nothing unless the launcher's environment variables are
   set), so it is safe everywhere. Also add `*.bak` to the repo's `.gitignore` so
@@ -448,11 +451,11 @@ What carries over, and what you must redo:
   permission Read, and allow fine-grained tokens there too (section 2).
 - **A token belongs to one organisation, so make a new one.** The old lab token
   (resource owner = the old organisation) cannot read the new one. **Create a
-  new token with the new organisation as resource owner** (3a) and **replace the
-  stored token on each lab PC** ("Renew or replace the token" in 3a). Lab PCs
-  signed in as the lab account (3d) need nothing new once it is a member.
-- **Update the launcher:** in **Lab Settings → GitHub Organisation Sync**, **change
-  the organisation name** on each lab PC.
+  new token with the new organisation as resource owner** (3a) and **store it on
+  each lab PC** with **GitHub login…** (it replaces the old one).
+- **Update the launcher:** in **Settings → GitHub**, **change the organisation
+  name** (once, in the `lab_info.json` the lab PCs share) and store the new
+  token on each lab PC with **GitHub login…**.
 - **Never create a new repo with the old name in the old organisation.** That
   breaks the redirect, and old clones would start pulling from the new, unrelated
   repo.
@@ -469,10 +472,13 @@ What carries over, and what you must redo:
 
 | Message | Likely cause | Fix |
 |---|---|---|
-| **No repository called X found …** (clone) / *GitHub has no such repository …* (pull) | Name misspelt, repo not in the organisation, or this PC's login has no access to it: the token is for a different organisation, or the signed-in account is not a member (a private repo looks "missing" to a login without access). | Check the name; check the repo's owner is `<your-org>`; check this PC's token or account (section 3), or switch it with **Use a different GitHub login or token** (3e). |
-| **GitHub did not accept this computer's login** / **asked for a login this computer does not have** | **The lab token expired or was revoked**, is still waiting for owner approval, or no login is stored (on a Mac the launcher cannot prompt for one); on a personal machine, no account or the wrong account is signed in, or that account is not a member. | Lab manager: approve, regenerate or replace the token and store it again with **Use a different GitHub login or token** (3e); or sign in with the right account (3b, 3c). |
-| **Not saved: git on this computer has no credential store set up** | The login dialog (3e) found no git credential helper, so git could not remember a login. | Install Git for Windows with its default options (they include Git Credential Manager); on a Mac use the git that comes with macOS or `gh auth setup-git` (3c). |
-| **Local changes to `<file>` … would be overwritten** | Someone edited that file on the lab PC, and it also changed on GitHub. Nothing was pulled. | If the local edit is not needed, discard it (in the study folder: `git restore <file>`) and Git Pull again. If it is needed, commit it to the study repo from your own computer instead (section 6). |
+| **Check the name, or use another GitHub login.** (clone) / *GitHub has no such repository …* (update) | Name misspelt, repo not in the organisation, or this PC's login has no access to it: the token is for a different organisation, not approved yet, or the account is not a member (a private repo looks "missing" to a login without access). | Pick the study from the list instead of typing; check the repo's owner is `<your-org>`; check this PC's login in **Settings → GitHub**, or change it with **GitHub login…**. |
+| **Add a GitHub login for this computer.** / **GitHub did not accept this computer's login** / **Could not check for a newer version: the login was not accepted.** | **The lab token expired or was revoked**, is still waiting for owner approval, or no login is stored. | **GitHub login…** (it is offered right there): store a valid login. Lab manager: regenerate the token first (3a). |
+| **GitHub did not accept this token (mistyped, expired or revoked). Nothing was saved.** | The token pasted into the login dialog is wrong. | Paste it again; if it still fails, make a new one (**Create the token on GitHub**). |
+| **The GitHub token on this computer expires on …** (amber, at start) | The stored token's expiry date is less than 14 days away. | Regenerate it on GitHub and store the new one on each lab PC (3a, Renewing). |
+| **Not saved: git on this computer has no credential store set up** | The login dialog found no git credential helper, so git could not remember a login. | Install Git for Windows with its default options (they include Git Credential Manager); on a Mac use the git that comes with macOS or `gh auth setup-git` (3c). |
+| ***file* was changed on this computer and in the newer version.** / **Local changes to `<file>` … would be overwritten** | Someone edited that file on the lab PC, and it also changed online. Nothing was changed. | **Get a fresh copy** (5e). If the local edit is needed, commit it to the study repo from your own computer instead (section 6). |
+| **This folder has changes of its own that are not in the online copy** | Someone committed on the lab PC. | **Get a fresh copy** (5e); ask whoever did it to push that work from their own machine. |
 | **Could not reach GitHub** | No internet on the lab PC, or a proxy or firewall is blocking github.com. | Check the network; ask IT to allow `github.com` over HTTPS. |
-| **This folder is not a git repo** | The selected folder was copied, not cloned. | Clone it with the **GitHub** button instead. |
-| **This folder and GitHub both have new commits** | Someone committed on the lab PC. | Ask whoever did it to push that work from their own machine; on the lab PC, re-clone the study into a fresh folder. |
+| **This folder is not a git repo** | The selected folder was copied, not cloned. | Get it with the **GitHub** button instead. |
+| No list of studies in the clone dialog | The launcher could not reach `api.github.com` (only the list needs it). | Type the name; cloning works without the list. |

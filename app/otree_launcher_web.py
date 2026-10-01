@@ -254,9 +254,25 @@ def _ui_text():
         "admin_login_note": core.ADMIN_LOGIN_NOTE,
         "admin_login_missing": core.ADMIN_LOGIN_MISSING,
         "github_login_action": core.GITHUB_LOGIN_ACTION_LABEL,
+        "github_login_title": core.GITHUB_LOGIN_DIALOG_TITLE,
+        "github_login_save_retry": core.GITHUB_LOGIN_SAVE_RETRY_LABEL,
         "github_forget": core.GITHUB_FORGET_LABEL,
+        "github_forget_confirm": core.GITHUB_FORGET_CONFIRM,
+        "github_token_link": core.GITHUB_TOKEN_LINK_LABEL,
         "github_login_note": core.GITHUB_LOGIN_DIALOG_NOTE,
         "github_platform_note": core.github_platform_note(),
+        # The study update check / Git Pull wording (core owns it).
+        "git_pull_button": core.GIT_PULL_BUTTON_LABEL,
+        "git_update_action": core.GIT_UPDATE_ACTION_LABEL,
+        "git_fresh_copy": core.GIT_FRESH_COPY_LABEL,
+        # The launcher's own update.
+        "update_check": core.UPDATE_CHECK_LABEL,
+        "update_discard": core.UPDATE_DISCARD_LABEL,
+        # UX simplification: the one label for the append-block action, the
+        # info-tip texts (core.UI_TIPS) and a few shared sentences.
+        "get_ready_label": core.GET_READY_LABEL,
+        "tips": dict(core.UI_TIPS),
+        "seat_file_missing": core.SEAT_FILE_MISSING_WARNING,
     }
 
 
@@ -282,7 +298,32 @@ def project_status(path):
     if level == "ok" and apps:
         message = "Looks like an oTree project with settings.py and %d app package%s:" % (
             len(apps), "" if len(apps) == 1 else "s")
-    return {"level": level, "message": message, "name": name, "apps": apps}
+    return {"level": level, "message": message, "name": name, "apps": apps,
+            # Whether the Git Pull button applies to this folder (a git working
+            # tree that is not the launcher's own; since 2026-10-01 whatever the
+            # GitHub Organisation Sync setting): the page hides the button for a
+            # plain folder.
+            "is_repo": _study_is_git_repo(path)}
+
+
+def _github_sync_on():
+    try:
+        return bool(core.load_github_sync().get("enabled"))
+    except Exception:
+        return False
+
+
+def _study_is_git_repo(path):
+    """True when ``path`` is a study folder git can act on. Cheap and local: no
+    network. The launcher's own folder never counts. (Not tied to GitHub
+    Organisation Sync: that setting only shows the clone button.)"""
+    path = str(path or "").strip()
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        return bool(core.is_git_repo(path)) and not core._is_launcher_folder(path)
+    except Exception:
+        return False
 
 
 def _db_row(entry):
@@ -292,6 +333,7 @@ def _db_row(entry):
     return dict(entry, host_note=core.database_host_note(entry),
                 created_on_line=core.database_created_on_line(entry),
                 location_warning=core.database_location_warning(entry),
+                location_note=core.database_location_note(entry),
                 is_default=bool(entry.get("is_default")))
 
 
@@ -594,6 +636,11 @@ class Api(object):
         # one save clobbers the other's change. Re-entrant so a helper that calls
         # another store-mutating method on the same thread does not deadlock.
         self._store_lock = threading.RLock()
+        # The automatic update check: last result per project folder, and the
+        # checks still running (so the pre-launch screen can give one a moment).
+        self._update_lock = threading.Lock()
+        self._update_status = {}
+        self._update_pending = {}
         self.presets, self.store_extra = core.load_store(self.store_path)
         # The saved_configs.json mtime at load, so _mutate_store can tell when ANOTHER
         # process (e.g. the headless one-click shortcut) wrote the store and merge
@@ -683,6 +730,9 @@ class Api(object):
         return None
 
     def _config_fields(self, preset):
+        # A config saved with the lab's default room follows the lab's CURRENT
+        # default room (core.follow_lab_room): the screen shows what will launch.
+        preset = core.follow_lab_room(preset, core.lab_presets_from_store(self.store_extra))
         cfg = core.normalize_config(preset)
         return {key: cfg[key] for key in core.FIELD_KEYS}
 
@@ -824,10 +874,13 @@ class Api(object):
             # the served page already applied it pre-paint from an injected marker;
             # this lets the native pywebview path apply it right after boot too.
             "theme": core.load_ui_theme(),
-            # GitHub Organisation Sync opt-in (default OFF): the tick-box state and
-            # the configured org name (a lab setting, in lab_info.json). Drives
-            # whether the page shows the GitHub Org. + Git update buttons.
+            # GitHub: the organisation name (a lab setting, in lab_info.json; an
+            # empty name is OFF). It only decides whether the page shows the
+            # GitHub (clone) button; the update check and Git Pull work for any
+            # git repository. ``github`` carries what core decided (no login
+            # lookup here: that runs when Settings opens).
             "github_sync": core.load_github_sync(),
+            "github": self._github_state(with_login=False),
             "databases_localhost_only": core.load_databases_localhost_only(),
             # Wording owned by core so both faces say the same thing.
             "ui_text": _ui_text(),
@@ -859,8 +912,12 @@ class Api(object):
         entry = core.find_database(self.store_extra, core.current_database_id(cfg))
         return {"db_label": core.database_summary_label(cfg),
                 "db_host_note": core.database_host_note(cfg),
-                "db_warning": core.database_location_warning(entry) if entry else "",
-                "db_note": core.config_database_note(cfg)}
+                # Short on the card; the full sentence rides along as its tip.
+                "db_warning": core.database_location_note(entry) if entry else "",
+                "db_warning_full": core.database_location_warning(entry) if entry else "",
+                "db_note": core.config_database_note(cfg),
+                # The collapsed oTree admin row (core.admin_summary).
+                "admin_summary": core.admin_summary(cfg)}
 
     @api_call
     def database_card(self, fields=None):
@@ -996,7 +1053,9 @@ class Api(object):
         if not core.unique_name(name, self.presets):
             return {"ok": False, "message": "A config called %r already exists." % name}
         author = (author or "").strip() or self._default_author()
-        preset = core.preset_from_fields(name, fields_to_config(fields), author=author)
+        preset = core.preset_from_fields(
+            name, fields_to_config(fields), author=author,
+            lab_presets=core.lab_presets_from_store(self.store_extra))
 
         def _apply():
             self.presets.append(preset)
@@ -1081,6 +1140,8 @@ class Api(object):
         target = self._find(current_config_name) if current_config_name else None
         resp = {"ok": True, "lab_marker": lab,
                 "lab_name": preset.get("name") if preset else lab,
+                # Said in full, including the side effect (other labs hidden).
+                "status": core.lab_identity_status(preset.get("name") if preset else lab),
                 "configs": [preset_row(p) for p in self.presets],
                 "selected": (target.get("name") if target else (current_config_name or "")),
                 "lab_presets": _lab_rows(presets)}
@@ -1174,6 +1235,50 @@ class Api(object):
         return core.current_database_id(cfg)
 
     @api_call
+    def list_seat_files(self, project_path=""):
+        """The participant-label files found in the project
+        (core.find_candidate_label_files), for the "Use a file from my project"
+        list: browser mode has no native file picker, so the page offers these
+        plus a paste field. Mirror of the Tk found-files list."""
+        path = str(project_path or "").strip()
+        if not path or not os.path.isdir(path):
+            return {"ok": True, "files": []}
+        files = []
+        for found in core.find_candidate_label_files(path):
+            try:
+                label = os.path.relpath(found, path)
+            except ValueError:
+                label = found
+            files.append({"path": found, "label": label})
+        return {"ok": True, "files": files}
+
+    @api_call
+    def check_seat_file(self, path=""):
+        """Whether a pasted participant-file path exists (so the page can say so
+        at once instead of at launch)."""
+        path = str(path or "").strip()
+        return {"ok": True, "path": path, "exists": bool(path and os.path.isfile(path))}
+
+    @api_call
+    def settings_summaries(self):
+        """The one-line summaries of the collapsed Settings cards, all from core
+        so both faces show the same words."""
+        presets = core.lab_presets_from_store(self.store_extra)
+        home = core.read_lab_marker() or ""
+        home_preset = core.find_lab_preset(home, presets) if home else None
+        return {"ok": True,
+                "this_computer": (home_preset or {}).get("name") or "Not set",
+                "labs": core.labs_summary(presets),
+                "databases": core.databases_summary(
+                    self._db_list(), core.default_database_id(self.store_extra)),
+                "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra))}
+
+    @api_call
+    def admin_summary(self, fields=None):
+        """The collapsed oTree admin row for the on-screen fields."""
+        return {"ok": True, "text": core.admin_summary(fields_to_config(fields or {}))}
+
+    @api_call
     def list_databases(self, fields=None):
         """The whole database picker list (Round 3, Task 1): the SQLite built-in,
         the lab shared built-in, then every custom database in the global
@@ -1215,15 +1320,33 @@ class Api(object):
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 200
-        return {"ok": True, "entries": core.read_sessions(limit=limit)}
+        entries = core.read_sessions(limit=limit)
+        for entry in entries:
+            # The study version that ran, as one short label (core words it).
+            entry["version_label"] = core.study_version_label(entry.get("study_version"))
+        return {"ok": True, "entries": entries}
 
     @api_call
     def app_version(self):
         """Just the build version, NO network. Feeds the whole-app sidebar footer
-        (identity only). The update CHECK is deliberately NOT here -- it runs only
-        when Lab Settings is opened (version_info), so the footer never triggers a
-        network call on app launch (review I, Julian's final design)."""
+        (identity only). The update check is :meth:`update_badge` (in the
+        background after start) and :meth:`version_info` (Settings)."""
         return {"ok": True, "version": core.APP_VERSION}
+
+    @api_call
+    def update_badge(self):
+        """Is a newer launcher known? Called once by the page, in the background
+        after it has loaded: core.check_for_update asks GitHub at most ONCE A DAY
+        (the answer is cached in data/) and is fail-soft, so most starts make no
+        network call at all. The page only puts a small dot on the gear; the
+        details and the Update button stay in Settings. A lab PC whose Settings
+        nobody opens used to never learn of a new version."""
+        try:
+            update = core.check_for_update()
+        except Exception:
+            return {"ok": True, "update_available": False, "remote_version": ""}
+        return {"ok": True, "update_available": bool(update.get("update_available")),
+                "remote_version": update.get("remote_version", "")}
 
     @api_call
     def version_info(self, force=False):
@@ -1257,9 +1380,12 @@ class Api(object):
                 "repo_url": core.REPO_URL}
 
     @api_call
-    def run_git_pull(self):
+    def run_git_pull(self, discard=None):
         """Run ``git pull`` on the launcher's OWN install directory (core.git_pull,
-        fail-soft). On success this is NOTIFY-ONLY: it updates the working tree in
+        fail-soft). ``discard`` is the list of changed launcher files the user
+        confirmed may be put back first ("Discard these changes and update";
+        core copies them to data/retired/ before restoring them). On success this
+        is NOTIFY-ONLY: it updates the working tree in
         place and then asks the operator to quit and reopen the launcher -- it does
         NOT self-relaunch or spawn a new server.
 
@@ -1275,8 +1401,10 @@ class Api(object):
         process. On failure the result carries ``ok`` False plus the git output/
         message and NOTHING is relaunched, so the running app stays usable and the
         operator can retry."""
-        result = core.git_pull()
+        result = core.git_pull(discard=list(discard)) if discard else core.git_pull()
         result.setdefault("ok", False)
+        if result.get("can_discard") and result.get("files"):
+            result["discard_confirm"] = core.update_discard_confirm(result["files"])
         if result.get("ok"):
             # Notify-only: the checkout is now on the new version, but THIS running
             # instance still has the OLD code loaded. Do not self-relaunch (see the
@@ -1313,6 +1441,35 @@ class Api(object):
         stored = core.load_github_sync()
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
 
+    def _github_state(self, with_login=True):
+        """Everything the GitHub card in Settings shows, decided by core: the
+        organisation (empty = off), who is logged in on this computer (asked from
+        git's credential store; no password leaves core), the one-line summary,
+        the token-expiry notice and the prefilled "create the token" link."""
+        sync = core.load_github_sync()
+        on = core.github_clone_enabled(sync)
+        stored = core.github_stored_login() if with_login else \
+            {"has_login": False, "username": ""}
+        info = core.github_login_info()
+        return {"ok": True, "enabled": on, "org": sync["org"] if on else "",
+                "login": stored, "token_expires": info.get("token_expires", ""),
+                "summary": core.github_summary(sync, stored, info),
+                "expiry_notice": core.github_token_expiry_notice(info=info),
+                "token_url": core.github_token_create_url(sync["org"]),
+                "clone_parent": core.clone_parent_default()}
+
+    @api_call
+    def github_state(self):
+        return self._github_state()
+
+    @api_call
+    def set_github_org(self, org=""):
+        """The ONE GitHub setting: the organisation name (a lab setting, in
+        lab_info.json). A name switches the GitHub button on for it; an empty
+        field switches it off. Fail-soft."""
+        core.save_github_org(org)
+        return self._github_state()
+
     @api_call
     def set_databases_localhost_only(self, enabled):
         """Persist the "Databases on this computer only (localhost)" lab setting
@@ -1333,13 +1490,31 @@ class Api(object):
         """Hand a GitHub username + token to the SYSTEM credential store
         (core.github_save_login: git credential reject, then approve). The token
         is never logged (api_call logs no arguments), never written to a
-        launcher file and never part of the result."""
-        return core.github_save_login(username, token)
+        launcher file and never part of the result.
+
+        Before storing, core asks GitHub ONCE whether it accepts the token
+        (core.github_save_login_checked): a rejected token is not stored. Only
+        the username and the token's expiry DATE are remembered."""
+        result = dict(core.github_save_login_checked(username, token))
+        if result.get("ok"):
+            result["github"] = self._github_state()
+        return result
 
     @api_call
     def github_forget_login(self):
-        """Forget the stored github.com login (git credential reject)."""
-        return core.github_forget_login()
+        """Forget the stored github.com login (git credential reject) and what
+        this computer remembered about it."""
+        result = dict(core.github_forget_login_checked())
+        if result.get("ok"):
+            result["github"] = self._github_state()
+        return result
+
+    @api_call
+    def list_org_repos(self):
+        """The repositories of the configured organisation that this computer's
+        login can see, for the clone dialog's list (core.github_list_org_repos;
+        typing a name still works when the list cannot be fetched)."""
+        return core.github_list_org_repos(core.load_github_org())
 
     @api_call
     def git_update_study(self, project_path):
@@ -1348,7 +1523,85 @@ class Api(object):
         any oTree/experiment process. Returns core's result (not_repo / current /
         updated / error, plus the changed files, latest commit and plain-language
         failure reason) for the page to render in the study status card."""
-        return core.git_update_study(project_path or "")
+        # A background update check (a git fetch) may still be running in this
+        # folder: let it finish first, so the pull never collides with it on
+        # git's own lock files.
+        with self._update_lock:
+            pending = self._update_pending.get(self._update_key(project_path))
+        if pending is not None:
+            pending.wait(core.GIT_UPDATE_CHECK_TIMEOUT + 2)
+        result = core.git_update_study(project_path or "")
+        # A successful pull settles the automatic update check too: the banner
+        # turns into "Experiment up to date" and the pre-launch warning goes.
+        after = core.update_status_after_pull(result)
+        if after is not None:
+            self._remember_update_status(project_path, after)
+            result = dict(result, update_status=after)
+        return result
+
+    # -- automatic update check (once per selected project) ------------------
+    def _update_key(self, project_path):
+        return os.path.normcase(os.path.abspath(str(project_path or "").strip() or "."))
+
+    def _remember_update_status(self, project_path, status):
+        with self._update_lock:
+            self._update_status[self._update_key(project_path)] = dict(status or {})
+
+    def known_update_status(self, project_path, wait=0.0):
+        """The last update-check result for a project, or None. ``wait`` gives a
+        check that is still running a moment to finish (the pre-launch screen
+        uses it), but never long: a launch is never held up by the check."""
+        key = self._update_key(project_path)
+        with self._update_lock:
+            pending = self._update_pending.get(key)
+        if pending is not None and wait > 0:
+            pending.wait(wait)
+        with self._update_lock:
+            status = self._update_status.get(key)
+        return dict(status) if status else None
+
+    @api_call
+    def project_update_check(self, project_path="", only_if_stale=False):
+        """Is the selected study folder behind its online copy? Called by the
+        page once per project / config selection, in the background, and again
+        when Launch is pressed with ``only_if_stale`` (an answer older than
+        core.GIT_UPDATE_RECHECK_SECONDS is repeated; a fresh one is returned as
+        it is, with no fetch). core.project_update_status does it: a ``git
+        fetch`` (which downloads only and never changes the experiment files, and
+        can never ask for a login), then HEAD against its upstream. Quiet by
+        design: state "none" (not a repo, no upstream, offline, timeout) shows
+        nothing. Runs for ANY git repository, whatever the GitHub Organisation
+        Sync setting."""
+        path = str(project_path or "").strip()
+        none = {"state": core.UPDATE_STATE_NONE, "is_repo": False, "message": "",
+                "action": "", "action_label": "", "behind": 0, "ahead": 0,
+                "dirty": False, "checked": "", "checked_at": 0.0, "files": [],
+                "reason": ""}
+        if not path or not os.path.isdir(path):
+            self._remember_update_status(path, none)
+            return {"ok": True, "path": path, "status": none}
+        if only_if_stale:
+            known = self.known_update_status(path)
+            if known is not None and not core.update_status_is_stale(known):
+                return {"ok": True, "path": path, "status": known, "fresh": True,
+                        "action_label": core.GIT_UPDATE_ACTION_LABEL}
+        key = self._update_key(path)
+        done = threading.Event()
+        with self._update_lock:
+            self._update_pending[key] = done
+        try:
+            status = core.project_update_status(path)
+        except Exception:
+            LOG.exception("project_update_check failed")
+            status = dict(none)
+        finally:
+            with self._update_lock:
+                if self._update_pending.get(key) is done:
+                    del self._update_pending[key]
+        self._remember_update_status(path, status)
+        done.set()
+        return {"ok": True, "path": path, "status": status,
+                "action_label": core.GIT_UPDATE_ACTION_LABEL}
 
     @api_call
     def pick_clone_folder(self, repo=""):
@@ -1384,11 +1637,12 @@ class Api(object):
         parent was supplied.
         """
         org = core.load_github_org()
-        if not org:
+        repo = (repo or "").strip()
+        # A pasted full github.com link names its own owner (core.clone_target).
+        if not core.clone_target(org, repo)[0]:
             return {"ok": False,
                     "message": ("Set the GitHub organisation name in Settings > "
                                 "GitHub Organisation Sync first.")}
-        repo = (repo or "").strip()
         if not repo:
             return {"ok": False, "message": "Enter the experiment repository name."}
         dest_parent = (dest_parent or "").strip()
@@ -1421,9 +1675,43 @@ class Api(object):
                 "pywOnCloneProgress", {"phase": phase, "org": org, "repo": repo}))
         if result.get("ok") and result.get("path"):
             path = result["path"]
+            core.remember_clone_parent(dest)      # prefilled next time (this PC)
             result["project"] = project_status(path)
             result["settings"] = core.inspect_settings(path, self._lab_room_for())
         self._callback("pywOnCloneDone", result)
+
+    @api_call
+    def clone_dialog_state(self):
+        """What the clone dialog opens with: the folder a clone is saved into
+        (the one used last time on this computer, else local/) and the
+        organisation."""
+        return {"ok": True, "parent": core.clone_parent_default(),
+                "org": core.load_github_org()}
+
+    @api_call
+    def fresh_copy(self, project_path=""):
+        """"Get a fresh copy": clone the study's repository again into a NEW
+        folder next to the old one, in the BACKGROUND, and push
+        pywOnFreshCopyDone (with the project + settings summaries so the page
+        selects the new folder). The old folder is never changed."""
+        path = str(project_path or "").strip()
+        plan = core.fresh_copy_plan(path)
+        if not plan["ok"]:
+            return {"ok": False, "message": plan["message"]}
+        self._spawn(lambda: self._do_fresh_copy(path), "git-fresh-copy")
+        return {"ok": True, "pending": True, "target": plan["target"]}
+
+    def _do_fresh_copy(self, path):
+        with self._update_lock:
+            pending = self._update_pending.get(self._update_key(path))
+        if pending is not None:
+            pending.wait(core.GIT_UPDATE_CHECK_TIMEOUT + 2)
+        result = core.git_fresh_copy(path)
+        if result.get("ok") and result.get("path"):
+            new = result["path"]
+            result["project"] = project_status(new)
+            result["settings"] = core.inspect_settings(new, self._lab_room_for())
+        self._callback("pywOnFreshCopyDone", result)
 
     def _pick_folder_for_clone(self, repo=""):
         """Return the chosen destination PARENT folder path (or "" on cancel), using
@@ -1441,7 +1729,7 @@ class Api(object):
         repo = (repo or "").strip()
         title = ("Choose where to create the '%s' folder" % repo if repo
                  else "Choose where to create the cloned study folder")
-        start = core.default_clone_parent()
+        start = core.clone_parent_default()
         if getattr(self, "browser_mode", False):
             return _native_folder_dialog_subprocess(
                 helper=_build_folder_dialog_helper(title, start))
@@ -1769,6 +2057,13 @@ class Api(object):
         return core.test_pg_admin_connection(admin or {})
 
     @api_call
+    def wizard_pg_next(self, admin=None):
+        """What Next on the Postgres step does (core.wizard_postgres_next): skip
+        with no superuser, go on when the login works, stay with the error when
+        it does not."""
+        return core.wizard_postgres_next(admin or {})
+
+    @api_call
     def wizard_use_example(self):
         """Step 1 with no labs yet: write the shipped example lab_info.json
         (core.example_lab_info_to_save) and return the fresh wizard state."""
@@ -2079,7 +2374,8 @@ class Api(object):
             return {"ok": False, "needs_save": True,
                     "message": "Save these settings as a named config first (Save as "
                                "new config), then create the one-click shortcut."}
-        if core.configs_differ(fields_to_config(fields), match):
+        if core.configs_differ(fields_to_config(fields), core.follow_lab_room(
+                match, core.lab_presets_from_store(self.store_extra))):
             return {"ok": False, "needs_save": True,
                     "message": 'This config ("%s") has unsaved changes. Save it first, '
                                "then create the one-click shortcut." % name}
@@ -2194,7 +2490,7 @@ class Api(object):
         return briefing
 
     @api_call
-    def launch_issues(self, fields):
+    def launch_issues(self, fields, config_name=""):
         """Everything to tell the user before a launch, as ONE ordered list.
 
         This is the data for the consolidated "Before you launch" screen, and it
@@ -2217,6 +2513,10 @@ class Api(object):
         lab_presets = core.lab_presets_from_store(self.store_extra)
         issues = []
         folder_problem = self._project_folder_problem(cfg)
+        # The saved config the screen was loaded from (None for the built-in
+        # default / an unsaved setup): the room-mismatch warning is only for it.
+        saved_config = next((p for p in self.presets
+                             if config_name and p.get("name") == config_name), None)
         # Preflight checks whose field already has a hard blocker above them.
         blocked_checks = {"project"} if folder_problem else set()
         for message in self._hard_block_problems(cfg, lab_presets):
@@ -2230,17 +2530,17 @@ class Api(object):
                 issue["fix_label"] = "Choose folder…"
             issues.append(issue)
         block_state = self._block_state(cfg)
-        if block_state.get("readable") and not block_state.get("has_block") \
-                and core.effective_seat_mode(cfg) != core.SEAT_NONE:
+        # While the block is missing (and seats are used) it is the ONE issue:
+        # adding it also defines the room, so the "room is not defined" warning
+        # (and its second button for the same fix) is not shown beside it.
+        block_missing = bool(block_state.get("readable") and not block_state.get("has_block")
+                             and core.effective_seat_mode(cfg) != core.SEAT_NONE)
+        if block_missing:
             issues.append({
                 "level": "warn",
-                "title": "This project has no oTree lab support block, so the lab "
-                         "room, seat board and lab database won’t take effect "
-                         "without it.",
-                "hint": "Adds a clearly-marked block to the end of settings.py, "
-                        "after a timestamped .bak backup (fully revertible). The "
-                        "manual copy/paste is on the info screen.",
-                "fix": "add_block", "fix_label": "Add it for me", "info": "block"})
+                "title": core.NO_BLOCK_ISSUE_TITLE,
+                "hint": core.NO_BLOCK_ISSUE_HINT,
+                "fix": "add_block", "fix_label": core.GET_READY_LABEL, "info": "block"})
         elif block_state.get("needs_refresh"):
             # The block is present but OUTDATED (stale body / cut off): a refresh
             # replaces it in place. append_block refuses when a marker exists.
@@ -2255,7 +2555,12 @@ class Api(object):
         for failure in core.preflight_failures(core.preflight(cfg, core.load_lab_info())):
             if failure.get("check") in blocked_checks:
                 continue
-            issue = {"level": "warn", "title": failure.get("message", ""),
+            if block_missing and failure.get("kind") == "room":
+                continue
+            # A check that makes a launch impossible (the port already answers:
+            # a session is running) is a MUST-FIX, not a "launch anyway" warning.
+            issue = {"level": "block" if failure.get("blocking") else "warn",
+                     "title": failure.get("message", ""),
                      "hint": str(failure.get("detail", "")),
                      "fix": "", "fix_label": "", "info": "", "rooms": []}
             # The "no settings.py / not an oTree project" check is a warning (you
@@ -2291,7 +2596,19 @@ class Api(object):
         # Non-blocking: the lab's default room changed since this config was saved.
         # One click switches THIS config to the lab default; launching as-is is
         # fine (silent when the rooms already match).
-        mismatch = core.lab_room_mismatch(cfg, lab_presets)
+        # An update known to be waiting on GitHub: an AMBER reminder with the
+        # existing Git Pull as its fix. It warns; it never blocks the launch.
+        update_warning = core.prelaunch_update_warning(
+            self.known_update_status(cfg.get("project_path", ""), wait=1.5))
+        if update_warning:
+            issues.append({"level": "warn", "title": update_warning, "hint": "",
+                           "fix": "git_pull", "fix_label": core.GIT_UPDATE_ACTION_LABEL,
+                           "info": ""})
+        seat_warning = core.seat_file_missing_warning(cfg)
+        if seat_warning:
+            issues.append({"level": "warn", "title": seat_warning, "hint": "",
+                           "fix": "", "fix_label": "", "info": ""})
+        mismatch = core.launch_room_mismatch(cfg, saved_config, lab_presets)
         if mismatch:
             issues.append({
                 "level": "warn", "title": mismatch["message"],
@@ -2485,13 +2802,19 @@ class Api(object):
         try:
             project = cfg["project_path"]
             self._status("", "Launching…")
+            # The last guard, BEFORE anything is written or reset: a session
+            # already answering on this port means this launch cannot work, and
+            # a resetdb now would wipe the database under that running session.
+            running = core.running_server_problem(cfg)
+            if running:
+                self._status("err", running)
+                self._launch_result(False, running)
+                self._record_session(cfg, config_name, "fail", None)
+                return
             label_file, note = core.prepare_label_file(cfg)
             self._log("muted", note)
             env = core.build_env(cfg, label_file=label_file)
-
-            for key in core.launcher_env_keys(cfg, label_file):
-                if key in env:
-                    self._log("out", "%s = %s" % (key, core.describe_env_value(key, env[key])))
+            self._log("muted", core.env_log_line(core.launcher_env_keys(cfg, label_file), env))
 
             if cfg.get("resetdb"):
                 self._log("cmd", "$ otree resetdb   (answering \"y\" on stdin)")
@@ -2701,8 +3024,9 @@ class Api(object):
         def _apply():
             preset = self._find(config_name) if config_name else None
             if preset is None:
+                labs = core.lab_presets_from_store(self.store_extra)
                 for candidate in self.presets:
-                    if not core.configs_differ(candidate, cfg):
+                    if not core.configs_differ(core.follow_lab_room(candidate, labs), cfg):
                         preset = candidate
                         break
             if preset is not None:

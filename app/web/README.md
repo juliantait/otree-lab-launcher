@@ -51,10 +51,10 @@ extra.
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
 | Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `machine.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
-| Add block to settings.py | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
+| Get ready for the lab | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
 
 The launcher writes into a researcher's own code in exactly **one** place, and
-never silently: the **Add block to settings.py** button (`append_settings_block`)
+never silently: the **Get ready for the lab** button (`append_settings_block`)
 appends the lab support block after a timestamped backup and refuses to append twice.
 This is a deliberate reversal (2026-09-10) of the old "copy-paste only" rule;
 the copy-paste path (`settings_block_text`) is kept alongside it. Everything else

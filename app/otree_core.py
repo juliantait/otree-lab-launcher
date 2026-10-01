@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -2756,7 +2756,14 @@ def select_on_open(presets):
     on the pinned default template every time it starts -- a fresh, Browse-first
     state -- rather than restoring whatever config was last launched. This is a
     deliberate change (2026-09-24): the built-in is a launch TEMPLATE, and lab
-    staff should always begin from it and Browse to the study of the day. Falls
+    staff should always begin from it and Browse to the study of the day.
+
+    DO NOT "fix" this by remembering the last project folder (suggested again in
+    the 2026-10-01 UX review as #35 and DECLINED by Julian): the app keeps
+    opening with no project and the lab default. Someone who has already run an
+    experiment relaunches it from its saved config or its one-click shortcut;
+    a remembered folder would only make the default look like yesterday's
+    study. (1.5.0 removed ``last_project`` for the same reason.) Falls
     back to the first config when there is no built-in, and to None only for an
     empty list. Shared by both faces so they open identically.
     """
@@ -2779,8 +2786,43 @@ def unique_name(name, presets):
     return name.strip().casefold() not in taken
 
 
-def preset_from_fields(name, fields, created=None, author=None):
+# A saved config whose room WAS the lab's default room when it was saved carries
+# this flag: it then simply FOLLOWS the lab's current default room (Julian,
+# 2026-10-01), so a lab that later renames its room does not leave such configs
+# behind and they never warn about the room. A config saved with any other room
+# keeps that room, and warns when it differs from the lab default. Configs saved
+# before this flag existed have no key and keep their literal room.
+ROOM_FOLLOWS_LAB_KEY = "room_follows_lab"
+
+
+def follow_lab_room(preset, lab_presets=None):
+    """``preset`` as it will LAUNCH: a copy whose room is the lab's CURRENT
+    default room when the config was saved with the lab default
+    (:data:`ROOM_FOLLOWS_LAB_KEY`); otherwise the preset unchanged. Both faces
+    use it wherever a saved config is loaded or compared, and the one-click
+    shortcut launches it."""
+    if not isinstance(preset, dict) or not preset.get(ROOM_FOLLOWS_LAB_KEY):
+        return preset
+    resolved = _presets_or_default(lab_presets)
+    lab = str(preset.get("lab") or "").strip()
+    if find_lab_preset(lab, resolved) is None:
+        return preset
+    room = lab_default_room(resolved, lab)
+    if str(preset.get("room_name") or "").strip() == room:
+        return preset
+    followed = dict(preset)
+    followed["room_name"] = room
+    return followed
+
+
+def preset_from_fields(name, fields, created=None, author=None, lab_presets=None):
     preset = normalize_config(fields)
+    # Saved with the lab's default room -> it follows that lab's default room.
+    _resolved_labs = _presets_or_default(lab_presets)
+    if (find_lab_preset(preset["lab"], _resolved_labs) is not None
+            and preset["room_name"].strip() == lab_default_room(_resolved_labs,
+                                                                preset["lab"])):
+        preset[ROOM_FOLLOWS_LAB_KEY] = True
     # A saved config always PINS its database by id (1.5.0): "follow this PC's
     # default" is only for the generated Lab default.
     if not preset["database_id"] and preset["db_mode"] == DB_MODE_LAB:
@@ -2906,6 +2948,11 @@ def record_session(cfg, config_name="", author="", outcome="ok",
             cfg, config_name=config_name, author=author, outcome=outcome,
             server_ready_seconds=server_ready_seconds, resetdb=resetdb,
             lab_presets=lab_presets)
+        # The version of the study that ran (a git repository only): the commit
+        # ties a dataset to the code that produced it.
+        version = study_version(entry.get("project"))
+        if version:
+            entry["study_version"] = version
         target = path or sessions_path()
         folder = os.path.dirname(target) or "."
         os.makedirs(folder, exist_ok=True)
@@ -2962,6 +3009,14 @@ UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 # The short footer label shown when a newer release exists, and the explanatory
 # text shown on hover (both faces) next to the clickable repo link.
 UPDATE_LABEL = "new version available"
+# The link that runs the check by hand (Settings footer).
+UPDATE_CHECK_LABEL = "Check for updates"
+UPDATE_BUTTON_LABEL = "Update"
+UPDATE_DISCARD_LABEL = "Discard these changes and update"
+UPDATE_DONE_TITLE = "Update downloaded"
+UPDATE_DONE_ACTION = "Restart to activate the update"
+UPDATE_DONE_NOTE = ("Quit the launcher and open it again from the usual shortcut. It "
+                    "starts on the new version.")
 UPDATE_TOOLTIP = ("Download the app folder from GitHub and replace the app "
                   "folder — keep your data")
 
@@ -3255,8 +3310,45 @@ def _run_pull(repo):
     return code == 0, output.strip()
 
 
-def git_pull(repo=None):
+def update_discard_confirm(files):
+    """The confirm text for "Discard these changes and update": it names the
+    files. Everything a lab owns is in data/ and local/, which git ignores, so a
+    changed tracked file in the launcher folder is never lab data."""
+    return ("Discard the local changes to %s and update? The launcher's own files "
+            "are put back as shipped; a copy of the changed files is kept in "
+            "data/retired/. Your labs, configs and databases are not touched."
+            % _short_file_list(files, limit=8))
+
+
+def _backup_discarded(repo, files):
+    """Copy the files about to be put back into data/retired/<stamp>-update-
+    discarded/ (same relative paths). Returns the folder ("" when nothing could
+    be copied). Fail-soft."""
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    folder = os.path.join(data_dir(), RETIRED_DIRNAME, "%s-update-discarded" % stamp)
+    copied = 0
+    for name in files:
+        source = os.path.join(str(repo), name)
+        if not os.path.isfile(source):
+            continue
+        target = os.path.join(folder, name)
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy2(source, target)
+            copied += 1
+        except OSError:
+            pass
+    return folder if copied else ""
+
+
+def git_pull(repo=None, discard=None):
     """Run ``git -C <repo> pull`` on the install directory and capture its output.
+
+    ``discard`` (the "Discard these changes and update" button) is the list of
+    changed launcher files the user confirmed may be put back: each must really
+    be a tracked file with local edits; they are copied to data/retired/ first,
+    restored with ``git checkout HEAD --`` and the pull runs. A failed pull that
+    is blocked only by tracked local edits carries ``can_discard`` True.
 
     Returns ``{"ok", "output", "message", "restored", "restored_note"}``: ``ok``
     is True only when the pull succeeded, ``output`` is git's combined text and
@@ -3274,7 +3366,28 @@ def git_pull(repo=None):
     """
     repo = repo if repo is not None else repo_root()
     result = {"ok": False, "output": "", "message": "", "restored": [],
-              "restored_note": ""}
+              "restored_note": "", "can_discard": False, "discarded": [],
+              "discard_backup": ""}
+    if discard:
+        wanted = [str(f).replace("\\", "/") for f in discard if str(f).strip()]
+        changed = set(_tracked_changes(repo, timeout=30) or [])
+        if not wanted or any(f not in changed for f in wanted):
+            result["message"] = ("Nothing was discarded: the list of changed files is "
+                                 "no longer the same. Try Update again.")
+            result["reason_code"] = "discard_mismatch"
+            return result
+        result["discard_backup"] = _backup_discarded(repo, wanted)
+        try:
+            code, restore_out = _run_git(["-C", str(repo), "checkout", "HEAD", "--"]
+                                         + wanted, timeout=30)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            result["message"] = "Could not put the files back: %s" % error
+            return result
+        if code != 0:
+            result["output"] = restore_out.strip()
+            result["message"] = "Could not put the files back. Nothing was updated."
+            return result
+        result["discarded"] = wanted
     try:
         ok, output = _run_pull(repo)
         last = output
@@ -3318,6 +3431,7 @@ def git_pull(repo=None):
     if files:
         result["reason_code"] = "local_changes"
         result["files"] = files
+        result["can_discard"] = True
         result["message"] = (
             "Update blocked: this computer has local changes to %s that the "
             "update would overwrite. Nothing was changed. Ask the lab manager to "
@@ -3368,17 +3482,33 @@ def is_git_repo(folder):
     return output.strip().lower() == "true"
 
 
-def _run_git(args, runner=None, timeout=60):
+def _no_prompt_env():
+    """The environment for a git command that must NEVER ask for a login: terminal
+    prompts off, Git Credential Manager's own window off, no askpass helper, ssh
+    in batch mode. Every login then goes through the launcher's ONE GitHub login
+    dialog, the same way on Windows and macOS."""
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    env["GIT_ASKPASS"] = ""
+    env.pop("SSH_ASKPASS", None)
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    return env
+
+
+def _run_git(args, runner=None, timeout=60, no_prompt=False):
     """Run ``git <args>`` and return ``(returncode, output)`` with stdout+stderr
     merged and decoded. Raises what subprocess raises (FileNotFoundError when git
     is missing, TimeoutExpired, OSError); callers turn those into results.
     Runs with CREATE_NO_WINDOW on Windows so Git Pull / Clone never flash a
-    console window from the windowless launcher."""
+    console window from the windowless launcher. ``no_prompt`` runs it with
+    :func:`_no_prompt_env` (clone, pull, fetch: git can never ask for a login)."""
     run = runner if runner is not None else subprocess.run
+    extra = {"env": _no_prompt_env()} if no_prompt else {}
     result = run(["git"] + list(args),
                  stdin=subprocess.DEVNULL,
                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                 timeout=timeout, creationflags=_no_window_flags())
+                 timeout=timeout, creationflags=_no_window_flags(), **extra)
     output = getattr(result, "stdout", b"") or b""
     if isinstance(output, (bytes, bytearray)):
         output = output.decode("utf-8", "replace")
@@ -3464,9 +3594,9 @@ def classify_git_error(output):
         files = _indented_files_after(lines, "would be overwritten by")
         return {"code": "local_changes", "files": files,
                 "reason": ("This computer has local changes to %s that the pull "
-                           "would overwrite. Nothing was changed. Undo those edits "
-                           "(or ask the study owner to commit them), then pull "
-                           "again." % (_short_file_list(files) or
+                           "would overwrite. Nothing was changed. Get a fresh copy, "
+                           "or ask the study owner to put those edits into the "
+                           "study." % (_short_file_list(files) or
                                        "some files"))}
     if "conflict" in low and ("merge conflict" in low
                               or "automatic merge failed" in low):
@@ -3480,8 +3610,9 @@ def classify_git_error(output):
     if ("divergent branches" in low or "not possible to fast-forward" in low
             or "need to specify how to reconcile" in low):
         return {"code": "diverged", "files": [],
-                "reason": ("This folder and GitHub both have new commits, so git "
-                           "will not combine them automatically.")}
+                "reason": ("This folder has changes of its own that are not in the "
+                           "online copy, so it cannot simply be updated. Nothing "
+                           "was changed.")}
     if ("no tracking information" in low or "no such ref was fetched" in low
             or "couldn't find remote ref" in low):
         return {"code": "no_upstream", "files": [],
@@ -3668,7 +3799,8 @@ def git_update_study(folder):
     result = {"ok": False, "status": "error", "message": "", "detail": "",
               "reason": "", "reason_code": "", "output": "", "files": [],
               "file_count": 0, "commit_count": 0, "commit": {},
-              "conflict_files": [], "old_head": "", "new_head": "", "note": ""}
+              "conflict_files": [], "old_head": "", "new_head": "", "note": "",
+              "login_action": False, "fresh_copy": False}
 
     def failed(code, reason, output=""):
         result.update(reason_code=code, reason=reason, output=output.strip(),
@@ -3686,7 +3818,12 @@ def git_update_study(folder):
         return result
     old = _git_text(folder, "rev-parse", "HEAD") or ""
     try:
-        code, output = _run_git(["-C", folder, "pull"], timeout=120)
+        # FAST-FORWARD ONLY: the launcher only ever moves a folder forward to
+        # what is online. It never merges (a plain pull could leave conflict
+        # markers in the study code, or make a merge commit) and never asks for
+        # a login (the GitHub login dialog is the one place for that).
+        code, output = _run_git(["-C", folder, "pull", "--ff-only"], timeout=120,
+                                no_prompt=True)
     except FileNotFoundError:
         return failed("no_git", "git is not installed on this computer.")
     except subprocess.TimeoutExpired:
@@ -3699,7 +3836,14 @@ def git_update_study(folder):
     if code != 0:
         why = classify_git_error(output)
         result["conflict_files"] = why["files"]
-        return failed(why["code"], why["reason"], output)
+        failed(why["code"], why["reason"], output)
+        # What the face offers under the reason: the GitHub login dialog for a
+        # login problem; a fresh copy when this folder cannot be moved forward.
+        result["login_action"] = (why["code"] in ("auth", "not_found")
+                                  and _remote_is_github(folder))
+        result["fresh_copy"] = why["code"] in ("local_changes", "untracked",
+                                               "diverged", "conflict")
+        return result
     new = _git_text(folder, "rev-parse", "HEAD") or ""
     result.update(ok=True, old_head=old, new_head=new)
     if new == old:
@@ -3724,6 +3868,439 @@ def git_update_study(folder):
     result.update(status="updated", message=message, detail=detail, files=files,
                   file_count=len(files), commit_count=commits, commit=commit)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Automatic update check for a study folder (2026-10-01).
+#
+# When a project / config is selected, the faces ask (in the background, once per
+# selection) whether the study folder is behind its GitHub copy. The check runs
+# ``git fetch``: fetch only DOWNLOADS what is new on GitHub into git's own
+# storage; it does NOT change the experiment's files (a pull is fetch + applying
+# it, and only the user's click on Git Pull does that). Then HEAD is compared to
+# its upstream.
+#
+# It is QUIET by design: not a repo, no upstream, offline or a timeout all show
+# NOTHING -- there is no "a check ran" message, and it can never block selecting
+# a project or launching. It also can never ask for a login (prompts are switched
+# off). A REJECTED login is the one failure that gets a quiet line (an expired
+# lab token would otherwise silently stop every lab PC from seeing updates).
+#
+# It runs for ANY git repository with an upstream, whatever the GitHub
+# Organisation Sync setting (Julian, 2026-10-01): "do not run a session on an old
+# version" does not depend on an organisation. That setting only decides whether
+# the GitHub (clone) button is shown, and for which organisation.
+# ---------------------------------------------------------------------------
+
+# How long the background fetch may take before the check gives up silently.
+GIT_UPDATE_CHECK_TIMEOUT = 8
+# A check older than this is repeated when Launch is pressed (never blocking).
+GIT_UPDATE_RECHECK_SECONDS = 600
+
+UPDATE_STATE_NONE = "none"                    # show nothing
+UPDATE_STATE_CURRENT = "current"              # quiet "Experiment up to date · checked HH:MM"
+UPDATE_STATE_BEHIND = "behind"                # banner + Update (the existing Git Pull)
+UPDATE_STATE_LOCAL_CHANGES = "local_changes"  # cannot be moved forward: Get a fresh copy
+UPDATE_STATE_NO_ACCESS = "no_access"          # the login was rejected: one grey line
+
+# Neutral wording: since 2026-10-01 the check runs for ANY git repository (not
+# only with GitHub Organisation Sync on), so the remote may not be GitHub.
+GIT_UPDATE_AVAILABLE_TEXT = "A newer version of this study is available. Update?"
+GIT_UP_TO_DATE_TEXT = "Experiment up to date"
+GIT_LOCAL_CHANGES_TEXT = ("This folder has changes of its own that are not in the "
+                          "online copy, so it cannot be updated here.")
+GIT_PRELAUNCH_UPDATE_WARNING = ("A newer version of this study is available. Update "
+                                "before launch.")
+GIT_NO_ACCESS_TEXT = "Could not check for a newer version: the login was not accepted."
+# The banner / pre-launch button answers the banner's question ("Update?"); the
+# standing button in the status box keeps git's own name.
+GIT_UPDATE_ACTION_LABEL = "Update"
+GIT_PULL_BUTTON_LABEL = "Git Pull"
+GIT_FRESH_COPY_LABEL = "Get a fresh copy"
+# The one-click shortcut's line for the same state.
+HEADLESS_UPDATE_PROBLEM = "A newer version of this study is available (not downloaded yet)."
+
+
+def _run_git_no_prompt(args, timeout):
+    """``git <args>`` that can NEVER ask for a login: terminal prompts off, Git
+    Credential Manager's window off, ssh in batch mode. Used by the background
+    update check, where a login window popping up unasked would be worse than no
+    answer. Returns ``(returncode, output)``; raises what subprocess raises."""
+    env = _no_prompt_env()
+    result = subprocess.run(["git"] + list(args), stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            env=env, timeout=timeout, creationflags=_no_window_flags())
+    output = result.stdout or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    return result.returncode, output
+
+
+def _upstream_remote(folder):
+    """``(remote, branch, url)`` of the branch this folder follows, or
+    ``("", "", "")`` when it follows none. Never raises."""
+    upstream = _git_text(folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name",
+                         "@{u}", timeout=10) or ""
+    if "/" not in upstream:
+        return "", "", ""
+    remote, branch = upstream.split("/", 1)
+    url = _git_text(folder, "remote", "get-url", remote, timeout=10) or ""
+    return remote, branch, url
+
+
+def git_remote_host(url):
+    """The host name of a git remote URL ("github.com"), "" for a local path."""
+    url = str(url or "").strip()
+    match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]*@)?([^/:]+)", url)
+    if match:
+        return match.group(1).lower()
+    match = re.match(r"^(?:[^@/]+@)?([A-Za-z0-9.-]+\.[A-Za-z]{2,}):", url)   # git@host:owner/repo
+    return match.group(1).lower() if match else ""
+
+
+def _remote_is_github(folder):
+    """True when the folder's upstream (else its origin) is on github.com: only
+    then is the GitHub login dialog the right thing to offer."""
+    try:
+        url = _upstream_remote(folder)[2] or \
+            (_git_text(folder, "remote", "get-url", "origin", timeout=10) or "")
+    except Exception:
+        return False
+    return git_remote_host(url) == GITHUB_CREDENTIAL_HOST
+
+
+def _tracked_changes(folder, timeout=10):
+    """The tracked files with local edits in ``folder`` (``git status
+    --porcelain``, untracked left out), or None when git cannot say. Uses the
+    RAW output: a stripped one loses the first line's status column."""
+    try:
+        code, porcelain = _run_git(["-C", str(folder), "status", "--porcelain",
+                                    "--untracked-files=no"], timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return _porcelain_paths(porcelain) if code == 0 else None
+
+
+def _porcelain_paths(porcelain):
+    """The paths named by ``git status --porcelain`` text (both sides of a
+    rename), with untracked ("??") and ignored ("!!") lines skipped."""
+    paths = []
+    for line in (porcelain or "").splitlines():
+        if len(line) < 4 or line[:2] in ("??", "!!"):
+            continue
+        for part in line[3:].split(" -> "):
+            part = part.strip().strip('"')
+            if part:
+                paths.append(part)
+    return paths
+
+
+def _pull_overlap(folder):
+    """The local files a fast-forward to the upstream would run into, or None
+    when that cannot be worked out (the caller then stays careful).
+
+    Two kinds: a tracked file edited here that also changed online, and a new
+    file online whose name already exists here as an untracked file. Local edits
+    to OTHER files do not stop a pull, so they are not listed: this is what lets
+    "Get ready for the lab" (which edits settings.py) keep updates working."""
+    changed = _tracked_changes(folder)
+    if changed is None:
+        return None
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10)
+    incoming = git_changed_files(folder, "HEAD", "@{u}")
+    if not top or not incoming:
+        return None
+    dirty = set(changed)
+    overlap = []
+    for entry in incoming:
+        names = [entry["path"]] + ([entry["old_path"]] if entry.get("old_path") else [])
+        if any(name in dirty for name in names):
+            overlap.append(entry["path"])
+        elif entry["change"] == "added" and os.path.lexists(os.path.join(top, entry["path"])):
+            overlap.append(entry["path"])
+    return overlap
+
+
+def _local_changes_message(files):
+    """'settings.py was changed on this computer and in the newer version.'"""
+    files = list(files)
+    return "%s %s changed on this computer and in the newer version." % (
+        _short_file_list(files, limit=3), "was" if len(files) == 1 else "were")
+
+
+def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
+    """Is this study folder behind its online copy? For the background check both
+    faces run when a project / config is selected (any git repository, whatever
+    the GitHub Organisation Sync setting). Returns::
+
+        {"state", "is_repo", "message", "action", "action_label", "behind",
+         "ahead", "dirty", "checked", "checked_at", "files", "reason"}
+
+    ``state`` is one of:
+
+      * ``"none"``          -> show NOTHING: not a git repo, the launcher's own
+                               folder, no upstream branch, git missing, offline,
+                               or the fetch timed out.
+      * ``"current"``       -> nothing to pull. ``message`` is "Experiment up to
+                               date · checked HH:MM".
+      * ``"behind"``        -> the online copy has newer commits and a pull will
+                               work: ``message`` is the banner question and
+                               ``action`` is "git_pull" (the existing Git Pull).
+                               Local edits to files the newer version does not
+                               touch do NOT stop this (e.g. the lab block that
+                               "Get ready for the lab" appended).
+      * ``"local_changes"`` -> newer commits online, but this folder cannot be
+                               moved forward: a file edited here also changed
+                               online (``reason`` "edited", ``files`` names
+                               them), or the folder has commits of its own
+                               (``reason`` "own_commits"). ``action`` is
+                               "fresh_copy": :func:`git_fresh_copy`.
+      * ``"no_access"``     -> the remote rejected this computer's login (an
+                               expired token, for example). One quiet line;
+                               ``action`` is "github_login" for github.com.
+
+    ``is_repo`` is True for any git working tree (even when the remote cannot be
+    reached), so the faces can keep the Git Pull button for a repo and hide it for
+    a plain folder. The fetch never changes the working files and never prompts.
+    Bounded by ``timeout``; never raises."""
+    folder = str(folder or "").strip()
+    out = {"state": UPDATE_STATE_NONE, "is_repo": False, "message": "", "action": "",
+           "action_label": "", "behind": 0, "ahead": 0, "dirty": False, "checked": "",
+           "checked_at": 0.0, "files": [], "reason": ""}
+    if not folder or not os.path.isdir(folder):
+        return out
+    try:
+        if _is_launcher_folder(folder) or not is_git_repo(folder):
+            return out
+    except Exception:
+        return out
+    out["is_repo"] = True
+    _remote, _branch, url = _upstream_remote(folder)
+    if not _remote:
+        return out                       # no upstream branch: nothing to compare with
+    try:
+        code, output = _run_git_no_prompt(["-C", folder, "fetch", "--quiet"], timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return out                       # git missing / timeout: say nothing
+    moment = now or _dt.datetime.now()
+    stamp = moment.strftime("%H:%M")
+    if code != 0:
+        # Offline, a gone remote, ...: say nothing. A REJECTED LOGIN is the one
+        # failure worth a line: a lab token is made to expire, and on that day
+        # every lab PC would otherwise silently stop seeing updates.
+        host = git_remote_host(url)
+        why = classify_git_error(output)["code"]
+        if host and (why == "auth" or why == "not_found"):
+            github = host == GITHUB_CREDENTIAL_HOST
+            out.update(state=UPDATE_STATE_NO_ACCESS, message=GIT_NO_ACCESS_TEXT,
+                       action="github_login" if github else "",
+                       action_label=GITHUB_LOGIN_ACTION_LABEL if github else "",
+                       checked=stamp, checked_at=time.time())
+        return out
+    counts = _git_text(folder, "rev-list", "--left-right", "--count", "HEAD...@{u}",
+                       timeout=10)
+    try:
+        ahead, behind = [int(x) for x in (counts or "").split()]
+    except ValueError:
+        return out
+    porcelain = _git_text(folder, "status", "--porcelain", "--untracked-files=no",
+                          timeout=10)
+    dirty = bool((porcelain or "").strip())
+    out.update(behind=behind, ahead=ahead, dirty=dirty, checked=stamp,
+               checked_at=time.time())
+    if behind <= 0:
+        out.update(state=UPDATE_STATE_CURRENT,
+                   message="%s · checked %s" % (GIT_UP_TO_DATE_TEXT, stamp))
+        return out
+    if ahead > 0:
+        out.update(state=UPDATE_STATE_LOCAL_CHANGES, message=GIT_LOCAL_CHANGES_TEXT,
+                   reason="own_commits", action="fresh_copy",
+                   action_label=GIT_FRESH_COPY_LABEL)
+        return out
+    overlap = _pull_overlap(folder)
+    if overlap is None and dirty:
+        overlap = _tracked_changes(folder) or ["this folder"]   # could not tell: stay careful
+    if overlap:
+        out.update(state=UPDATE_STATE_LOCAL_CHANGES, files=list(overlap),
+                   message=_local_changes_message(overlap), reason="edited",
+                   action="fresh_copy", action_label=GIT_FRESH_COPY_LABEL)
+    else:
+        out.update(state=UPDATE_STATE_BEHIND, message=GIT_UPDATE_AVAILABLE_TEXT,
+                   action="git_pull", action_label=GIT_UPDATE_ACTION_LABEL)
+    return out
+
+
+def update_status_after_pull(pull_result, now=None):
+    """The update status to show after the Git Pull action ran: a successful pull
+    turns the banner into "Experiment up to date · checked HH:MM"; a failed one
+    returns None (the face keeps its Git Pull result, which says why)."""
+    if not (pull_result or {}).get("ok"):
+        return None
+    stamp = (now or _dt.datetime.now()).strftime("%H:%M")
+    return {"state": UPDATE_STATE_CURRENT, "is_repo": True, "action": "",
+            "action_label": "", "files": [], "reason": "",
+            "message": "%s · checked %s" % (GIT_UP_TO_DATE_TEXT, stamp),
+            "behind": 0, "ahead": 0, "dirty": False, "checked": stamp,
+            "checked_at": time.time()}
+
+
+def update_status_is_stale(status, now=None, max_age=GIT_UPDATE_RECHECK_SECONDS):
+    """True when a check should be repeated before a launch: there is no answer
+    yet, or it is older than ``max_age`` seconds (a config selected in the
+    morning and launched in the afternoon). Used when Launch is pressed; the
+    repeat runs in the background and never blocks the launch screen."""
+    stamp = 0.0
+    try:
+        stamp = float((status or {}).get("checked_at") or 0.0)
+    except (TypeError, ValueError):
+        stamp = 0.0
+    if not stamp:
+        return True
+    return ((now if now is not None else time.time()) - stamp) > max_age
+
+
+def prelaunch_update_warning(status):
+    """The AMBER pre-launch item when a newer version is known to be waiting
+    online and a pull will work, else "". It warns; it never blocks a launch.
+    (The local-changes state adds no item: Julian's decision, 2026-10-01.)"""
+    if (status or {}).get("state") == UPDATE_STATE_BEHIND:
+        return GIT_PRELAUNCH_UPDATE_WARNING
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# "Get a fresh copy" (2026-10-01). When a study folder cannot be moved forward
+# (a file edited here also changed online, or the folder has commits of its
+# own), the launcher does NOT commit, push, merge, stash or discard anything in
+# it. The one thing it offers is what the guide tells a lab to do by hand: clone
+# the same repository again into a NEW folder next to the old one, and select
+# that. The old folder is left exactly as it is.
+# ---------------------------------------------------------------------------
+
+def fresh_copy_plan(folder, today=None):
+    """Where a fresh copy of ``folder``'s repository would go. Returns
+    ``{"ok", "url", "branch", "top", "rel", "target", "path", "message"}``:
+    ``target`` is the new clone folder (next to the repository's top folder,
+    never an existing path) and ``path`` the study folder inside it (the same
+    sub-folder as now when the study is not the repository's top folder)."""
+    folder = str(folder or "").strip()
+    plan = {"ok": False, "url": "", "branch": "", "top": "", "rel": "", "target": "",
+            "path": "", "message": ""}
+    if not folder or not os.path.isdir(folder) or not is_git_repo(folder):
+        plan["message"] = "This folder is not a git repository."
+        return plan
+    if _is_launcher_folder(folder):
+        plan["message"] = "This is the launcher's own folder, not a study folder."
+        return plan
+    remote, branch, url = _upstream_remote(folder)
+    if not url:
+        url = _git_text(folder, "remote", "get-url", "origin", timeout=10) or ""
+        branch = ""
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) or ""
+    if not url or not top:
+        plan["message"] = ("This folder is not linked to an online copy, so there is "
+                           "nothing to copy from.")
+        return plan
+    top = os.path.normpath(top)
+    rel = os.path.relpath(os.path.realpath(folder), os.path.realpath(top))
+    rel = "" if rel in (".", "") else rel
+    day = (today or _dt.date.today()).strftime("%Y%m%d")
+    base = "%s_fresh_%s" % (os.path.basename(top.rstrip("/\\")) or "study", day)
+    parent = os.path.dirname(top)
+    target = os.path.join(parent, base)
+    number = 2
+    while os.path.lexists(target):
+        target = os.path.join(parent, "%s_%d" % (base, number))
+        number += 1
+    plan.update(ok=True, url=url, branch=branch, top=top, rel=rel, target=target,
+                path=os.path.join(target, rel) if rel else target)
+    return plan
+
+
+def git_fresh_copy(folder, runner=None, on_phase=None, today=None):
+    """Clone ``folder``'s repository again into a NEW folder next to it.
+
+    Returns the same shape as :func:`git_clone_org_repo`
+    (``{"ok", "status", "message", "action", "hint", "output", "path"}``):
+    on success ``path`` is the study folder inside the new clone, for the face
+    to select. NOTHING in the old folder is read for content, changed or
+    removed. Never asks for a login; bounded by timeouts; never raises."""
+    def outcome(status, message, hint="", output="", path="", action=""):
+        return {"ok": status == "ok", "status": status, "message": message,
+                "action": action, "hint": hint, "output": (output or "").strip(),
+                "path": path, "old_path": str(folder or "").strip()}
+
+    plan = fresh_copy_plan(folder, today=today)
+    if not plan["ok"]:
+        return outcome("no_source", plan["message"])
+    if on_phase is not None:
+        try:
+            on_phase("cloning")
+        except Exception:
+            pass
+    args = ["clone"]
+    if plan["branch"]:
+        args += ["--branch", plan["branch"]]
+    args += [plan["url"], plan["target"]]
+    try:
+        code, output = _run_git(args, runner=runner, timeout=600, no_prompt=True)
+    except FileNotFoundError:
+        return outcome("no_git", "git is not installed on this computer.",
+                       "Ask the lab manager to install git.")
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(plan["target"], ignore_errors=True)   # drop a half-made clone
+        return outcome("timeout", "Getting a fresh copy took too long and was stopped.",
+                       "Check the internet connection, then try again.")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        shutil.rmtree(plan["target"], ignore_errors=True)
+        return outcome("error", "Could not run git clone.", str(error))
+    if code != 0:
+        why = classify_git_error(output)
+        status = why["code"] if why["code"] in ("auth", "not_found", "network") else "error"
+        return outcome(status, "Could not get a fresh copy.", why["reason"], output)
+    if not os.path.isdir(plan["path"]):
+        return outcome("error", "The fresh copy does not contain this study folder.",
+                       "", output)
+    return outcome("ok", "Fresh copy saved in %s. The old folder was not changed."
+                   % plan["target"], output=output, path=plan["path"])
+
+
+def study_version(folder):
+    """``{"commit", "date"}`` (short id + commit date) of the study folder's
+    current version, or None when it is not a git repository. Recorded with each
+    launch so a dataset can be tied to the code that produced it. Local and
+    quick (no network); never raises."""
+    folder = str(folder or "").strip()
+    try:
+        if not folder or not os.path.isdir(folder) or not is_git_repo(folder):
+            return None
+        line = _git_text(folder, "log", "-1", "--format=%h%x1f%cI", timeout=5)
+    except Exception:
+        return None
+    if not line:
+        return None
+    bits = (line.split("\x1f") + [""])[:2]
+    version = {"commit": bits[0], "date": bits[1]}
+    try:
+        porcelain = _git_text(folder, "status", "--porcelain", "--untracked-files=no",
+                              timeout=5)
+        if (porcelain or "").strip():
+            version["local_edits"] = True
+    except Exception:
+        pass
+    return version
+
+
+def study_version_label(version):
+    """'a1b2c3d · 28 Sep 2026' (+ ' + local edits') for the launch history, ""
+    when there is no version."""
+    if not version or not version.get("commit"):
+        return ""
+    date = _format_commit_date(version.get("date") or "")
+    text = version["commit"] + (" · " + date.split(",")[0] if date else "")
+    if version.get("local_edits"):
+        text += " + local edits"
+    return text
 
 
 def git_file_change_line(entry):
@@ -3762,6 +4339,54 @@ def default_clone_parent():
     return path
 
 
+CLONE_PARENT_KEY = "clone_parent"
+
+
+def clone_parent_default():
+    """The folder a clone is saved into unless the user changes it: the folder
+    used LAST time on this computer (machine.json) when it still exists, else
+    the launcher's git-ignored ``local/`` scratch folder. So a clone is: type
+    the name, Enter. "" only when neither is available."""
+    try:
+        last = str(load_machine().get(CLONE_PARENT_KEY) or "").strip()
+    except Exception:
+        last = ""
+    if last and os.path.isdir(last):
+        return last
+    return default_clone_parent()
+
+
+def remember_clone_parent(path):
+    """Remember the parent folder of a successful clone for next time (this
+    computer only). Fail-soft."""
+    path = str(path or "").strip()
+    if not path:
+        return
+    try:
+        update_machine(lambda m: m.__setitem__(CLONE_PARENT_KEY, path))
+    except Exception:
+        pass
+
+
+_GITHUB_LINK_RE = re.compile(
+    r"^(?:https?://(?:[^@/]*@)?(?:www\.)?github\.com/|git@github\.com:|github\.com/)"
+    r"([^/\s]+)/([^/\s]+?)(?:\.git)?/?(?:[?#].*)?$", re.IGNORECASE)
+
+
+def clone_target(org, repo):
+    """``(owner, name)`` to clone for what the user typed. A plain name (or
+    ``something/name``) is looked up in the configured organisation, as before.
+    A FULL github.com link (``https://github.com/owner/name``,
+    ``git@github.com:owner/name.git``) is used as it is, so a pasted link to a
+    repository in another organisation is not silently looked up in the wrong
+    place."""
+    text = str(repo or "").strip()
+    match = _GITHUB_LINK_RE.match(text)
+    if match:
+        return match.group(1), clone_repo_name(match.group(2))
+    return str(org or "").strip().strip("/"), clone_repo_name(text)
+
+
 def github_clone_url(org, repo, url_template=None):
     """The HTTPS clone URL for ``<org>/<repo>``. The repo name is stripped of a
     trailing ``.git`` and any surrounding whitespace so a user can type either
@@ -3798,22 +4423,32 @@ def clone_repo_name(repo):
 # command line, into a launcher file, the activity log or a returned message.
 
 GITHUB_CREDENTIAL_HOST = "github.com"
-GITHUB_LOGIN_ACTION_LABEL = "Use a different GitHub login or token"
+# ONE name for the login dialog wherever it is offered (Settings, a failed clone,
+# a failed pull, the "could not check" line). It also fits the first time, when
+# there is no login yet to be "different" from.
+GITHUB_LOGIN_ACTION_LABEL = "GitHub login…"
+GITHUB_LOGIN_DIALOG_TITLE = "GitHub login for this computer"
+GITHUB_LOGIN_SAVE_RETRY_LABEL = "Save and retry"
 GITHUB_FORGET_LABEL = "Forget GitHub login"
+GITHUB_FORGET_CONFIRM = ("Forget the GitHub login on this computer? Clone and Git Pull "
+                         "stop working until a login is added again.")
+GITHUB_TOKEN_LINK_LABEL = "Create the token on GitHub"
 GITHUB_NO_LOGIN_HINT = ("If the name is right, add a login with \"%s\"."
                         % GITHUB_LOGIN_ACTION_LABEL)
-# Shown in the login dialog (both faces).
+# The login dialog's explanation (both faces show it behind the info tip).
 GITHUB_LOGIN_DIALOG_NOTE = (
     "Saved in this computer's own credential store (Windows Credential Manager or "
     "the macOS Keychain), never in a launcher file. Use a lab account that is a "
     "member of the organisation, and a read-only token as the password.")
 GITHUB_MAC_NOTE = (
-    "On a Mac the launcher runs git without a terminal, so git cannot ask for a "
-    "login: with none stored, a clone fails with a login error. Add one here (or "
-    "run gh auth login in Terminal).")
+    "The launcher's git never asks for a login by itself: with none stored, a "
+    "clone fails with a login error. Add one here (or run gh auth login in "
+    "Terminal).")
 GITHUB_WINDOWS_NOTE = (
-    "On Windows, Git Credential Manager may show its own GitHub sign-in window the "
-    "first time (browser or token).")
+    "The launcher's git never opens a sign-in window by itself: with no login "
+    "stored, a clone fails with a login error. Add one here. A login that Git "
+    "Credential Manager already holds (a sign-in made in Git Bash, say) is used "
+    "as it is.")
 
 
 def github_platform_note(platform=None):
@@ -3943,7 +4578,360 @@ def github_save_login(username, token, runner=None):
                                   % (output.strip() or "exit code %s" % code), token)}
     return {"ok": True, "status": "ok",
             "message": "Saved the GitHub login for %s in this computer's credential "
-                       "store. Try the clone again." % username}
+                       "store." % username}
+
+
+# ---------------------------------------------------------------------------
+# Checking a token when it is saved, who is logged in, and the token's expiry
+# (2026-10-01).
+#
+# A wrong token used to be stored without a word and surfaced later as a failed
+# clone. Now the login dialog asks GitHub ONCE, with the token just typed (it is
+# in memory at that moment anyway), before anything is stored:
+#   accepted  -> stored; the answer also carries the token's expiry date
+#   rejected  -> NOTHING is stored
+#   unchecked -> GitHub could not be reached: stored, and the message says so
+# Only the username and the expiry DATE are kept (machine.json, this computer):
+# never the token. Settings shows who is logged in by asking git's credential
+# store (the password part of that answer is dropped at once).
+# ---------------------------------------------------------------------------
+
+GITHUB_API_URL = "https://api.github.com"
+# Where the GitHub API lives; overridable for the test suite and the UI walks
+# (a local stand-in server), so no real token ever leaves a test.
+GITHUB_API_ENV = "OTREE_LAB_GITHUB_API"
+GITHUB_API_TIMEOUT = 6.0
+GITHUB_LOGIN_INFO_KEY = "github_login"
+# Start warning this many days before the stored token's expiry date.
+GITHUB_TOKEN_WARN_DAYS = 14
+# Set (to anything) to save a login WITHOUT asking GitHub first: for a computer
+# that can reach its git server but not api.github.com, and for the test suite.
+GITHUB_NO_TOKEN_CHECK_ENV = "OTREE_LAB_NO_TOKEN_CHECK"
+GITHUB_TOKEN_REJECTED_MESSAGE = ("GitHub did not accept this token (mistyped, expired "
+                                 "or revoked). Nothing was saved.")
+
+
+def _github_api_get(path, token=None, timeout=GITHUB_API_TIMEOUT):
+    """GET ``https://api.github.com<path>``. Returns ``(status, headers, data)``
+    with lower-case header names and the parsed JSON body (None when it is not
+    JSON). An HTTP error status is RETURNED, not raised; a network failure
+    raises (OSError / URLError). The token only ever travels in the
+    Authorization header of this one HTTPS request."""
+    import urllib.error
+    import urllib.request
+    headers = {"Accept": "application/vnd.github+json",
+               "User-Agent": "otree-lab-launcher"}
+    if token:
+        headers["Authorization"] = "Bearer %s" % token
+    base = (os.environ.get(GITHUB_API_ENV) or GITHUB_API_URL).rstrip("/")
+    request = urllib.request.Request(base + path, headers=headers)
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout,
+                                          context=_https_ssl_context())
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        status = getattr(response, "status", None) or response.getcode()
+        found = {str(k).lower(): str(v) for k, v in response.headers.items()}
+        raw = response.read()
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        data = None
+    return status, found, data
+
+
+def _token_expiry_date(headers):
+    """The token's expiry as ``YYYY-MM-DD`` from GitHub's
+    ``github-authentication-token-expiration`` response header ("" when the
+    token has no expiry or the header is absent / unreadable)."""
+    raw = str((headers or {}).get("github-authentication-token-expiration") or "").strip()
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})", raw)
+    return match.group(1) if match else ""
+
+
+def github_token_check_enabled():
+    return not os.environ.get(GITHUB_NO_TOKEN_CHECK_ENV)
+
+
+def github_check_token(token, fetcher=None):
+    """Ask GitHub whether it accepts ``token``. Returns
+    ``{"state", "login", "expires"}``: ``state`` is "accepted" (``login`` is the
+    account GitHub knows the token as, ``expires`` its expiry date or ""),
+    "rejected" (HTTP 401: mistyped, expired or revoked) or "unchecked" (GitHub
+    could not be reached, or answered something unexpected). ``fetcher(path,
+    token)`` replaces the HTTPS request in tests. Never raises; the token is in
+    no returned value."""
+    out = {"state": "unchecked", "login": "", "expires": ""}
+    try:
+        status, headers, data = (fetcher or _github_api_get)("/user", token)
+    except Exception:
+        return out
+    if status == 401:
+        out["state"] = "rejected"
+    elif status == 200:
+        out.update(state="accepted", expires=_token_expiry_date(headers),
+                   login=str((data or {}).get("login") or "") if isinstance(data, dict) else "")
+    return out
+
+
+def format_day(iso_date):
+    """'30 Sep 2027' from '2027-09-30' (the text unchanged when unreadable)."""
+    try:
+        when = _dt.date.fromisoformat(str(iso_date)[:10])
+    except (TypeError, ValueError):
+        return str(iso_date or "")
+    return "%d %s" % (when.day, when.strftime("%b %Y"))
+
+
+def github_login_info():
+    """What this computer remembers about its GitHub login:
+    ``{"username", "token_expires"}`` (both "" when nothing is recorded). Never
+    a token."""
+    try:
+        info = load_machine().get(GITHUB_LOGIN_INFO_KEY)
+    except Exception:
+        info = None
+    info = info if isinstance(info, dict) else {}
+    return {"username": str(info.get("username") or ""),
+            "token_expires": str(info.get("token_expires") or "")}
+
+
+def save_github_login_info(username, token_expires=""):
+    """Record the username and the token's expiry DATE (machine.json). Fail-soft."""
+    value = {"username": str(username or "").strip(),
+             "token_expires": str(token_expires or "").strip()}
+    try:
+        update_machine(lambda m: m.__setitem__(GITHUB_LOGIN_INFO_KEY, value))
+    except Exception:
+        pass
+
+
+def clear_github_login_info():
+    try:
+        if GITHUB_LOGIN_INFO_KEY in load_machine():
+            update_machine(lambda m: m.pop(GITHUB_LOGIN_INFO_KEY, None))
+    except Exception:
+        pass
+
+
+def github_save_login_checked(username, token, checker=None):
+    """What the login dialog's Save does: ask GitHub about the token, then store
+    the login unless GitHub rejected it.
+
+    Returns :func:`github_save_login`'s result plus ``check`` (the
+    :func:`github_check_token` answer, or state "skipped"). A REJECTED token
+    returns ``ok`` False, status "rejected", and nothing is stored. ``checker``
+    replaces the GitHub request in tests."""
+    username = str(username or "").strip()
+    token = str(token or "").strip()
+    check = {"state": "skipped", "login": "", "expires": ""}
+    if username and token and (checker is not None or github_token_check_enabled()):
+        check = (checker or github_check_token)(token)
+    if check["state"] == "rejected":
+        return {"ok": False, "status": "rejected",
+                "message": GITHUB_TOKEN_REJECTED_MESSAGE, "check": check}
+    result = dict(github_save_login(username, token))
+    result["check"] = check
+    if not result.get("ok"):
+        return result
+    save_github_login_info(username, check.get("expires", ""))
+    if check["state"] == "accepted":
+        note = " GitHub accepts it"
+        if check.get("login") and check["login"].lower() != username.lower():
+            note += " (as %s)" % check["login"]
+        note += "."
+        if check.get("expires"):
+            note += " The token is valid until %s." % format_day(check["expires"])
+        result["message"] = str(result.get("message") or "") + note
+    elif check["state"] == "unchecked":
+        result["message"] = (str(result.get("message") or "")
+                             + " Not checked: GitHub could not be reached.")
+    return result
+
+
+def github_forget_login_checked():
+    """What the dialog's Forget does: remove the stored login AND what this
+    computer remembered about it."""
+    result = github_forget_login()
+    if result.get("ok"):
+        clear_github_login_info()
+    return result
+
+
+def _github_stored_credential(runner=None):
+    """``(username, password)`` git's credential store holds for github.com, or
+    ``("", "")``. Asks ``git credential fill`` with every prompt switched off,
+    so nothing can pop up. Callers must not keep or show the password."""
+    run = runner if runner is not None else subprocess.run
+    fields = [("protocol", "https"), ("host", GITHUB_CREDENTIAL_HOST)]
+    try:
+        result = run(["git", "-c", "core.askPass=", "credential", "fill"],
+                     input=_credential_payload(fields).encode("utf-8"),
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                     env=_no_prompt_env(), timeout=15,
+                     creationflags=_no_window_flags())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return "", ""
+    if getattr(result, "returncode", 1) != 0:
+        return "", ""
+    output = getattr(result, "stdout", b"") or b""
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", "replace")
+    found = {}
+    for line in output.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            found[key.strip()] = value
+    if not found.get("password"):
+        return "", ""
+    return found.get("username", ""), found["password"]
+
+
+def github_stored_login(runner=None):
+    """Who is logged in to GitHub on this computer: ``{"has_login", "username"}``.
+    The lab's rule is "never a personal account on a shared PC"; this is what
+    lets someone check it. The password part is dropped here."""
+    username, password = _github_stored_credential(runner=runner)
+    return {"has_login": bool(password), "username": username if password else ""}
+
+
+def github_token_expiry_notice(today=None, info=None):
+    """The amber notice about the stored token's expiry date: "" until
+    :data:`GITHUB_TOKEN_WARN_DAYS` days before it, then a line that says when it
+    expires (or that it has) and where to renew it. A silent lab-wide outage
+    becomes a planned renewal."""
+    info = info if info is not None else github_login_info()
+    expires = info.get("token_expires") or ""
+    try:
+        when = _dt.date.fromisoformat(expires[:10])
+    except (TypeError, ValueError):
+        return ""
+    days = (when - (today or _dt.date.today())).days
+    if days > GITHUB_TOKEN_WARN_DAYS:
+        return ""
+    where = "Renew it on GitHub, then store the new one in Settings > GitHub."
+    if days < 0:
+        return ("The GitHub token on this computer expired on %s: studies can no "
+                "longer be cloned or updated. %s" % (format_day(expires), where))
+    return ("The GitHub token on this computer expires on %s. %s"
+            % (format_day(expires), where))
+
+
+def github_clone_enabled(sync=None):
+    """True when the GitHub (clone) button is shown: an organisation name is set
+    and the setting is on. An EMPTY name is OFF (there is no tick box any more:
+    the organisation field is the whole setting)."""
+    sync = sync if sync is not None else load_github_sync()
+    return bool(sync.get("enabled")) and bool(str(sync.get("org") or "").strip())
+
+
+def save_github_org(org, path=None):
+    """The Settings field: a name switches GitHub on for that organisation, an
+    empty field switches it off. Returns ``{"enabled", "org"}``."""
+    org = str(org or "").strip().strip("/")
+    return save_github_sync_settings(bool(org), org, path)
+
+
+def github_summary(sync=None, stored=None, info=None, today=None):
+    """The collapsed GitHub card in Settings: "Off", or
+    "demo-lab · login lab-account · token until 30 Sep 2027", or
+    "demo-lab · no login on this computer"."""
+    sync = sync if sync is not None else load_github_sync()
+    if not github_clone_enabled(sync):
+        return "Off"
+    parts = [str(sync.get("org") or "").strip()]
+    stored = stored if stored is not None else {"has_login": False, "username": ""}
+    if stored.get("has_login"):
+        parts.append("login %s" % (stored.get("username") or "stored"))
+        info = info if info is not None else github_login_info()
+        expires = info.get("token_expires") or ""
+        same = (not info.get("username") or not stored.get("username")
+                or info["username"].lower() == stored["username"].lower())
+        if expires and same:
+            try:
+                past = _dt.date.fromisoformat(expires[:10]) < (today or _dt.date.today())
+            except (TypeError, ValueError):
+                past = False
+            parts.append("token %s %s" % ("expired" if past else "until",
+                                          format_day(expires)))
+    else:
+        parts.append("no login on this computer")
+    return " · ".join(parts)
+
+
+def github_token_create_url(org, days=365):
+    """GitHub's own "new fine-grained token" page, PREFILLED for the lab token:
+    the organisation as resource owner, Contents: Read-only (GitHub adds
+    Metadata: Read-only itself) and the expiry. "All repositories" is not among
+    GitHub's documented link parameters, so that stays one click on the page."""
+    import urllib.parse
+    org = str(org or "").strip().strip("/")
+    query = [("name", "oTree lab PCs (read-only)"),
+             ("description", "Lets the lab computers clone and update studies. "
+                             "Read-only.")]
+    if org:
+        query.append(("target_name", org))
+    query += [("expires_in", str(int(days))), ("contents", "read")]
+    return ("https://github.com/settings/personal-access-tokens/new?"
+            + urllib.parse.urlencode(query))
+
+
+def github_list_org_repos(org, credential=None, fetcher=None, limit=300):
+    """The repositories of ``org`` that this computer's GitHub login can see,
+    newest work first, for the clone dialog's list (typing the name still works).
+
+    Returns ``{"ok", "status", "repos": [{"name", "private", "description"}],
+    "message"}``. ``status``: "ok"; "empty" (the login sees nothing there: no
+    access, or the token is for another organisation / not approved yet);
+    "rejected" (the login was not accepted); "no_org" (no such organisation);
+    "network" (GitHub could not be reached: the dialog just shows no list).
+    The stored token is read into memory for this request only; it is never
+    returned, logged or written. ``credential`` / ``fetcher`` are test seams."""
+    org = str(org or "").strip().strip("/")
+    out = {"ok": False, "status": "network", "repos": [], "message": ""}
+    if not org:
+        out["status"] = "no_org"
+        return out
+    if credential is None:
+        credential = _github_stored_credential()
+    token = credential[1] if credential else ""
+    fetch = fetcher or _github_api_get
+    repos, page = [], 1
+    try:
+        while len(repos) < limit:
+            status, _headers, data = fetch(
+                "/orgs/%s/repos?per_page=100&sort=pushed&page=%d" % (org, page),
+                token or None)
+            if status == 401:
+                out.update(status="rejected",
+                           message="GitHub did not accept this computer's login.")
+                return out
+            if status == 404:
+                out.update(status="no_org",
+                           message="GitHub has no organisation called '%s'." % org)
+                return out
+            if status != 200 or not isinstance(data, list):
+                return out
+            for item in data:
+                if isinstance(item, dict) and item.get("name"):
+                    repos.append({"name": str(item["name"]),
+                                  "private": bool(item.get("private")),
+                                  "description": str(item.get("description") or "")})
+            if len(data) < 100:
+                break
+            page += 1
+    except Exception:
+        return out
+    if not repos:
+        out.update(ok=True, status="empty",
+                   message=("This computer's login sees no repositories in %s." % org
+                            if token else
+                            "No login on this computer: private repositories in %s "
+                            "cannot be listed." % org))
+        return out
+    out.update(ok=True, status="ok", repos=repos[:limit])
+    return out
 
 
 def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
@@ -3967,9 +4955,14 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
     ``runner`` lets tests inject a fake spawn; ``url_template`` lets them clone
     from local bare repos. Bounded by timeouts; never raises.
     """
-    def outcome(status, message, hint="", output="", path=""):
-        return {"ok": status == "ok", "status": status, "message": message,
-                "hint": hint, "output": (output or "").strip(), "path": path}
+    def outcome(status, message, hint="", output="", path="", action="", **more):
+        # ``action`` is the line the dialog shows in BOLD (what to do);
+        # ``message`` says what happened, ``hint`` adds a quieter sentence.
+        result = {"ok": status == "ok", "status": status, "message": message,
+                  "action": action, "hint": hint, "output": (output or "").strip(),
+                  "path": path}
+        result.update(more)
+        return result
 
     def phase(name):
         if on_phase is not None:
@@ -3978,8 +4971,8 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
             except Exception:
                 pass
 
-    org = str(org or "").strip().strip("/")
-    name = clone_repo_name(repo)
+    # A pasted full github.com link names its own owner (clone_target).
+    org, name = clone_target(org, repo)
     if not org:
         return outcome("no_org", "Set the GitHub organisation name in Settings > "
                                  "GitHub Organisation Sync first.")
@@ -3994,10 +4987,14 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
                        "Destination folder does not exist: %s" % dest_parent)
     target = os.path.join(dest_parent, name)
     if os.path.exists(target):
+        # On a lab PC this is the normal case (the study was cloned before), so
+        # the dialog offers the existing folder (``existing_path``) first.
         return outcome("exists",
                        "A folder named '%s' already exists in %s." % (name, dest_parent),
                        "Pick another parent folder, or remove or rename that "
-                       "folder, then try again.")
+                       "folder, then try again.",
+                       action="Use that folder, or choose another folder.",
+                       existing_path=target if os.path.isdir(target) else "")
 
     def git_failure(output):
         why = classify_git_error(output)
@@ -4007,12 +5004,14 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
             # GITHUB_LOGIN_ACTION_LABEL next to it.
             return outcome("not_found",
                            "No repository called '%s' found in %s, or this login "
-                           "has no access to it." % (name, org), "", output)
+                           "has no access to it." % (name, org), "", output,
+                           action="Check the name, or use another GitHub login.")
         if why["code"] == "auth":
             return outcome("auth",
                            "Could not open %s/%s: GitHub asked for a login this "
                            "computer does not have (or did not accept)."
-                           % (org, name), GITHUB_NO_LOGIN_HINT, output)
+                           % (org, name), GITHUB_NO_LOGIN_HINT, output,
+                           action="Add a GitHub login for this computer.")
         if why["code"] == "network":
             return outcome("network", "Could not reach GitHub.",
                            "Check that this computer is online, then try again.",
@@ -4033,7 +5032,7 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
     phase("checking")
     try:
         code, output = _run_git(["ls-remote", url, "HEAD"], runner=runner,
-                                timeout=60)
+                                timeout=60, no_prompt=True)
     except (FileNotFoundError, subprocess.TimeoutExpired) as error:
         return spawn_errors("Checking the repository")[type(error)]
     except (OSError, ValueError, subprocess.SubprocessError) as error:
@@ -4043,7 +5042,8 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
 
     phase("cloning")
     try:
-        code, output = _run_git(["clone", url, target], runner=runner, timeout=600)
+        code, output = _run_git(["clone", url, target], runner=runner, timeout=600,
+                                no_prompt=True)
     except (FileNotFoundError, subprocess.TimeoutExpired) as error:
         shutil.rmtree(target, ignore_errors=True)   # drop a half-made clone
         return spawn_errors("Cloning")[type(error)]
@@ -5424,6 +6424,17 @@ def database_location_warning(entry, hostname=None):
                created_host, hostname))
 
 
+def database_location_note(entry, hostname=None):
+    """The SHORT form of :func:`database_location_warning` for lists, the
+    Database card and the picker: "Created on LAB-PC-7, not this computer". ""
+    whenever the full warning is "". The full sentence goes behind the info tip
+    next to it and stays in the database's Edit view."""
+    if not database_location_warning(entry, hostname):
+        return ""
+    created_host = normalize_created_on((entry or {}).get("created_on")).get("hostname", "")
+    return "Created on %s, not this computer" % created_host
+
+
 def register_database(extra, title, researcher, connection=None,
                       postgres_user="", database_url="", created=None, created_on=None):
     """Append a database to this PC's list (append-only), stamp where it was
@@ -6176,6 +7187,7 @@ WELCOME_FLAG = "welcome_page_ok=1"
 
 # What the launch briefing tells staff about the per-seat link. Kept in one place
 # so the Tk popup, the web popup and the docs all say the same thing.
+LOCAL_ONLY_TEXT = "Runs on this computer only."
 WELCOME_NOTE = ("This exact link (with welcome_page_ok=1) is THE link to put in "
                 "all lab documentation and on the lab computers. welcome_page_ok=1 "
                 "skips oTree 6's Welcome/Start page, so each seat auto-admits with "
@@ -6283,6 +7295,12 @@ def launch_briefing(cfg, lab_presets=None):
     # the manual per-seat link to open on each computer. The shortcut room is the
     # lab's OWN default_room now, not a hardcoded "study".
     has_participant_links = room_has_participant_links(room, lab_room)
+    # Only a real lab has desktop shortcuts on its PCs. "Other host" has none, so
+    # the briefing shows the link; "localhost" has no participant computers at
+    # all, so it says so instead of naming a shortcut that does not exist.
+    local_only = (lab == LAB_LOCAL)
+    if lab in (LAB_CUSTOM, LAB_LOCAL):
+        has_participant_links = False
     return {
         "lab_label": lab_label,
         "host": host,
@@ -6297,6 +7315,8 @@ def launch_briefing(cfg, lab_presets=None):
         "example_link": link(example_seat),
         "link_template": link("SEAT"),
         "has_participant_links": has_participant_links,
+        "local_only": local_only,
+        "local_only_text": LOCAL_ONLY_TEXT if local_only else "",
         "shortcut_name": study_shortcut_name(lab_label),
         # The human name of THIS lab's participant-PC desktop shortcuts (blank
         # when the lab did not set one). When set, the briefing tells the user to
@@ -6942,6 +7962,108 @@ def _port_has_listener(port, host="127.0.0.1", timeout=PREFLIGHT_PORT_CONNECT_TI
             pass
 
 
+# The one-click shortcut's message box for the same situation (no window, so no
+# Re-check button to point at).
+HEADLESS_SESSION_RUNNING_MESSAGE = (
+    "A session is already running on the launch port, so the one-click shortcut "
+    "did not start another one and did not reset the database. Stop the running "
+    "session first (close its server window), then run the shortcut again.")
+PORT_IN_USE_MESSAGE = ("Port %d is in use: a session is already running on it. Stop it "
+                       "first (close its server window), then Re-check.")
+
+
+# The one-click shortcut (--run) has no window, so it cannot show the launch
+# screen's warnings. It STOPS AND ASKS ("Launch anyway" / "Cancel", one line per
+# problem, one box for all of them) for exactly these, and stays silent about
+# everything else (the shared-database caution, local changes, being offline,
+# info items). A running session on the port is not asked about: it stops the
+# shortcut outright (HEADLESS_SESSION_RUNNING_MESSAGE), as before.
+#   1. a newer version of the study is waiting online (quiet check; offline, not
+#      a repository or a login problem = silent)
+#   2. the database cannot be reached
+#   3. the config's saved room is not the lab's default room (a config saved
+#      WITH the lab default follows it and never warns: follow_lab_room)
+HEADLESS_UPDATE_TIMEOUT = 5
+HEADLESS_ASK_TITLE = "oTree Lab Launcher"
+HEADLESS_ASK_QUESTION = "Launch anyway?"
+HEADLESS_CANCELLED_EXIT = 10
+
+
+def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker=None):
+    """The problems the one-click shortcut asks about before it launches ``cfg``
+    (already resolved with :func:`follow_lab_room`): a list of one-line texts,
+    empty when there is nothing to ask. The update check and the database check
+    run side by side so the shortcut is not slowed down by their sum.
+    ``update_checker`` / ``db_checker`` are test seams. Never raises."""
+    c = normalize_config(cfg)
+    found = {}
+
+    def check_update():
+        try:
+            checker = update_checker or (lambda path: project_update_status(
+                path, timeout=HEADLESS_UPDATE_TIMEOUT))
+            found["update"] = checker(c["project_path"].strip())
+        except Exception:
+            found["update"] = None
+
+    def check_database():
+        try:
+            found["database"] = (db_checker or preflight_check_database)(c)
+        except Exception:
+            found["database"] = None
+
+    workers = [threading.Thread(target=check_update, daemon=True),
+               threading.Thread(target=check_database, daemon=True)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(HEADLESS_UPDATE_TIMEOUT + PREFLIGHT_DB_TIMEOUT + 10)
+
+    problems = []
+    if (found.get("update") or {}).get("state") == UPDATE_STATE_BEHIND:
+        problems.append(HEADLESS_UPDATE_PROBLEM)
+    database = found.get("database")
+    if database and not database.get("ok"):
+        problems.append(str(database.get("message") or "The database cannot be reached."))
+    try:
+        mismatch = lab_room_mismatch(c, lab_presets)
+    except Exception:
+        mismatch = None
+    if mismatch:
+        problems.append("This config uses the room '%s'; the lab default (what the "
+                        "participant computers open) is '%s'."
+                        % (mismatch["config_room"], mismatch["lab_room"]))
+    return problems
+
+
+def headless_ask_text(problems, config_name=""):
+    """The text of the one-click shortcut's question box: every problem on its
+    own line, then "Launch anyway?"."""
+    problems = [str(p).strip() for p in problems if str(p).strip()]
+    head = ('"%s" has %s to look at first:' % (
+        config_name, "something" if len(problems) == 1 else "a few things")
+        if config_name else "Before this launch:")
+    lines = [head, ""] + [("• " + p) for p in problems] + ["", HEADLESS_ASK_QUESTION]
+    return "\n".join(lines)
+
+
+def running_server_problem(config):
+    """The last guard before a launch touches anything: "" when the launch port
+    is free, else the plain reason (a server is already answering there).
+
+    Every launch path (both faces and the headless one-click run) calls this
+    BEFORE ``otree resetdb``, so a relaunch can never reset the database of a
+    session that is still running, and can never report the OLD server's answer
+    as its own success. Fail-soft: anything unexpected reads as free."""
+    try:
+        result = preflight_check_port(config)
+    except Exception:
+        return ""
+    if result.get("ok") or not result.get("blocking"):
+        return ""
+    return str(result.get("message") or "")
+
+
 def preflight_check_port(config):
     """Check 2: the launch port is free to bind on this machine.
 
@@ -6991,12 +8113,13 @@ def preflight_check_port(config):
         # INFORM, never kill: the launcher only starts its own things and never
         # stops whatever holds the port. The operator chooses a different port or
         # stops the other server themselves.
-        return _preflight_result(
-            "port", False,
-            "Port %d is already in use: another study may already be running. "
-            "Choose a different port, or stop that server yourself -- the "
-            "launcher will not stop it for you." % port,
-            str(err))
+        # A launch can never work while the port is taken (the new server
+        # cannot bind), and a "launch anyway" would reset the database under the
+        # session that is still running: so this is a MUST-FIX (``blocking``),
+        # not a warning. Both faces render it as a blocker with Re-check.
+        result = _preflight_result("port", False, PORT_IN_USE_MESSAGE % port, str(err))
+        result["blocking"] = True
+        return result
 
     # EACCES is a permission problem (a privileged port), not a TIME_WAIT lag --
     # keep reporting it as busy.
@@ -8453,17 +9576,262 @@ def take_notices():
 
 
 # ===========================================================================
+# UI WORDING + SUMMARIES shared by both faces (UX simplification, 2026-10-01).
+#
+# Rule both faces follow: a sentence that EXPLAINS goes behind an info tip (web
+# ``infoBadge``, Tk ``info_tip``); a sentence that tells the user to ACT stays
+# visible. The tip texts live here so both faces say the same words. Set-once
+# sections (Settings cards, the oTree admin row) collapse to ONE summary line
+# built by the helpers below, and expand only to edit.
+# ===========================================================================
+
+# The ONE name of the action that appends the lab support block to settings.py,
+# wherever it is offered (warning strip, get-ready popup, pre-launch screen,
+# block viewer).
+GET_READY_LABEL = "Get ready for the lab"
+
+# Help for the per-lab "Default oTree room" field (wizard + Lab Settings).
+ROOM_HELP = ("If the lab PCs already have shortcuts that open a room, put that room "
+             "name here so participants land in it; otherwise leave it as study.")
+
+UI_TIPS = {
+    "this_computer": "Which lab this computer is in (saved on this computer). The "
+                     "main screen then shows that lab and uses its default room.",
+    "labs": "Ticked labs appear on the main screen; with one ticked it is selected "
+            "automatically. Labs are stored in lab_info.json, the one file you copy "
+            "to every computer of the lab.",
+    "databases": "Every database this computer uses (saved in machine.json, never "
+                 "copied to another PC). The default one is what the Lab default "
+                 "config uses.",
+    "localhost_only": "On: every database is on this computer. Off: a database on "
+                      "another computer can be registered (it must already exist "
+                      "there).",
+    "postgres_admin": "The Postgres superuser on this computer. Only used to create "
+                      "databases, never to launch.",
+    "save_as": "Saved configs are never changed. This adds a new one and leaves "
+               "every existing config exactly as it is.",
+    "edit_database": "Connection details for this database on this computer, used "
+                     "by every config that references it. Saved in machine.json.",
+    "create_database": "Created with the Postgres admin login from Settings. With "
+                       "no user of its own, that login owns the database and "
+                       "connects to it.",
+    "host_locked": "This computer only: “%s” is on in Settings."
+                   % LOCALHOST_ONLY_LABEL,
+    "db_picker": "The databases on this computer. A database on another computer "
+                 "shows its host.",
+    "seat_file": "Read from a file in your project at launch; the file is never "
+                 "changed.",
+    "localhost_run": "Runs oTree on this computer (localhost). Pair it with the oTree "
+                     "default (SQLite) database for a self-contained test away from "
+                     "the lab.",
+    "room_picker": "The lab default room is the one the lab computers’ desktop "
+                   "shortcuts open. Only change it if the computers will open a "
+                   "different room’s link.",
+    "export_hotkey": "Leave blank for no hotkey. Type one letter or digit, e.g. S, to "
+                     "give every exported shortcut Ctrl+Alt+S. It works once the "
+                     ".lnk is on the Desktop or Start Menu.",
+    "shortcut_label": "The name the participant-PC desktop shortcuts are saved as; "
+                      "the launch screen then names that shortcut.",
+    "wizard_postgres": "The Postgres superuser on this computer. Used only to "
+                       "create this computer’s databases, never to launch.",
+    "wizard_databases": "The ticked database is this computer’s default: the Lab "
+                        "default config uses it.",
+    "welcome_link": WELCOME_NOTE,
+    "pg_blank_password": PG_BLANK_PASSWORD_HINT,
+    "pg_new_user_password": PG_NEW_USER_PASSWORD_HINT,
+    "room_help": ROOM_HELP,
+    "production_mode": "Serve as a real study, no debug pages.",
+    "one_click_shortcut": "Starts this config from one desktop shortcut and opens "
+                          "the oTree monitor straight away. Save the config first: "
+                          "the shortcut runs a saved config by name.",
+    "github": "Lets an experimenter download a study from your lab’s GitHub "
+              "organisation and keep it up to date, without a terminal. Type the "
+              "organisation name to switch it on; empty is off. Each computer "
+              "needs a GitHub login once.",
+    "github_login": GITHUB_LOGIN_DIALOG_NOTE,
+    "clone": "Downloads the repository into a new folder inside “Saves to” and "
+             "selects it as your study folder. Type its name, or paste a full "
+             "GitHub link.",
+    "wizard_no_labs": "No labs yet: add your lab here; with several, the selected one "
+                      "is the lab this computer is in. Or copy a lab_info.json from "
+                      "another computer of the lab into data/ and restart.",
+}
+
+
+def ui_tip(key):
+    """The info-tip text for ``key`` ("" for an unknown key)."""
+    return UI_TIPS.get(key, "")
+
+
+def admin_summary(config):
+    """The collapsed oTree admin row: "admin · STUDY · production · auto login".
+    Username, authentication level, production/debug and auto/manual login are
+    set once per study, so the main screen shows this one line and the pen opens
+    all four."""
+    c = dict(config or {})
+    level = str(c.get("auth_level") or "").strip()
+    return " · ".join([
+        str(c.get("admin_username") or "").strip() or "admin",
+        level if level and level.lower() != "none" else "no auth level",
+        "production" if c.get("production", True) else "debug",
+        "auto login" if c.get("auto_login", True) else "manual login"])
+
+
+def pg_admin_summary(admin):
+    """The collapsed Postgres admin card: "postgres@localhost" (the port only
+    when it is not 5432), or "Not set"."""
+    admin = admin or {}
+    user = str(admin.get("admin_username") or "").strip()
+    if not user:
+        return "Not set"
+    host = str(admin.get("admin_host") or "").strip() or "localhost"
+    port = str(admin.get("admin_port") or "").strip() or "5432"
+    return "%s@%s%s" % (user, host, "" if port == "5432" else ":" + port)
+
+
+def databases_summary(entries, default_id=""):
+    """The collapsed Databases card: "otree_large_lab (default) + 2 more"."""
+    entries = [e for e in (entries or []) if not e.get("builtin") and not e.get("deleted")]
+    if not entries:
+        return "None yet (launches use oTree’s own SQLite)"
+    default = [e for e in entries if e.get("id") == default_id or e.get("is_default")]
+    first = default[0] if default else entries[0]
+    text = str(first.get("title") or first.get("db_name") or "database")
+    if default:
+        text += " (default)"
+    others = len(entries) - 1
+    if others:
+        text += " + %d more" % others
+    return text
+
+
+def labs_summary(lab_presets):
+    """The collapsed Labs card: the shown labs by name, "(1 hidden)" when any."""
+    presets = [p for p in (lab_presets or []) if not p.get("deleted")]
+    shown = [str(p.get("name") or p.get("id")) for p in presets if p.get("display", True)]
+    hidden = len(presets) - len(shown)
+    text = ", ".join(shown) if shown else "None shown"
+    if hidden:
+        text += " (%d hidden)" % hidden
+    return text
+
+
+def lab_identity_status(lab_name):
+    """What "which lab is this computer" just did, including the side effect on
+    the main screen (every other lab is hidden)."""
+    return ("This computer is now %s. Only %s is shown on the main screen."
+            % (lab_name, lab_name))
+
+
+def lab_has_drawn_map(preset):
+    """True when a lab has a real, DRAWN room layout (a map with cells), False
+    when its "map" is only the ordered list of its seat labels in a plain grid.
+
+    Julian's rule for the main screen's seat map (2026-10-01): a drawn layout is
+    worth seeing, so it starts EXPANDED; a plain grid of seat numbers adds
+    nothing over "31 seats", so it starts COLLAPSED. ("Edit for this run" opens
+    it either way: there the seats are the control.) Both faces use this."""
+    preset = preset or {}
+    return build_seatmap_from_map(preset.get("map"), preset.get("seats") or []) is not None
+
+
+def seats_caption(total, excluded=0):
+    """The seat map caption: "Room layout · 31 seats", or "29 of 31 seats" when
+    seats are switched off for this run."""
+    total = int(total or 0)
+    excluded = max(0, min(int(excluded or 0), total))
+    if excluded:
+        return "Room layout · %d of %d seats" % (total - excluded, total)
+    return "Room layout · %d seats" % total
+
+
+def env_log_line(keys, env):
+    """ONE activity-log line for the environment a launch sets (passwords masked
+    by describe_env_value), instead of one line per variable."""
+    pairs = ["%s=%s" % (k, describe_env_value(k, env.get(k, ""))) for k in keys if k in env]
+    if not pairs:
+        return "Environment: nothing set for this run."
+    return "Environment: " + " · ".join(pairs)
+
+
+SEAT_FILE_MISSING_WARNING = ("No participant file is chosen, so this launch uses an open "
+                             "room with no seat list. Choose a file, or pick another "
+                             "participant list.")
+
+
+def seat_file_missing_warning(config):
+    """A pre-launch WARNING (never a block: seats are never a hard block) when
+    "Use a file from my project" is selected but no readable file is set, so the
+    silent fallback to an open room is said out loud. "" otherwise."""
+    c = dict(config or {})
+    if c.get("seat_mode") != SEAT_FILE:
+        return ""
+    path = str(c.get("seat_file") or "").strip()
+    if path and os.path.isfile(path):
+        return ""
+    return SEAT_FILE_MISSING_WARNING
+
+
+NO_BLOCK_ISSUE_TITLE = ("This project is not lab-ready yet: without the lab support "
+                        "block the lab room, seat board and lab database do not take "
+                        "effect.")
+NO_BLOCK_ISSUE_HINT = ("Adds a clearly-marked block to the end of settings.py, after a "
+                       "timestamped .bak backup (fully revertible).")
+
+
+def launch_room_mismatch(cfg, saved_config=None, lab_presets=None):
+    """:func:`lab_room_mismatch`, but ONLY for a saved config whose room is
+    still the one it was saved with: that is the case the warning exists for (the
+    lab's default room changed after the config was saved). A room the user just
+    picked on screen is their choice, already stated in the launch summary, so it
+    raises no warning. ``saved_config`` is the stored config the screen was loaded
+    from (None for the built-in default or an unsaved setup)."""
+    if not saved_config or saved_config.get("builtin"):
+        return None
+    saved_config = follow_lab_room(saved_config, lab_presets)
+    saved_room = str(saved_config.get("room_name") or "").strip() or DEFAULT_ROOM_NAME
+    room = str((cfg or {}).get("room_name") or "").strip() or DEFAULT_ROOM_NAME
+    if room != saved_room:
+        return None
+    return lab_room_mismatch(cfg, lab_presets)
+
+
+def wizard_postgres_next(admin, tester=None):
+    """What "Next" on the wizard's Postgres step does. Returns
+    ``{"action", "ok", "message"}``:
+
+      no superuser typed  -> action "skip"  (same as Skip: no Postgres here)
+      login works         -> action "next"  (go on to the Databases step)
+      login fails         -> action "stay"  (show the message; fix it or Skip)
+
+    so a login that cannot work is caught HERE and not three steps later at Save.
+    ``tester`` replaces :func:`test_pg_admin_connection` in tests."""
+    admin = wizard_pg_admin(admin)
+    if not admin["admin_username"]:
+        return {"action": "skip", "ok": False, "message": ""}
+    result = (tester or test_pg_admin_connection)(admin)
+    if result.get("ok"):
+        return {"action": "next", "ok": True, "message": result.get("message", "")}
+    return {"action": "stay", "ok": False,
+            "message": result.get("message") or "Could not connect to Postgres."}
+
+
+# ===========================================================================
 # SETUP WIZARD (per PC). Runs when lab_info.json has no labs or this PC has no
 # (valid) home lab. Steps: 1 which lab is this PC (from lab_info.json; with no
 # labs, create them as before); 2 Postgres on THIS computer (superuser,
 # password, port; host localhost; Test connection); 3 create databases (the
 # default one prefilled with the lab's suggested_database), add another / link
-# an existing one; 4 save to machine.json. Steps 2 and 3 may be skipped: then no
-# database can be created until a Postgres login is added in Lab Settings, and
-# launches use oTree's own SQLite. Both faces only render; the logic is here.
+# an existing one. The last step's button SAVES to machine.json (there is no
+# separate review step). Step 2 may be skipped: step 3 is then skipped too (a
+# database cannot be created without a Postgres login) and the wizard saves at
+# once; step 3 may also be skipped on its own. Launches then use oTree's own
+# SQLite until a Postgres login and a database are added in Lab Settings. Next on
+# step 2 tests the login first (wizard_postgres_next). Both faces only render;
+# the logic is here.
 # ===========================================================================
 
-WIZARD_STEPS = ("Lab", "Postgres", "Databases", "Save")
+WIZARD_STEPS = ("Lab", "Postgres", "Databases")
 WIZARD_NO_PG_NOTE = ("Without a Postgres login no databases can be created. Launches "
                      "use oTree's own SQLite until a Postgres login is added in Lab "
                      "Settings.")
