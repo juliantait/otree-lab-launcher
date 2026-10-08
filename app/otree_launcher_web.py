@@ -271,7 +271,7 @@ def _ui_text():
         "github_login_prompt": core.GITHUB_LOGIN_DIALOG_PROMPT,
         "github_login_missing": core.GITHUB_LOGIN_MISSING_MESSAGE,
         "github_platform_note": core.github_platform_note(),
-        # The study update check / Git Pull wording (core owns it).
+        # The study update check / Git pull wording (core owns it).
         "git_pull_button": core.GIT_PULL_BUTTON_LABEL,
         "git_update_action": core.GIT_UPDATE_ACTION_LABEL,
         "git_fresh_copy": core.GIT_FRESH_COPY_LABEL,
@@ -309,7 +309,7 @@ def project_status(path):
         message = "Looks like an oTree project with settings.py and %d app package%s:" % (
             len(apps), "" if len(apps) == 1 else "s")
     return {"level": level, "message": message, "name": name, "apps": apps,
-            # Whether the Git Pull button applies to this folder (a git working
+            # Whether the Git pull button applies to this folder (a git working
             # tree that is not the launcher's own; since 2026-10-01 whatever the
             # GitHub Organisation Sync setting): the page hides the button for a
             # plain folder.
@@ -896,7 +896,7 @@ class Api(object):
             "theme": core.load_ui_theme(),
             # GitHub: the organisation name (a lab setting, in lab_info.json; an
             # empty name is OFF). It only decides whether the page shows the
-            # GitHub (clone) button; the update check and Git Pull work for any
+            # GitHub (clone) button; the update check and Git pull work for any
             # git repository. ``github`` carries what core decided (no login
             # lookup here: that runs when Settings opens).
             "github_sync": core.load_github_sync(),
@@ -2657,7 +2657,7 @@ class Api(object):
         # One click switches THIS config to the lab default; launching as-is is
         # fine (silent when the rooms already match).
         # An update known to be waiting on GitHub: an AMBER reminder with the
-        # existing Git Pull as its fix. It warns; it never blocks the launch.
+        # existing Git pull as its fix. It warns; it never blocks the launch.
         update_warning = core.prelaunch_update_warning(
             self.known_update_status(cfg.get("project_path", ""), wait=1.5))
         if update_warning:

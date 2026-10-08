@@ -218,15 +218,15 @@ takes the setup.
      the GitHub organisation is set**; a `git fetch`, which only downloads what
      is new and **does not change the experiment files**). The project box then
      shows one of: **Experiment up to date · checked HH:MM**; the amber **A newer
-     version of this study is available. Update?** with an **Update** button;
+     version of this study is available on GitHub.** with a **Git pull** button;
      ***settings.py* was changed on this computer and in the newer version.** with
      **Get a fresh copy**; **Could not check for a newer version: the login was
      not accepted.** with **GitHub login…**; or, when there is nothing to say
      (not a git repository, offline), nothing at all. It never blocks choosing a
      study or launching.
-   - **Update / Git Pull.** The banner's **Update** button and the standing
-     **Git Pull** button do the same thing (only one of them is on screen at a
-     time): they move the folder forward to the newest version, **and never do
+   - **Git pull.** The banner's **Git pull** button and the standing **Git
+     pull** button do the same thing (only one of them is on screen at a
+     time): they run `git pull` in the study folder and move the folder forward to the newest version, **and never do
      anything else** (no merge, no changes to files edited on this computer).
      The result replaces the status line: **Nothing new: already up to date.**,
      or **Pulled N changed files.** with the latest commit and a collapsed
@@ -330,8 +330,7 @@ use](github_org_sync.md).)
    type its name), choose your name under Researcher, press Clone.** The study
    is saved on that computer and selected at once.
 3. **It stays up to date.** Each time the study is selected, the launcher
-   checks GitHub. If there is a newer version, it says so: **click Update**.
-   **Git Pull** does the same by hand.
+   checks GitHub. If there is a newer version, it says so: **click Git pull**.
 4. **Optional, on your own computer: one push updates both copies.** In your
    study folder, after the first push of step 1:
 
@@ -390,8 +389,9 @@ button re-enables.
 
 *If a newer version of the study is available:* when the automatic check (see
 the GitHub section above) found one, the screen adds the amber reminder **"A
-newer version of this study is available. Update before launch."** with an
-**Update** button. It warns and never blocks: update there, or launch as it is.
+newer version of this study is available on GitHub. Git pull before launch."**
+with a **Git pull** button. It warns and never blocks: pull there, or launch as
+it is.
 
 *If a session is already running:* the screen shows the must-fix **"Port 8000 is
 in use: a session is already running on it."** and **Launch stays off**. Stop

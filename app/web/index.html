@@ -397,7 +397,7 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 }
 /* The always-present project STATUS CARD (v1.4.0): the status text / detected
    apps / empty-state or problem message on the LEFT (sc-body, flex:1), and a
-   small Git Pull button anchored TOP-RIGHT (only when Org Sync is on and a
+   small Git pull button anchored TOP-RIGHT (only when Org Sync is on and a
    folder is selected). The button is the LAST flex child and align-self
    flex-start keeps it in the top-right corner, in the same row as the detection
    status line, so it never shoves the green detection text to the right. */
@@ -414,7 +414,7 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .study-card .bullets li{position:relative;padding-left:14px;font-size:11.5px;color:var(--ok);margin:0;line-height:1.55}
 .study-card .bullets li::before{content:"";position:absolute;left:2px;top:7px;
   width:4px;height:4px;border-radius:50%;background:var(--ok)}
-/* Git Pull RESULT: a section appended at the bottom of the status card after
+/* Git pull RESULT: a section appended at the bottom of the status card after
    every pull. The bold head line is the core result (nothing new / failed /
    pulled N files); the commit line and reason are quieter; the changed-file list
    and git's raw output sit in COLLAPSED <details> blocks. */
@@ -1379,7 +1379,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <!-- Line 2: ONE always-present STATUS CARD. It absorbs the old loose grey
                helper lines and the not-an-oTree warning. Contents are rendered by
                applyProject by state: empty prompt (the "ways to add a project"
-               list) / green valid project / red problem. A small Git Pull button
+               list) / green valid project / red problem. A small Git pull button
                sits at the TOP-RIGHT when Org Sync is on and a folder is chosen; it
                comes AFTER the status body in the DOM so the body (and its green
                detection text) stays LEFT and is never shoved right by the button. -->
@@ -1396,7 +1396,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             </div>
             <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
               onclick="onGitUpdateStudy()"
-              title="Check for a newer version of this study and download it (git pull)">Git Pull</button>
+              title="Check for a newer version of this study and download it (git pull)">Git pull</button>
           </div>
 
           <div class="divider"></div>
@@ -1711,7 +1711,7 @@ var hiddenFields={};
    a web re-save (item 1). */
 var currentSeatExcluded=[];
 /* GitHub Organisation Sync (opt-in, DEFAULT OFF). A lab setting, loaded from lab_info.json via
-   the initial state; drives whether the GitHub org button + the per-config Git Pull button show. */
+   the initial state; drives whether the GitHub org button + the per-config Git pull button show. */
 var GITHUB_SYNC_ENABLED=false, GITHUB_ORG="";
 /* What core says about GitHub on this computer (Api.github_state): the summary
    line, who is logged in, the token's expiry, the prefilled token link, and the
@@ -1891,8 +1891,8 @@ var UI_TEXT={
   github_who_label:"Added by",
   github_who_missing:"Enter or pick who is adding this token.",
   github_token_link:"Create the token on GitHub",
-  git_pull_button:"Git Pull",
-  git_update_action:"Update",
+  git_pull_button:"Git pull",
+  git_update_action:"Git pull",
   git_fresh_copy:"Get a fresh copy",
   update_check:"Check for updates",
   update_discard:"Discard these changes and update",
@@ -2111,7 +2111,7 @@ function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")|
                 only when Org Sync is on, a second line pointing at the org button;
      valid   -> a green line naming the detected project + its app bullets;
      problem -> the red not-an-oTree warning (level warn/err), in this same card.
-   The Git Pull button (left) is shown whenever Org Sync is on and a folder is
+   The Git pull button (left) is shown whenever Org Sync is on and a folder is
    selected (see updateProjectGitPull). */
 var lastProject=null;
 function applyProject(p){
@@ -2156,11 +2156,11 @@ function renderProjectEmptyWays(){
   items.forEach(function(t){var li=document.createElement("li");li.textContent=t;ways.appendChild(li);});
   ways.hidden=false;
 }
-/* Show the small Git Pull button inside the status card only when Org Sync is on
+/* Show the small Git pull button inside the status card only when Org Sync is on
    AND a project folder is selected (item 7). Also refresh the empty-state ways
    list so bullet 3 tracks the Org Sync toggle. */
 function updateProjectGitPull(){
-  /* Git Pull only makes sense for a git repo: hidden for a plain folder, kept
+  /* Git pull only makes sense for a git repo: hidden for a plain folder, kept
      for ANY repo (also when its remote cannot be reached right now), whatever
      the GitHub setting. ONE button at a time: while the amber "newer version"
      banner shows its own Update button, the standing button is hidden. */
@@ -2174,7 +2174,7 @@ function updateProjectGitPull(){
    again when Launch is pressed if the answer is old).
    Api.project_update_check -> core.project_update_status: a git FETCH, which
    only downloads what is new and does NOT change the experiment's files (a
-   pull is fetch + applying it; only the Update / Git Pull click does that),
+   pull is fetch + applying it; only the Update / Git pull click does that),
    then HEAD against its upstream. Quiet by design: not a repo / no upstream /
    offline / timeout show NOTHING. It never blocks choosing a project or
    launching. Runs for any git repository (not tied to the GitHub setting).
@@ -2195,7 +2195,7 @@ function renderUpdateStatus(){
   if(show&&res&&!res.ok&&sameOffer&&res[sameOffer])show=false;
   if(!show){box.hidden=true;box.innerHTML="";box.className="git-update";updateProjectGitPull();return;}
   if(s.state==="behind"){
-    /* The action is the EXISTING Git Pull; its button answers the question. */
+    /* The action is the EXISTING Git pull; its button answers the question. */
     box.className="git-update behind";
     box.innerHTML='<b>'+escapeHtml(s.message||"")+'</b>'+
       '<button type="button" class="btn accent tiny" id="updateBannerBtn" onclick="onGitUpdateStudy()">'+escapeHtml(s.action_label||UPDATE_ACTION_LABEL)+'</button>';
@@ -2216,7 +2216,7 @@ function renderUpdateStatus(){
   box.hidden=false;
   updateProjectGitPull();
 }
-var UPDATE_ACTION_LABEL="Update";
+var UPDATE_ACTION_LABEL="Git pull";
 /* onlyIfStale (Launch pressed): keep what is on screen and ask again only when
    the last answer is old (core decides); a fresh answer comes back at once. */
 function startUpdateCheck(onlyIfStale){
@@ -3154,13 +3154,13 @@ function ghLoginDone(ok,msg,saved){
   if(st){st.textContent=msg;st.style.color=ok?"var(--ok)":"var(--err)";}
 }
 
-/* Git Pull for the SELECTED study folder (never the launcher folder): the
+/* Git pull for the SELECTED study folder (never the launcher folder): the
    standing button, the banner's Update button and the pre-launch fix all end
    here. core pulls FAST-FORWARD ONLY (it never merges). */
 function onGitUpdateStudy(){
   var p=(currentProjectPath||val("projPathInput")||"").trim();
-  if(!p){window.pywStatus("err","Choose or clone a study folder first, then Git Pull.");return;}
-  if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git Pull works in the app, not the static preview.");return;}
+  if(!p){window.pywStatus("err","Choose or clone a study folder first, then Git pull.");return;}
+  if(!NATIVE||!API||!API.git_update_study){window.pywStatus("","Git pull works in the app, not the static preview.");return;}
   var u=el("gitPullBtn"),ub=el("updateBannerBtn");
   if(u){u.disabled=true;u.textContent="Pulling…";}
   if(ub){ub.disabled=true;ub.textContent="Updating…";}
@@ -3171,7 +3171,7 @@ function onGitUpdateStudy(){
     r=r||{};
     /* The result is drawn right in the status box, so a failure only goes to
        the log (not also to the notice bar). */
-    if(r.ok)window.pywStatus(r.status==="current"?"":"ok",r.message||"Git Pull finished.","github");
+    if(r.ok)window.pywStatus(r.status==="current"?"":"ok",r.message||"Git pull finished.","github");
     else window.pywLog("err",r.message||"Git pull failed.");
     if(r.ok)clearNotices("github");
     if(r.output)appendLog(r.ok?"muted":"err",r.output);
@@ -3183,7 +3183,7 @@ function onGitUpdateStudy(){
       if(v&&v.project){_noUpdateCheck=true;try{applyProject(v.project);}finally{_noUpdateCheck=false;}}});
   });
 }
-/* The Git Pull RESULT section at the bottom of the study status card. core
+/* The Git pull RESULT section at the bottom of the study status card. core
    decides the outcome (HEAD before vs after); this only renders it:
      nothing new  -> bold "Nothing new: already up to date."
      failed       -> bold "Git pull failed" + the plain reason + what to do
@@ -4106,7 +4106,7 @@ function saveGithubOrg(){
   });
 }
 /* Show the GitHub (clone) button only when an organisation is set. The update
-   check and Git Pull do not depend on it (they work for any git repository). */
+   check and Git pull do not depend on it (they work for any git repository). */
 function applyGithubSyncButtons(){
   var g=el("githubOrgBtn");
   if(g)g.hidden=!GITHUB_SYNC_ENABLED;
@@ -4821,7 +4821,7 @@ function blUseLabDefault(){
   }
   applyDbFields({db_mode:"custom",database_id:defaultDatabase});updateDirtyState();done();
 }
-/* The amber "newer version" item: run the EXISTING Git Pull right here,
+/* The amber "newer version" item: run the EXISTING Git pull right here,
    show its result in the project card as always, then re-check this screen. */
 function blGitPull(btn){
   var p=(currentProjectPath||"").trim();
@@ -4829,7 +4829,7 @@ function blGitPull(btn){
   if(btn){btn.disabled=true;btn.textContent="Updating…";}
   API.git_update_study(p).then(function(r){
     r=r||{};
-    window.pywLog(r.ok?"ok":"err",r.message||"Git Pull finished.");
+    window.pywLog(r.ok?"ok":"err",r.message||"Git pull finished.");
     renderGitPullResult(r,p);applyPullToUpdateStatus(r,p);
     blRecheck();
   });

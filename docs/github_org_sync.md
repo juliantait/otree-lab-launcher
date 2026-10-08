@@ -24,7 +24,7 @@ launcher, with no terminal.
 1. **Create the study's repository in the organisation** and push to it.
 2. **In the launcher: GitHub, pick the study, Enter.**
 3. Later: when the project box says **A newer version of this study is
-   available**, click **Update**.
+   available on GitHub.**, click **Git pull**.
 
 The rest of this guide is the detail. Where a step happens on GitHub's website,
 it links GitHub's own instructions instead of copying their screenshots, because
@@ -389,25 +389,25 @@ not change your experiment files.** The check can never ask for a login.
 | You see | It means | What to do |
 | --- | --- | --- |
 | **Experiment up to date · checked 14:02** (small, grey) | The folder has everything the online copy has. | Nothing. |
-| **A newer version of this study is available. Update?** with an **Update** button (amber) | A newer version exists and updating will work. Edits to *other* files on this computer (for example the lab block that **Get ready for the lab** added to `settings.py`) do not get in the way. | **Click Update.** The line turns into the result: *Pulled N changed files.* |
+| **A newer version of this study is available on GitHub.** with a **Git pull** button (amber) | A newer version exists and updating will work. Edits to *other* files on this computer (for example the lab block that **Get ready for the lab** added to `settings.py`) do not get in the way. | **Click Git pull.** The line turns into the result: *Pulled N changed files.* |
 | ***settings.py* was changed on this computer and in the newer version.** with **Get a fresh copy** | The same file was edited here and online, so the folder cannot simply be updated. (Or: *This folder has changes of its own that are not in the online copy*.) | **Click Get a fresh copy** (5e), or have the researcher put the edits into the study. |
 | **Could not check for a newer version: the login was not accepted.** with **GitHub login…** (grey) | This computer's login was rejected: typically the lab token expired. | **Click GitHub login…** and store a valid one. |
 | *Nothing at all* | Nothing to say: the folder is not a git repository, has no online branch to compare with, the computer is offline, or the check took too long. | Nothing. No message means no check result, not an error. |
 
 **Before you launch.** If a newer version is waiting, the **Before you launch**
-screen shows an amber reminder, **"A newer version of this study is available.
-Update before launch."**, with an **Update** button. It is a warning, not a
-stop: update there, or launch the version you have.
+screen shows an amber reminder, **"A newer version of this study is available on GitHub.
+Git pull before launch."**, with a **Git pull** button. It is a warning, not a
+stop: pull there, or launch the version you have.
 
 **The one-click shortcut** asks the same question before it launches a saved
 config with a newer version waiting: a box *"… Launch anyway?"*. Offline, not a
 git folder or a login problem: no question. (See the user guide.)
 
-### 5d. Update (Git Pull)
+### 5d. Git pull
 
-The banner's **Update** button and the standing **Git Pull** button in the
-project box do the same thing; only one of them is on screen at a time. They
-**move the folder forward to the newest version and never do anything else**:
+The banner's **Git pull** button and the standing **Git pull** button in the
+project box do the same thing (`git pull` in the study folder); only one of them
+is on screen at a time. They **move the folder forward to the newest version and never do anything else**:
 no merge, no change to a file that was edited on this computer. The result
 appears in the project status box:
 

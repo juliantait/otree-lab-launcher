@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -3744,7 +3744,7 @@ def _run_git(args, runner=None, timeout=60, no_prompt=False):
     """Run ``git <args>`` and return ``(returncode, output)`` with stdout+stderr
     merged and decoded. Raises what subprocess raises (FileNotFoundError when git
     is missing, TimeoutExpired, OSError); callers turn those into results.
-    Runs with CREATE_NO_WINDOW on Windows so Git Pull / Clone never flash a
+    Runs with CREATE_NO_WINDOW on Windows so Git pull / Clone never flash a
     console window from the windowless launcher. ``no_prompt`` runs it with
     :func:`_no_prompt_env` (clone, pull, fetch: git can never ask for a login)."""
     run = runner if runner is not None else subprocess.run
@@ -3772,7 +3772,7 @@ def _git_text(folder, *args, timeout=30):
 def _is_launcher_folder(folder):
     """True when running git in ``folder`` would act on the LAUNCHER's own
     install (repo_root()): the folder is the install directory itself, or sits
-    inside it without being a separate git repo of its own. Git Pull must never
+    inside it without being a separate git repo of its own. Git pull must never
     touch the launcher (that is the in-app updater's job)."""
     def norm(path):
         return os.path.normcase(os.path.realpath(path))
@@ -3822,7 +3822,7 @@ def classify_git_error(output):
     ``no_upstream``, ``not_found``, ``auth``, ``network``, ``ownership``,
     ``not_repo`` or ``unknown``, and ``files`` names the files involved when git
     lists them (local changes / conflicts). Pure text matching; shared by the
-    Git Pull result and the clone dialog so both faces word failures alike.
+    Git pull result and the clone dialog so both faces word failures alike.
     """
     text = str(output or "")
     low = text.lower()
@@ -3976,7 +3976,7 @@ def local_changes_note(porcelain, limit=3):
     Only tracked changes count (modified / deleted / added / renamed); untracked
     ("??") and ignored ("!!") files are skipped, so a stray db.sqlite3 or
     __pycache__ never triggers it. Names up to ``limit`` files, then "and N more":
-    'This folder has local changes (README.md deleted). Git Pull does not undo
+    'This folder has local changes (README.md deleted). Git pull does not undo
     local edits.'"""
     items = []
     for line in (porcelain or "").splitlines():
@@ -3994,7 +3994,7 @@ def local_changes_note(porcelain, limit=3):
     shown = ", ".join(items[:limit])
     if len(items) > limit:
         shown += " and %d more" % (len(items) - limit)
-    return ("This folder has local changes (%s). Git Pull does not undo local "
+    return ("This folder has local changes (%s). Git pull does not undo local "
             "edits." % shown)
 
 
@@ -4131,7 +4131,7 @@ def git_update_study(folder):
 # selection) whether the study folder is behind its GitHub copy. The check runs
 # ``git fetch``: fetch only DOWNLOADS what is new on GitHub into git's own
 # storage; it does NOT change the experiment's files (a pull is fetch + applying
-# it, and only the user's click on Git Pull does that). Then HEAD is compared to
+# it, and only the user's click on Git pull does that). Then HEAD is compared to
 # its upstream.
 #
 # It is QUIET by design: not a repo, no upstream, offline or a timeout all show
@@ -4153,26 +4153,27 @@ GIT_UPDATE_RECHECK_SECONDS = 600
 
 UPDATE_STATE_NONE = "none"                    # show nothing
 UPDATE_STATE_CURRENT = "current"              # quiet "Experiment up to date · checked HH:MM"
-UPDATE_STATE_BEHIND = "behind"                # banner + Update (the existing Git Pull)
+UPDATE_STATE_BEHIND = "behind"                # banner + Update (the existing Git pull)
 UPDATE_STATE_LOCAL_CHANGES = "local_changes"  # cannot be moved forward: Get a fresh copy
 UPDATE_STATE_NO_ACCESS = "no_access"          # the login was rejected: one grey line
 
-# Neutral wording: since 2026-10-01 the check runs for ANY git repository (not
-# only with GitHub Organisation Sync on), so the remote may not be GitHub.
-GIT_UPDATE_AVAILABLE_TEXT = "A newer version of this study is available. Update?"
+# Since 2026-10-07 the wording names GitHub and git pull, to match the README
+# and docs (the check still runs for any git repository with an upstream).
+GIT_UPDATE_AVAILABLE_TEXT = "A newer version of this study is available on GitHub."
 GIT_UP_TO_DATE_TEXT = "Experiment up to date"
 GIT_LOCAL_CHANGES_TEXT = ("This folder has changes of its own that are not in the "
                           "online copy, so it cannot be updated here.")
-GIT_PRELAUNCH_UPDATE_WARNING = ("A newer version of this study is available. Update "
-                                "before launch.")
+GIT_PRELAUNCH_UPDATE_WARNING = ("A newer version of this study is available on GitHub. "
+                                "Git pull before launch.")
 GIT_NO_ACCESS_TEXT = "Could not check for a newer version: the login was not accepted."
-# The banner / pre-launch button answers the banner's question ("Update?"); the
-# standing button in the status box keeps git's own name.
-GIT_UPDATE_ACTION_LABEL = "Update"
-GIT_PULL_BUTTON_LABEL = "Git Pull"
+# The banner / pre-launch button and the standing button in the status box run
+# the same git pull, so they carry the same label.
+GIT_UPDATE_ACTION_LABEL = "Git pull"
+GIT_PULL_BUTTON_LABEL = "Git pull"
 GIT_FRESH_COPY_LABEL = "Get a fresh copy"
 # The one-click shortcut's line for the same state.
-HEADLESS_UPDATE_PROBLEM = "A newer version of this study is available (not downloaded yet)."
+HEADLESS_UPDATE_PROBLEM = ("A newer version of this study is available on GitHub "
+                           "(not downloaded yet).")
 
 
 def _run_git_no_prompt(args, timeout):
@@ -4299,7 +4300,7 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
                                date · checked HH:MM".
       * ``"behind"``        -> the online copy has newer commits and a pull will
                                work: ``message`` is the banner question and
-                               ``action`` is "git_pull" (the existing Git Pull).
+                               ``action`` is "git_pull" (the existing Git pull).
                                Local edits to files the newer version does not
                                touch do NOT stop this (e.g. the lab block that
                                "Get ready for the lab" appended).
@@ -4314,7 +4315,7 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
                                ``action`` is "github_login" for github.com.
 
     ``is_repo`` is True for any git working tree (even when the remote cannot be
-    reached), so the faces can keep the Git Pull button for a repo and hide it for
+    reached), so the faces can keep the Git pull button for a repo and hide it for
     a plain folder. The fetch never changes the working files and never prompts.
     Bounded by ``timeout``; never raises."""
     folder = str(folder or "").strip()
@@ -4390,9 +4391,9 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
 
 
 def update_status_after_pull(pull_result, now=None):
-    """The update status to show after the Git Pull action ran: a successful pull
+    """The update status to show after the Git pull action ran: a successful pull
     turns the banner into "Experiment up to date · checked HH:MM"; a failed one
-    returns None (the face keeps its Git Pull result, which says why)."""
+    returns None (the face keeps its Git pull result, which says why)."""
     if not (pull_result or {}).get("ok"):
         return None
     stamp = (now or _dt.datetime.now()).strftime("%H:%M")

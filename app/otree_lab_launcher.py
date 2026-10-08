@@ -2213,7 +2213,7 @@ class LauncherApp(object):
         self.github_org_btn.grid(row=0, column=2, padx=(8, 0))
 
         # The validation summary line (dot + one sentence)... with the standing
-        # Git Pull button at its right (inside the status area, as on the web
+        # Git pull button at its right (inside the status area, as on the web
         # face; it used to sit in the Browse row, where it squeezed the path).
         # It pulls the selected STUDY folder, never the launcher's own folder.
         self.project_status = StatusLine(body, self.fonts.small)
@@ -2230,7 +2230,7 @@ class LauncherApp(object):
         self.app_bullets.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(20, 0))
         self.app_bullets.grid_remove()
 
-        # The Git Pull RESULT section (hidden until a pull runs), then a thin
+        # The Git pull RESULT section (hidden until a pull runs), then a thin
         # divider, then the merged "oTree admin" sub-section. They share row 3 so
         # the result sits at the bottom of the project status, above the divider.
         holder = tk.Frame(body, bg=COLORS["card"])
@@ -3678,13 +3678,13 @@ class LauncherApp(object):
     #
     # ONE setting (Lab Settings > GitHub): the organisation name. A name shows
     # the GitHub button (clone from that organisation); an empty name hides it.
-    # The update check and Git Pull do NOT depend on it: they work for any study
+    # The update check and Git pull do NOT depend on it: they work for any study
     # folder that is a git repository. Everything here reuses the shared core git
     # plumbing and NEVER touches the launcher app/ folder or any oTree process.
 
     def _wrap_project_status(self, width=None):
         """Wrap the project status line inside the room it really has: the card
-        width minus the standing Git Pull button when that is shown beside it
+        width minus the standing Git pull button when that is shown beside it
         (otherwise the line runs under the button and squeezes it)."""
         try:
             if width is None:
@@ -3707,7 +3707,7 @@ class LauncherApp(object):
 
     def _apply_github_sync_buttons(self):
         """Show the GitHub button only when an organisation is set, and the
-        standing Git Pull button only when the chosen study folder is a git
+        standing Git pull button only when the chosen study folder is a git
         repository (a plain folder has nothing to pull) AND the amber "newer
         version" banner is not showing its own Update button (one button at a
         time). Safe to call before/after the buttons exist."""
@@ -3814,7 +3814,7 @@ class LauncherApp(object):
             return
         if not same:
             # Another folder: forget the old answer at once (nothing is shown
-            # until the new check answers), and decide the Git Pull button with
+            # until the new check answers), and decide the Git pull button with
             # the cheap is-it-a-repo test, without waiting for the fetch.
             self._update_status = {}
             self._update_status_path = path
@@ -3853,7 +3853,7 @@ class LauncherApp(object):
         def kick():
             # Started a moment AFTER the selection, from the event loop: clicking
             # through several configs starts one check (the last), not one each,
-            # and it never runs at the same time as a Git Pull of this folder.
+            # and it never runs at the same time as a Git pull of this folder.
             if token != self._update_token or self._git_pull_running:
                 return
             self._update_thread = threading.Thread(target=work, name="update-check",
@@ -3921,7 +3921,7 @@ class LauncherApp(object):
 
           none           nothing
           current        one quiet muted line ("Experiment up to date · checked HH:MM")
-                         (hidden while a successful Git Pull result says the same)
+                         (hidden while a successful Git pull result says the same)
           behind         an amber banner with the question and an Update button
           local_changes  one line + "Get a fresh copy"
           no_access      one grey line + "GitHub login…"
@@ -3992,7 +3992,7 @@ class LauncherApp(object):
 
     def open_github_login(self, on_saved=None, retry=False):
         """THE GitHub login dialog (GithubLoginDialog), from the main window: the
-        "could not check" line and a failed Git Pull. ``on_saved()`` runs after a
+        "could not check" line and a failed Git pull. ``on_saved()`` runs after a
         login was stored (retry what failed)."""
         def done(ok, message, saved=False):
             self.log(message, "ok" if ok else "err")
@@ -4067,10 +4067,10 @@ class LauncherApp(object):
         if not self._update_check_async:
             result = core.git_update_study(path)
             self._on_git_update_done(result, path)
-            return bool(result.get("ok")), (result.get("message") or "Git Pull finished.")
+            return bool(result.get("ok")), (result.get("message") or "Git pull finished.")
         if not self.git_update_study(on_done=self._after_prelaunch_pull):
             return None
-        return True, "Running Git Pull\u2026"
+        return True, "Running Git pull\u2026"
 
     def _after_prelaunch_pull(self, result):
         """The pull started from the pre-launch screen finished: show its outcome
@@ -4082,7 +4082,7 @@ class LauncherApp(object):
             dialog._fix_note = (bool(result.get("ok")),
                                 str(result.get("reason") if not result.get("ok")
                                     else result.get("message")
-                                    or "Git Pull finished."))
+                                    or "Git pull finished."))
             dialog._rerender()
         except (tk.TclError, AttributeError):
             pass
@@ -4154,7 +4154,7 @@ class LauncherApp(object):
                 parent=self.root)
 
     def git_update_study(self, on_done=None):
-        """Git Pull button (per config), also the action of the "changes on
+        """Git pull button (per config), also the action of the "changes on
         GitHub" banner and of the pre-launch warning: git pull in the SELECTED
         study folder (never the launcher app/ folder). core.git_update_study
         decides the outcome; the result is rendered as a section at the bottom
@@ -4164,7 +4164,7 @@ class LauncherApp(object):
         if not path:
             messagebox.showwarning(
                 "No study folder",
-                "Choose or clone a study folder first, then Git Pull.",
+                "Choose or clone a study folder first, then Git pull.",
                 parent=self.root)
             return False
         if self._git_pull_running:
@@ -4200,7 +4200,7 @@ class LauncherApp(object):
         self._git_pull_running = False
         self.git_update_btn.config(state="normal", text=core.GIT_PULL_BUTTON_LABEL)
         level = "ok" if result.get("ok") else "err"
-        self.log(result.get("message") or "Git Pull finished.", level)
+        self.log(result.get("message") or "Git pull finished.", level)
         if result.get("output"):
             self.log(result["output"], "info")
         path = path or self.var["project_path"].get()
@@ -4219,7 +4219,7 @@ class LauncherApp(object):
             on_done(result)
 
     def _render_git_result(self, result, path):
-        """Draw the Git Pull RESULT section (the Tk twin of the web page's
+        """Draw the Git pull RESULT section (the Tk twin of the web page's
         renderGitPullResult). Bold core line: "Nothing new: already up to date."
         / "Git pull failed" / "Pulled N changed files."; then a quieter line (the
         latest commit, or the plain-language reason); then COLLAPSED blocks for
@@ -4304,7 +4304,7 @@ class LauncherApp(object):
         self.fresh_copy_button = None
 
     def _sync_git_result(self, project_path):
-        """Keep the Git Pull result only while the same study folder is
+        """Keep the Git pull result only while the same study folder is
         selected; otherwise hide it."""
         frame = getattr(self, "git_result", None)
         if frame is None or not self._git_result_path:
@@ -6330,7 +6330,7 @@ class GithubCloneDialog(object):
 
 class GithubLoginDialog(object):
     """THE GitHub token dialog: ADDS one token to this computer (Lab Settings >
-    GitHub > Add token, a failed clone, a failed Git Pull, the "could not check"
+    GitHub > Add token, a failed clone, a failed Git pull, the "could not check"
     line). A computer can hold several tokens; each is deleted on its own in
     Settings.
 
