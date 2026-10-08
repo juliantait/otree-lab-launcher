@@ -285,6 +285,11 @@ def _ui_text():
         "get_ready_label": core.GET_READY_LABEL,
         "tips": dict(core.UI_TIPS),
         "seat_file_missing": core.SEAT_FILE_MISSING_WARNING,
+        # Main page pass 2: the header subline words and the Quit action.
+        "quit_launcher": core.QUIT_LAUNCHER_LABEL,
+        "quit_launcher_note": core.QUIT_LAUNCHER_NOTE,
+        "unsaved_changes": core.UNSAVED_CHANGES_TEXT,
+        "unsaved_settings": core.UNSAVED_SETTINGS_TITLE,
     }
 
 
@@ -388,6 +393,8 @@ def preset_row(preset):
         # The built-in Lab default is a launch TEMPLATE, never a saved config, so
         # it NEVER shows a run time (Job 2) -- only researcher configs do.
         "when": "" if builtin else core.format_last_run(preset.get("last_run")),
+        # Who saved it and when, for the header subline (core.saved_by_line).
+        "saved": core.saved_by_line(preset),
         "author": preset.get("author", ""),
         "builtin": builtin,
         # The raw lab id; the UI derives the lab-name suffix from it at display

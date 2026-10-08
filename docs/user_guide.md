@@ -304,8 +304,11 @@ Three things, in order. Read the first line of each, do it, and move on. The
 
 **(i) Add your experiment folder.** Two ways:
 
-- Click **Browse** and pick your oTree project folder. (You can also paste the
-  folder path directly into the path box.) The launcher always opens with no
+- Click **Browse** and pick your oTree project folder. The folder name then
+  shows in bold with its parent folder beside it; hover it for the full path
+  (with a Copy button in the web launcher). To type or paste a path instead,
+  click the pen next to the folder name, or "paste the full path" in the empty
+  state, then press Enter. The launcher always opens with no
   project chosen; to come back to a study in one click, save it as a config or
   as a one-click shortcut (below).
 - Or click the **GitHub** button to get the folder from your lab's GitHub
@@ -350,7 +353,14 @@ writes it so you can relaunch that exact study in one click later — pick it fr
 the config list on the left instead of setting everything up again. Right next
 to it, **Save one-click shortcut** saves a desktop shortcut for a saved config:
 double-clicking it starts that config and opens the oTree monitor straight away,
-without opening the launcher window.
+without opening the launcher window. The header names the config on screen;
+an amber dot after the name and "Unsaved changes" under it mean the screen
+differs from what is saved, and **Save as new config...** turns pink. Each
+config in the list on the left shows its folder, who saved it and when it was
+last launched ("Never run" until then).
+
+**Quitting.** **Quit launcher** is at the bottom of Settings (the gear). It
+only closes the launcher: a study you already launched keeps running.
 
 **What the one-click shortcut checks first.** It has no window, so it only
 stops for the things that matter:

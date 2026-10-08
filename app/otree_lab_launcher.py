@@ -1169,11 +1169,12 @@ class StatusLine(tk.Frame):
             self.log_button.pack(side="left", padx=(8, 0), anchor="n")
         else:
             self.log_button.pack_forget()
+        # Each glyph has a plain fallback for a font that cannot draw it (S11).
         palette = {
-            "ok": (COLORS["ok"], "●"),
-            "warn": (COLORS["warn"], "▲"),
-            "error": (COLORS["error"], "■"),
-            "muted": (COLORS["muted"], "○"),
+            "ok": (COLORS["ok"], glyph_or_fallback("●", "*")),
+            "warn": (COLORS["warn"], glyph_or_fallback("▲", "!")),
+            "error": (COLORS["error"], glyph_or_fallback("■", "x")),
+            "muted": (COLORS["muted"], glyph_or_fallback("○", "-")),
         }
         color, glyph = palette.get(level, palette["muted"])
         # A quiet OK recedes to a subtle green check with faint text: it is only
@@ -1324,6 +1325,14 @@ class Tooltip(object):
         ).pack()
         x = self.widget.winfo_rootx() + 12
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        # Keep the tip on the screen: a wide tip under a widget near the right
+        # edge (the localhost chip in the Lab card) slides left instead of
+        # running off (2026-10-08).
+        try:
+            self.window.update_idletasks()
+            x = max(0, min(x, self.widget.winfo_screenwidth() - self.window.winfo_reqwidth() - 8))
+        except tk.TclError:
+            pass
         self.window.wm_geometry("+%d+%d" % (x, y))
 
     def _hide(self, _event=None):
@@ -1462,6 +1471,67 @@ class PathBox(tk.Frame):
             else:
                 low = mid + 1
         self.label.configure(text="\u2026" + text[low:])
+
+
+class ProjectPathSummary(tk.Frame):
+    """The chosen project folder on the main page (2026-10-08): a boxless
+    SUMMARY like the oTree admin and database rows, not a grey path box. The
+    folder NAME in bold, the parent folder as a short muted hint after it
+    (core.project_path_display cuts it to the root + final segments, and it is
+    cut again from the front when the row is tight), nothing at all while no
+    folder is chosen (no box, no placeholder: the status line below says what
+    to do). The FULL path is the hover tooltip and a double click copies it.
+    Browse... beside it is the way to change the folder."""
+
+    def __init__(self, master, fonts, variable):
+        tk.Frame.__init__(self, master, bg=COLORS["card"], bd=0, highlightthickness=0)
+        self.fonts = fonts
+        self.var = variable
+        self.name = tk.Label(self, text="", bg=COLORS["card"], fg=COLORS["text"],
+                             font=fonts.bold, anchor="w")
+        self.parent = tk.Label(self, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                               font=fonts.small, anchor="w")
+        self.name.pack(side="left", pady=3)
+        self.parent.pack(side="left", padx=(8, 0), pady=3)
+        self.tooltip = Tooltip(self, self._tooltip_text)
+        for widget in (self, self.name, self.parent):
+            self.tooltip.attach(widget)
+            widget.bind("<Double-Button-1>", self._copy)
+        self.bind("<Configure>", lambda _e: self.render())
+        variable.trace_add("write", lambda *_a: self.render())
+        self.render()
+
+    def _tooltip_text(self):
+        path = self.var.get().strip()
+        return (path + "\n(double-click to copy)") if path else ""
+
+    def _copy(self, _event=None):
+        path = self.var.get().strip()
+        if path:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+
+    def render(self):
+        shown = core.project_path_display(self.var.get())
+        if not shown["name"]:
+            self.name.configure(text="")
+            self.parent.configure(text="")
+            return
+        self.name.configure(text=shown["name"])
+        # core cuts the hint with "…"; "..." where the font cannot draw it (S11).
+        hint = shown["parent_short"].replace("…", glyph_or_fallback("…", "..."))
+        # The hint gives way before the name: cut from the front to the room left.
+        room = self.winfo_width() - self.fonts.bold.measure(shown["name"]) - 14
+        if hint and self.winfo_width() > 1 and self.fonts.small.measure(hint) > room:
+            low, high = 0, len(hint)
+            while low < high:
+                mid = (low + high) // 2
+                if self.fonts.small.measure("…" + hint[mid:]) <= room:
+                    high = mid
+                else:
+                    low = mid + 1
+            hint = ("…" + hint[low:]) if low < len(hint) - 2 else ""
+        self.parent.configure(text=hint)
 
 
 class ScrollFrame(tk.Frame):
@@ -1662,8 +1732,11 @@ class LauncherApp(object):
         self.store_path = store_path or presets_path()
         self.fonts = Fonts(root)
         self.style = apply_theme(root, self.fonts)
-        self.person_glyph = glyph_or_fallback(PERSON_EMOJI, PERSON_FALLBACK)
-        self.folder_glyph = glyph_or_fallback(FOLDER_EMOJI, FOLDER_FALLBACK)
+        # Sidebar row marks (S4, 2026-10-08): ALWAYS the plain glyphs, drawn faint,
+        # never the colour emoji (the web face draws small SVG outlines; Tk has no
+        # SVG, so its plain-glyph fallback is the mark on every platform).
+        self.person_glyph = PERSON_FALLBACK
+        self.folder_glyph = FOLDER_FALLBACK
 
         # ONE in-process lock for every read-modify-write-save of the store
         # (self.presets / self.store_extra). Tk UI actions run on the main
@@ -1958,8 +2031,7 @@ class LauncherApp(object):
                 line2.pack(fill="x")
                 if folder_name:
                     folder_text = "%s %s" % (self.folder_glyph, folder_name)
-                    folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["muted"],
-                                      font=self.fonts.small, anchor="w")
+                    folder = self._marked_label(line2, self.folder_glyph, folder_name, bg)
                 else:
                     folder_text = "empty"
                     folder = tk.Label(line2, text=folder_text, bg=bg, fg=COLORS["faint"],
@@ -1972,12 +2044,10 @@ class LauncherApp(object):
                     fits = (self.fonts.small.measure(folder_text) + 12
                             + self.fonts.small.measure(author_text)) <= avail
                     if fits:
-                        author = tk.Label(line2, text=author_text, bg=bg, fg=COLORS["muted"],
-                                          font=self.fonts.small, anchor="w")
+                        author = self._marked_label(line2, self.person_glyph, author_name, bg)
                         author.pack(side="left", padx=(10, 0))
                     else:
-                        author = tk.Label(text, text=author_text, bg=bg, fg=COLORS["muted"],
-                                          font=self.fonts.small, anchor="w")
+                        author = self._marked_label(text, self.person_glyph, author_name, bg)
                         author.pack(fill="x")
 
             # The built-in Lab default is a launch TEMPLATE, never a saved config,
@@ -1992,6 +2062,9 @@ class LauncherApp(object):
                        + ([when] if when else [])
                        + ([line2] if line2 else []) + ([folder] if folder else [])
                        + ([badge] if badge else []) + ([author] if author else []))
+            # the mark + text labels inside a marked label take the clicks too
+            for holder in (folder, author):
+                widgets.extend(getattr(holder, "parts", ()))
             for widget in widgets:
                 widget.bind("<Button-1>", lambda _e, i=index: self.select_preset(i))
 
@@ -2021,6 +2094,21 @@ class LauncherApp(object):
         self.count_label.configure(text="%d" % count)
         # Deleting is per-row (the hover ✕); the built-in Lab default has none,
         # and _delete_preset refuses it, so there is no bottom Delete button.
+
+    def _marked_label(self, parent, mark, text, bg):
+        """A sidebar row's "mark + text" (folder / author): the plain-glyph mark
+        in --faint beside the muted text (S4). Returns a frame whose ``parts``
+        are the two inner labels (the caller binds clicks on them too)."""
+        holder = tk.Frame(parent, bg=bg)
+        glyph = tk.Label(holder, text=mark, bg=bg, fg=COLORS["faint"],
+                         font=self.fonts.small, anchor="w")
+        glyph.pack(side="left")
+        label = tk.Label(holder, text=text, bg=bg, fg=COLORS["muted"],
+                         font=self.fonts.small, anchor="w")
+        label.pack(side="left", padx=(4, 0))
+        holder.parts = (glyph, label)
+        holder.mark_text = text
+        return holder
 
     def _bind_row_hover(self, row, widgets, xbtn):
         """Show xbtn while the pointer is anywhere over the row, hide it when it
@@ -2079,24 +2167,46 @@ class LauncherApp(object):
         header.grid(row=0, column=0, sticky="ew", padx=PAD + 4, pady=(PAD - 2, 2))
         title_row = tk.Frame(header, bg=COLORS["window"])
         title_row.pack(side="top", fill="x")
+        # The title is the config NAME (core.config_title; no "Config:" prefix
+        # since 2026-10-08, S2), an amber dot after it while the setup has
+        # unsaved changes, and a muted subline (core.config_subline) under it:
+        # who saved the config and when. _apply_header paints all three.
         self.subtitle = tk.Label(
             title_row, text="", bg=COLORS["window"], fg=COLORS["text"],
             font=self.fonts.heading, anchor="w")
         self.subtitle.pack(side="left", anchor="w")
+        self.dirty_dot = tk.Label(title_row, text="●", bg=COLORS["window"],
+                                  fg=COLORS["warn"], font=self.fonts.small)
+        Tooltip(self.dirty_dot, lambda: core.UNSAVED_CHANGES_TEXT).attach(self.dirty_dot)
 
-        # The Save-as-new affordance: just the button, at the right of the title,
-        # shown only while the setup is worth saving (_apply_save_affordance). No
-        # sentence beside it (UX simplification): the button says what it does.
-        self.banner = ttk.Button(title_row, text="Save as new config...",
-                                 style="Slim.TButton", command=self.save_as_new)
-        # "Save one-click shortcut": ALWAYS visible on the config page, the same
-        # size and style as "Save as new config..." and right next to it (Julian,
-        # 2026-10-01: people do it once but must recognise it). Hovering it says
-        # what it gives you (core.ui_tip("one_click_shortcut")).
-        self.shortcut_button = ttk.Button(
-            title_row, text="Save one-click shortcut", style="Slim.TButton",
-            command=self.save_shortcut)
+        # "Save as new config...": ALWAYS packed (S9, 2026-10-08), so nothing in
+        # the header ever moves; it takes the accent fill while the setup is
+        # worth saving (_apply_save_affordance). A plain tk.Button because ttk
+        # ignores a fill colour on the Windows theme; on macOS (aqua) tk ignores
+        # it too, so there the button is simply disabled while there is nothing
+        # to save. Same font in both states: colour only, never a size change.
+        self._button_fill_ok = (self.root.tk.call("tk", "windowingsystem") != "aqua")
+        self.banner = tk.Button(
+            title_row, text="Save as new config...", command=self.save_as_new,
+            font=self.fonts.small, relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+            highlightthickness=1, highlightbackground=COLORS["card_line"],
+            bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["hover"],
+            activeforeground=COLORS["text"], disabledforeground=COLORS["faint"])
+        self.banner.pack(side="right", padx=(8, 0))
+        # "Save one-click shortcut": ALWAYS visible on the config page, right next
+        # to Save as new config (Julian, 2026-10-01: people do it once but must
+        # recognise it); a GHOST button since S2 (no fill, no border) so the
+        # frequent action stands out. Hovering it says what it gives you
+        # (core.ui_tip("one_click_shortcut")).
+        self.shortcut_button = tk.Button(
+            title_row, text="Save one-click shortcut", command=self.save_shortcut,
+            font=self.fonts.small, relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+            highlightthickness=1, highlightbackground=COLORS["window"],
+            bg=COLORS["window"], fg=COLORS["muted"], activebackground=COLORS["hover"],
+            activeforeground=COLORS["text"])
         self.shortcut_button.pack(side="right", padx=(8, 0))
+        self.subline = tk.Label(header, text="", bg=COLORS["window"], fg=COLORS["muted"],
+                                font=self.fonts.small, anchor="w")
         self.shortcut_tooltip = Tooltip(
             self.shortcut_button, lambda: core.ui_tip("one_click_shortcut"), delay=250)
         self.shortcut_tooltip.attach(self.shortcut_button)
@@ -2201,8 +2311,12 @@ class LauncherApp(object):
         picker = tk.Frame(body, bg=COLORS["card"])
         picker.grid(row=0, column=0, columnspan=2, sticky="ew")
         picker.columnconfigure(0, weight=1)
-        self.path_box = PathBox(picker, self.fonts.body, self.var["project_path"])
-        self.path_box.grid(row=0, column=0, sticky="ew", ipady=1)
+        # The chosen folder as a boxless summary (name bold, parent muted, full
+        # path on hover); empty while no folder is chosen (2026-10-08, was a
+        # bordered PathBox with a placeholder). Browse... / GitHub stay at the
+        # right in every state.
+        self.path_box = ProjectPathSummary(picker, self.fonts, self.var["project_path"])
+        self.path_box.grid(row=0, column=0, sticky="ew")
         ttk.Button(picker, text="Browse...", command=self.browse_project).grid(
             row=0, column=1, padx=(8, 0))
         # The GitHub button (shown when an organisation is set in Lab Settings >
@@ -2260,16 +2374,24 @@ class LauncherApp(object):
         self.admin_sentence = header
         tk.Label(header, text="oTree admin", bg=card_bg, fg=COLORS["muted"],
                  font=self.fonts.small, anchor="w").pack(side="left")
+        # The summary (core.admin_summary) with the USERNAME in bold and the rest
+        # muted: the same emphasis as the database row (S3, 2026-10-08). The
+        # StringVar still carries the whole sentence.
         self.admin_summary = tk.StringVar(self.root, value="")
         self.admin_summary_label = tk.Label(
-            header, textvariable=self.admin_summary, bg=card_bg, fg=COLORS["text"],
+            header, text="", bg=card_bg, fg=COLORS["text"],
             font=self.fonts.small_bold, anchor="w")
         self.admin_summary_label.pack(side="left", padx=(8, 0))
+        self.admin_summary_rest = tk.Label(
+            header, text="", bg=card_bg, fg=COLORS["muted"],
+            font=self.fonts.small, anchor="w")
+        self.admin_summary_rest.pack(side="left")
         self.admin_edit_link = tk.Label(header, text=" ✎", bg=card_bg,
-                                        fg=COLORS["accent"], font=self.fonts.small_bold,
+                                        fg=COLORS["muted"], font=self.fonts.small_bold,
                                         cursor="hand2")
         self.admin_edit_link.pack(side="left", padx=(4, 0))
         self.admin_edit_link.bind("<Button-1>", lambda _e: self._toggle_admin_edit())
+        self._pen_hover(self.admin_edit_link)
         Tooltip(self.admin_edit_link,
                 lambda: "Edit the oTree admin login, authentication level, auto login "
                         "and production mode").attach(self.admin_edit_link)
@@ -2350,7 +2472,18 @@ class LauncherApp(object):
 
     def _refresh_admin_summary(self, cfg=None):
         if hasattr(self, "admin_summary"):
-            self.admin_summary.set(core.admin_summary(cfg or self.form_values()))
+            text = core.admin_summary(cfg or self.form_values())
+            self.admin_summary.set(text)
+            head, sep, rest = text.partition(" · ")
+            self.admin_summary_label.configure(text=head)
+            self.admin_summary_rest.configure(text=(sep + rest) if rest else "")
+
+    @staticmethod
+    def _pen_hover(widget):
+        """Pens are grey like the other secondary icons and turn accent on hover
+        (S11, 2026-10-08)."""
+        widget.bind("<Enter>", lambda _e: widget.configure(fg=COLORS["accent"]), add="+")
+        widget.bind("<Leave>", lambda _e: widget.configure(fg=COLORS["muted"]), add="+")
 
     def _set_app_bullets(self, apps):
         """Show the project's app packages as a title-cased bullet list."""
@@ -2404,10 +2537,11 @@ class LauncherApp(object):
         # button here (ttk buttons look heavy inline); the hand cursor + accent
         # colour signal it is clickable.
         self.db_edit_icon = tk.Label(
-            left, text="  ✎", bg=COLORS["card"], fg=COLORS["accent"],
+            left, text="  ✎", bg=COLORS["card"], fg=COLORS["muted"],
             font=self.fonts.small_bold, cursor="hand2")
         self.db_edit_icon.pack(side="left")
         self.db_edit_icon.bind("<Button-1>", self._open_db_menu)
+        self._pen_hover(self.db_edit_icon)
         tk.Label(left, textvariable=self.db_host_note, bg=COLORS["card"],
                  fg=COLORS["faint"], font=self.fonts.small, anchor="w").pack(
             side="left", padx=(6, 0))
@@ -2415,13 +2549,19 @@ class LauncherApp(object):
 
         # Reset-before-start: always visible on this line (no expander), reading
         # plainly. It resets whichever database is shown to the left.
+        # The tick box and its info tip (what "reset" does: otree resetdb; S11,
+        # 2026-10-08) travel together as ONE flow-row item, pushed right.
+        reset_holder = tk.Frame(summary_row, bg=COLORS["card"])
         self.reset_check = tk.Checkbutton(
-            summary_row, text="Reset before start",
+            reset_holder, text="Reset before start",
             variable=self.var["resetdb"], bg=COLORS["card"], fg=COLORS["text"],
             activebackground=COLORS["card"], activeforeground=COLORS["text"],
             selectcolor=COLORS["accent"], font=self.fonts.body, anchor="w",
             bd=0, highlightthickness=0, padx=0, cursor="hand2")
-        summary_row.add(self.reset_check, gap=18, push_right=True)
+        self.reset_check.pack(side="left")
+        self.reset_tip = info_tip(reset_holder, core.ui_tip("reset_db"), font=self.fonts.small)
+        self.reset_tip.pack(side="left", padx=(2, 0))
+        summary_row.add(reset_holder, gap=18, push_right=True)
 
         # Under the name, only when needed: a warning.
         # The location warning is the SHORT core.database_location_note; the full
@@ -2443,8 +2583,11 @@ class LauncherApp(object):
         # connection READ-ONLY. All editing now happens in Lab Settings -> Database,
         # so the run/config screen never edits a connection inline.
         self.db_details_shown = tk.BooleanVar(self.root, value=False)
+        # ONE disclosure style (S6, approved 2026-10-08): the same muted small-caps
+        # caption with the arrow first as the Lab card's "ROOM LAYOUT" caption.
+        # Not accent: it expands, it does not act.
         self.db_details_toggle = tk.Label(
-            body, text="Details ▸", bg=COLORS["card"], fg=COLORS["accent"],
+            body, text="▸  DETAILS", bg=COLORS["card"], fg=COLORS["muted"],
             font=self.fonts.small_bold, anchor="w", cursor="hand2")
         self.db_details_toggle.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.db_details_toggle.bind("<Button-1>", self._toggle_db_details)
@@ -2536,13 +2679,15 @@ class LauncherApp(object):
         self.host_links = tk.Frame(body, bg=COLORS["card"])
         self.host_links.grid(row=1, column=0, columnspan=2, sticky="w", pady=(9, 0))
         self.host_buttons = {}
-        for value, text in ((LAB_LOCAL, "localhost"), (LAB_CUSTOM, "Other host…")):
+        # The ellipsis falls back to "..." where the font cannot draw it (S11).
+        for value, text in ((LAB_LOCAL, "localhost"),
+                            (LAB_CUSTOM, "Other host" + glyph_or_fallback("…", "..."))):
             self.host_buttons[value] = self._make_host_button(self.host_links, value, text)
-            if value == LAB_LOCAL:
-                # What "localhost" is for: behind the info tip, not a grey note.
-                self.local_tip = info_tip(self.host_links, core.ui_tip("localhost_run"),
-                                          font=self.fonts.small)
-                self.local_tip.pack(side="left", padx=(0, 8))
+        # What "localhost" is for (core.ui_tip "localhost_run"): the tip of the
+        # chip ITSELF, on hover and on keyboard focus (2026-10-08; it used to be a
+        # separate (i) badge between the two chips).
+        self.local_tooltip = self._host_button_tip(
+            self.host_buttons[LAB_LOCAL], lambda: core.ui_tip("localhost_run"))
         self.back_to_lab_link = tk.Label(
             self.host_links, text="← Back to a lab", bg=COLORS["card"], fg=COLORS["muted"],
             font=self.fonts.small, anchor="w", cursor="hand2")
@@ -2791,16 +2936,30 @@ class LauncherApp(object):
         """One of the two host buttons (localhost / Other host…): a small bordered
         button in the lab-tile style, so "selected" looks the same for a lab and
         for a host. Returns its parts for _style_host_buttons."""
+        # Keyboard-reachable (Tab), chosen with Space / Enter; the focus ring is
+        # the accent border (highlightcolor paints only while focused).
         button = tk.Frame(parent, bg=COLORS["card"], highlightthickness=1,
                           highlightbackground=COLORS["card_line"],
-                          highlightcolor=COLORS["card_line"], cursor="hand2")
-        button.pack(side="left", padx=((0, 6) if value == LAB_LOCAL else (0, 0)))
+                          highlightcolor=COLORS["accent"], cursor="hand2", takefocus=1)
+        button.pack(side="left", padx=((0, 8) if value == LAB_LOCAL else (0, 0)))
         label = tk.Label(button, text=text, bg=COLORS["card"], fg=COLORS["text"],
                          font=self.fonts.small_bold, padx=12, pady=4, cursor="hand2")
         label.pack()
         for widget in (button, label):
             widget.bind("<Button-1>", lambda _e, v=value: self.var["lab"].set(v))
+        for key in ("<space>", "<Return>"):
+            button.bind(key, lambda _e, v=value: self.var["lab"].set(v))
         return {"frame": button, "label": label}
+
+    def _host_button_tip(self, parts, text):
+        """A hover / keyboard-focus tooltip on a host button (the localhost chip
+        explains itself this way). ``text`` is a zero-argument callable."""
+        tip = Tooltip(parts["frame"], text, delay=250)
+        for widget in (parts["frame"], parts["label"]):
+            tip.attach(widget)
+        parts["frame"].bind("<FocusIn>", tip._schedule, add="+")
+        parts["frame"].bind("<FocusOut>", tip._hide, add="+")
+        return tip
 
     def _style_host_buttons(self):
         """Paint the host buttons: accent when chosen, plain otherwise."""
@@ -2810,7 +2969,7 @@ class LauncherApp(object):
                 bg, fg, border = COLORS["accent_soft"], COLORS["accent"], COLORS["accent"]
             else:
                 bg, fg, border = COLORS["card"], COLORS["text"], COLORS["card_line"]
-            parts["frame"].configure(bg=bg, highlightbackground=border, highlightcolor=border)
+            parts["frame"].configure(bg=bg, highlightbackground=border)
             parts["label"].configure(bg=bg, fg=fg)
 
     def _style_tiles(self):
@@ -2888,11 +3047,12 @@ class LauncherApp(object):
                 # under it is the instruction.
                 excluded = len(self.seat_excluded & set(default_seats))
                 self.map_caption.configure(
-                    text="%s  %s" % (arrow, core.seats_caption(total, excluded)))
+                    text="%s  %s" % (arrow, core.seats_caption(total, excluded).upper()))
                 self.map_subcaption.configure(text="Click a seat to include or exclude it")
             else:
+                # Captions are small-caps in both faces (S6): the core text in caps.
                 self.map_caption.configure(
-                    text="%s  %s" % (arrow, core.seats_caption(total)))
+                    text="%s  %s" % (arrow, core.seats_caption(total).upper()))
                 # Round 7: no "Front of the room..." caption above the map.
                 self.map_subcaption.configure(text="")
             # The subcaption only carries the interactive seat count now; in Lab-
@@ -3437,10 +3597,10 @@ class LauncherApp(object):
             return
         if shown.get():
             self.db_section.grid()
-            toggle.configure(text="Details ▾")
+            toggle.configure(text="▾  DETAILS")
         else:
             self.db_section.grid_remove()
-            toggle.configure(text="Details ▸")
+            toggle.configure(text="▸  DETAILS")
 
     def _db_db_fields(self):
         return {key: self.var[key].get() for key in
@@ -3579,7 +3739,7 @@ class LauncherApp(object):
             total = len(self._lab_default_seats(cfg))
             chosen = len(self._resolve_seats(cfg))
             self.map_caption.configure(
-                text="▾  %s" % core.seats_caption(total, total - chosen))
+                text="▾  %s" % core.seats_caption(total, total - chosen).upper())
             self.map_subcaption.configure(text="Click a seat to include or exclude it")
 
     def refresh_block_status(self, cfg=None):
@@ -3598,7 +3758,7 @@ class LauncherApp(object):
     def refresh_dirty(self):
         if self.selected_index is None:
             self.dirty = False
-            self.subtitle.configure(text="Config: unsaved settings")
+            self._apply_header()
             self._apply_save_affordance()
             self.refresh_sidebar()
             return
@@ -3611,11 +3771,37 @@ class LauncherApp(object):
         self.dirty = configs_differ(self.form_values(),
                                     core.follow_lab_room(preset, self.lab_presets),
                                     ignore=ignore)
-        shown = display_name(preset)   # lab suffix on the built-in default only
-        self.subtitle.configure(text="Config: %s" % shown)   # no "(unsaved changes)"
+        self._apply_header()
         self._apply_save_affordance()
         if was != self.dirty:
             self.refresh_sidebar()
+
+    def _selected_preset(self):
+        index = self.selected_index
+        if index is None or not (0 <= index < len(self.presets)):
+            return None
+        return self.presets[index]
+
+    def _apply_header(self):
+        """Paint the header: the config name, the amber dot while the setup
+        has unsaved changes, and the saved-by subline (core.config_title /
+        config_subline). A built-in with a project folder counts as edited,
+        like the web face's snapshot does."""
+        if not hasattr(self, "subline"):
+            return
+        preset = self._selected_preset()
+        edited = self._needs_save()
+        self.subtitle.configure(text=core.config_title(preset))
+        if edited:
+            self.dirty_dot.pack(side="left", padx=(7, 0), after=self.subtitle)
+        else:
+            self.dirty_dot.pack_forget()
+        text = core.config_subline(preset, edited)
+        self.subline.configure(text=text)
+        if text:
+            self.subline.pack(side="top", fill="x")
+        else:
+            self.subline.pack_forget()
 
     def _needs_save(self):
         """True when the on-screen setup is not a saved, named config: a brand-new
@@ -3634,16 +3820,28 @@ class LauncherApp(object):
         return self.dirty
 
     def _apply_save_affordance(self):
-        """Show the 'Save as new config...' button (right of the title) when the
-        setup is worth saving, and hide it otherwise."""
+        """Paint 'Save as new config...' (always packed, rightmost, with Save
+        one-click shortcut to its left as on the web face): the accent fill
+        while the setup is worth saving, plain otherwise. COLOUR only, so the
+        header never moves. Where tk cannot fill a button (macOS aqua) the
+        button is disabled instead while there is nothing to save."""
         if not hasattr(self, "banner"):
             return
-        if self._needs_save():
-            # Rightmost, with "Save one-click shortcut" (always there) directly to
-            # its left: the same order as the web face.
-            self.banner.pack(side="right", padx=(8, 0), before=self.shortcut_button)
+        needs = self._needs_save()
+        if self._button_fill_ok:
+            if needs:
+                self.banner.configure(
+                    state="normal", bg=COLORS["accent"], fg="#ffffff",
+                    activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
+                    highlightbackground=COLORS["accent"])
+            else:
+                self.banner.configure(
+                    state="normal", bg=COLORS["card"], fg=COLORS["text"],
+                    activebackground=COLORS["hover"], activeforeground=COLORS["text"],
+                    highlightbackground=COLORS["card_line"])
         else:
-            self.banner.pack_forget()
+            self.banner.configure(state="normal" if needs else "disabled")
+        self.banner.needs_save = needs
 
     # -- sidebar actions ---------------------------------------------------
 
@@ -4394,8 +4592,8 @@ class LauncherApp(object):
                 return
         if selected_preset is preset:
             self.dirty = False
-            self.subtitle.configure(text="Config: unsaved settings")
-            self.banner.pack_forget()
+            self._apply_header()
+            self._apply_save_affordance()
         self.refresh_sidebar()
         self.log('Deleted the config "%s".' % name, "warn")
 
@@ -9182,6 +9380,13 @@ class LabSettingsDialog(object):
         bottom = tk.Frame(top, bg=COLORS["window"])
         bottom.pack(side="bottom", fill="x", padx=16, pady=(6, 12))
         ttk.Button(bottom, text="Close", command=self._close).pack(side="right")
+        # Quit launcher (S5, 2026-10-08): at the bottom of Settings, left of
+        # Close. The main window has no Quit button (it never had one in Tk;
+        # the web face moved its own here too). Hover says what it does.
+        self.quit_button = ttk.Button(bottom, text=core.QUIT_LAUNCHER_LABEL,
+                                      command=self._quit_launcher)
+        self.quit_button.pack(side="left")
+        Tooltip(self.quit_button, lambda: core.QUIT_LAUNCHER_NOTE).attach(self.quit_button)
 
         # Scrollable so an opened section can never push the rest off a short screen.
         scroll = ScrollFrame(top, COLORS["window"])
@@ -10050,6 +10255,20 @@ class LabSettingsDialog(object):
         except tk.TclError:
             pass
         _modal_close(self.top)
+
+    def _quit_launcher(self):
+        """Quit launcher (Settings footer): close this dialog, then the app's
+        own close path (the main window's close box). A running study is never
+        touched (core.QUIT_LAUNCHER_NOTE)."""
+        self._close()
+        on_close = getattr(self.app, "on_close", None)
+        if callable(on_close):
+            on_close()
+        else:
+            try:
+                self.top.master.destroy()
+            except tk.TclError:
+                pass
 
 
 # ---------------------------------------------------------------------------

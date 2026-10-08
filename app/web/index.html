@@ -243,6 +243,14 @@ body{
   content:"";width:9px;height:9px;border-radius:3px;background:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft);flex:none;
 }
+/* Narrow window (S7a, 2026-10-08): the brand keeps ONE line and the theme and
+   gear buttons drop to a second line under it, right-aligned, instead of the
+   name wrapping beside them. Same breakpoint as the single-column content. */
+@media (max-width:1080px){
+  .side-brand{flex-wrap:wrap;row-gap:4px}
+  .side-brand .mark{flex:1 0 100%}
+  .side-brand .theme-toggle{margin-left:auto}
+}
 /* Settings gear = the PRIMARY control: a filled, bordered button at rest that
    reads clearly as a button, and turns MORE accented (pink) on hover. */
 .gear{
@@ -281,11 +289,13 @@ body{
 .cfg-row .nm{display:block;font-size:13px;color:var(--text-strong);font-weight:500;padding-right:16px;line-height:1.35}
 .cfg-row.sel .nm{font-weight:700}
 .cfg-row .meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:2px}
-.cfg-row .fold{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.cfg-row .fold{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px}
 .cfg-row .fold.empty{color:var(--faint);font-style:italic}
-.cfg-row .fold:not(.empty)::before{content:"\1F4C1";font-style:normal;opacity:.6;font-size:10px}
-.cfg-row .au{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}
-.cfg-row .au::before{content:"\1F464";font-style:normal;opacity:.6;font-size:10px}
+.cfg-row .au{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px}
+/* The folder / person marks are small inline SVG outlines in --faint (S4,
+   2026-10-08): the same in both themes and on a PC without an emoji font. The
+   emoji they replace were the only full-colour glyphs on the page. */
+.cfg-row .fold svg,.cfg-row .au svg{width:11px;height:11px;flex:none;color:var(--faint)}
 .cfg-row .wh{display:block;font-size:11px;color:var(--faint);margin-top:2px}
 .cfg-row .del{
   position:absolute;top:8px;right:7px;width:18px;height:18px;line-height:16px;text-align:center;
@@ -307,7 +317,14 @@ body{
 .main-head .htext{margin-right:auto;min-width:0}
 .main-head h1{margin:0;font-size:20px;font-weight:650;color:var(--text-strong);letter-spacing:-.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+.main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.main-head .sub:empty{display:none}
+/* Header (S2, 2026-10-08): the title is the config NAME (no "Config:" prefix),
+   an amber dot after it while there are unsaved changes, and the muted subline
+   says who saved it and when (core.config_subline / configSubline). */
+.dirty-dot{display:none;width:9px;height:9px;border-radius:50%;background:var(--warn);
+  vertical-align:middle;margin-left:8px;position:relative;top:-1px}
+.main-head.dirty .dirty-dot{display:inline-block}
 /* appearance toggle: one icon button that flips dark<->light. It shows a
    SUN while dark (click -> light) and a MOON while light (click -> dark); the CSS
    below swaps which glyph is visible from the <html> data-theme attribute, so no
@@ -354,15 +371,41 @@ body{
 .card--lab::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;
   background:linear-gradient(90deg,transparent 26%,var(--accent-dim) 68%,var(--accent))}
 
-/* project path box */
-.pathrow{display:flex;align-items:center;gap:10px}
-.pathbox{
-  flex:1;min-width:0;font-size:12.5px;color:var(--text);font-family:var(--mono);
-  background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 13px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left;
-}
-.pathbox.empty{color:var(--faint);font-family:var(--sans);direction:ltr}
+/* project folder row (2026-10-08): the chosen folder is a boxless SUMMARY, like
+   the oTree admin and database rows, not a grey path box. Folder NAME in bold,
+   the parent folder as a short muted hint (core.project_path_display /
+   projectPathDisplay cut it to root + final segments), the FULL path in the
+   hover / keyboard-focus tip with a Copy button, and a pen that opens the text
+   field (#projPathInput: type or paste a path, Enter validates, Esc cancels).
+   While no folder is chosen the row holds only the actions, right-aligned:
+   no empty grey box. min-height keeps the row the same height in every state
+   (the .btn is 33px). */
+.pathrow{display:flex;align-items:center;gap:10px;min-height:33px}
+.pathrow .pp-wrap{flex:0 1 auto;min-width:0;margin-left:0;display:inline-flex;align-items:center}   /* the pen follows the name directly */
+/* No percentage max-width here: inside a shrink-to-fit wrapper it resolved
+   against the chip's own width and ellipsised the name with room to spare. The
+   chip sizes to its text and shrinks (min-width:0) only when the row is tight. */
+.pp-chip{display:inline-flex;align-items:baseline;gap:8px;min-width:0;
+  padding:3px 6px;margin:-3px -6px;border-radius:var(--r-xs);cursor:default}
+.pp-chip:hover,.pp-chip:focus-visible{background:var(--panel-2)}
+.pp-chip:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.pp-name{font-size:13px;font-weight:700;color:var(--text-strong);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;flex:0 1 auto;min-width:0}
+.pp-parent{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  flex:0 4 auto;min-width:0}   /* when the row is tight the hint gives way before the name */
+.pp-parent[hidden]{display:none}
+.pathrow .pp-tip{width:max-content;max-width:min(480px,72vw);top:calc(100% + 4px);
+  font-family:var(--mono);color:var(--text);overflow-wrap:anywhere;white-space:normal}
+/* an invisible bridge over the gap, so the tip stays open while the pointer
+   crosses from the name to the Copy button */
+.pathrow .pp-tip::before{content:"";position:absolute;left:0;right:0;top:-6px;height:6px}
+.pp-tip .pp-copy{margin-left:10px;font-family:var(--sans);font-size:11.5px;color:var(--accent);font-weight:600}
+.pathrow .pp-edit{flex:none}
 .pathrow input.pathinput{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px}
+.pathrow .pp-actions{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:10px}
+/* a text link inside a sentence (the empty state's "paste the full path") */
+.link.inline{font-size:inherit;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.link.inline:hover{color:var(--accent-dim,var(--accent))}
 /* Browser mode (see the head <script>): the PROJECT-FOLDER Browse button stays
    visible -- in browser mode it asks the LOCAL server to pop a native folder
    dialog on this machine (POST /api/browse_folder) and fills the field with the
@@ -407,6 +450,13 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
    the green detected-app bullets above. */
 .study-card .ways{margin:6px 0 0;padding-left:16px;list-style:disc}
 .study-card .ways li{font-size:11.5px;color:var(--muted);line-height:1.5;margin:2px 0}
+/* Empty state (S1, 2026-10-08): the lead sentence in bold, then Browse and the
+   GitHub button INSIDE the status card with the paste link beside them, so the
+   instruction and the button it points at sit together. No bullets. */
+.study-card .statusline b{font-weight:700;color:var(--text)}
+.proj-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:9px 0 2px}
+.proj-actions .alt{font-size:11.5px;color:var(--muted)}
+.study-card.empty{padding:10px 12px 11px}
 .study-card .statusline{margin-top:0;font-size:11.5px;color:var(--muted);line-height:1.4}
 .study-card .statusline.ok{color:var(--ok)}   /* green confirmation, matching the app-name bullets below */
 .study-card .statusline .dot{display:none}
@@ -511,8 +561,11 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .adminrow .seg{position:relative;display:inline-flex;align-items:center;padding-left:30px;white-space:nowrap}
 .adminrow .seg::before{content:"\2022";position:absolute;left:0;width:30px;top:50%;transform:translateY(-50%);
   text-align:center;font-size:21px;line-height:1;color:var(--muted);pointer-events:none}
-.adminrow .lead{font-size:12.5px;font-weight:700;color:var(--text-strong)}
+/* S3 (2026-10-08): the same emphasis as the database row. The label is muted
+   and the VALUE (the username, first segment of core.admin_summary) is bold. */
+.adminrow .lead{font-size:12.5px;font-weight:500;color:var(--muted)}
 .adminrow .admin-sum{font-size:12.5px;color:var(--muted);margin-left:10px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adminrow .admin-sum b{font-weight:700;color:var(--text-strong)}
 .creds .creds-wide{grid-column:1 / -1}
 .creds select{width:100%}
 .adminrow .lbl{font-size:12.5px;color:var(--muted)}
@@ -606,15 +659,17 @@ input::placeholder{color:var(--faint)}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
 .link:hover{color:var(--accent)}
-/* "Save as new config" takes the app's PINK ACCENT (and a touch bolder) when the
-   form has unsaved changes, so it reads as "you have changes to save" rather than
-   a passive reminder AND re-skins with the theme via the accent token. Emphasis
-   is COLOUR + WEIGHT only: the font-size and padding stay at the base .btn values
-   so the button never resizes or reflows its neighbours in the header row (fixed
-   2026-09-24 -- it used to grow taller and wider on dirty, which shifted the
-   layout). This mirrors the .btn.accent fill exactly. */
+/* "Save as new config" takes the app's PINK ACCENT when the form has unsaved
+   changes, so it reads as "you have changes to save" rather than a passive
+   reminder AND re-skins with the theme via the accent token. Emphasis is COLOUR
+   ONLY (fill, text, border colour, glow): font-size, font-WEIGHT, padding and
+   border width stay at the base .btn values, so the button's box is identical in
+   both states and neither it nor "Save one-click shortcut" beside it moves.
+   History: 2026-09-24 it grew taller and wider on dirty; 2026-10-08 the bolder
+   weight (650) still widened it by a pixel and nudged its neighbour left. A
+   test pins this rule to colour properties. Mirrors the .btn.accent fill. */
 #saveAsBtn.dirty{
-  font-weight:650;color:var(--accent-on);
+  color:var(--accent-on);
   background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-color:var(--accent-dim);
   box-shadow:0 2px 12px rgba(var(--accent-rgb),.30);
 }
@@ -629,8 +684,10 @@ input::placeholder{color:var(--faint)}
 .sumrow .db-name{display:inline-flex;align-items:center;gap:7px;min-width:0}
 .sumrow .v{font-size:13px;font-weight:700;color:var(--text-strong);min-width:0;overflow-wrap:anywhere}
 /* pen/edit icon (database card + oTree admin) */
-.db-edit{flex:none;background:none;border:0;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
-.db-edit:hover{color:var(--accent-dim,var(--accent))}
+/* Pens are grey like the other secondary icons (gear, theme) and turn pink on
+   hover (S11, 2026-10-08). */
+.db-edit{flex:none;background:none;border:0;color:var(--muted);cursor:pointer;font-size:15px;line-height:1;padding:0 2px;transition:color .12s}
+.db-edit:hover,.db-edit:focus-visible{color:var(--accent)}
 /* Host + Port of a NEW database: read-only (grey) until the pen at the END of
    the host box is clicked. Clicking the box itself changes nothing. */
 .hostpen{display:flex;align-items:center;gap:8px}
@@ -641,8 +698,15 @@ input::placeholder{color:var(--faint)}
 .hostpen .host-pen{position:absolute;right:6px;top:50%;transform:translateY(-50%)}
 .hostpen .host-pen[hidden]{display:none}
 .db-reset{flex:none;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
-.db-details-toggle{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:700;padding:4px 0 0;margin:0}
-.db-details-toggle:hover{color:var(--accent-dim,var(--accent))}
+.db-reset-wrap{flex:none;display:inline-flex;align-items:center}   /* the tick box + its info tip */
+/* ONE disclosure style on the page (S6, approved 2026-10-08): "Details" here
+   and "Room layout" in the Lab card are the same muted small-caps caption with
+   the small arrow first (see .map-cap). Not pink: they expand, they do not act. */
+.db-details-toggle{display:inline-flex;align-items:center;gap:7px;background:none;border:0;
+  font-family:inherit;color:var(--muted);cursor:pointer;font-size:12px;font-weight:700;letter-spacing:.03em;
+  text-transform:uppercase;padding:6px 0 0;margin:0}
+.db-details-toggle .arw{font-size:10px;color:var(--faint)}
+.db-details-toggle:hover{color:var(--text)}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -723,6 +787,10 @@ input::placeholder{color:var(--faint)}
    always switch between them. */
 .host-pick{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
 .host-pick .host-pill{flex:none}
+/* The localhost chip carries its own tip (what localhost is for): the tip-host
+   wrapper shows it on hover / keyboard focus of the chip itself (2026-10-08;
+   it used to be a separate (i) badge between the two chips). */
+.host-pick .info-wrap{flex:none}
 .host-pick .host-pill.active,.host-pick .host-pill.active:hover{
   background:radial-gradient(120% 140% at 50% 0%, rgba(var(--accent-rgb),.22), var(--accent-soft));
   border-color:var(--accent);color:var(--accent);font-weight:650;box-shadow:0 2px 10px rgba(var(--accent-rgb),.24)}
@@ -741,8 +809,12 @@ input::placeholder{color:var(--faint)}
 
 /* seat map */
 .maprow{margin-top:16px}
+/* The ONE disclosure caption of the page (S6, approved 2026-10-08): muted
+   small-caps (uppercase + a little tracking), the small arrow first. Shared
+   with the Details disclosure in the Database card. */
 .map-cap{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;letter-spacing:.03em;
   text-transform:uppercase;color:var(--muted);cursor:pointer;user-select:none}
+.map-cap:hover{color:var(--text)}
 .map-cap .arw{font-size:10px;color:var(--faint)}
 .map-sub{font-size:11.5px;color:var(--faint);margin:2px 0 0}
 /* HEIGHT-DRIVEN, square seat map: fitSeatMap() (JS) sizes BOTH the column tracks
@@ -835,11 +907,10 @@ input::placeholder{color:var(--faint)}
   pointer-events:none;
   background:linear-gradient(180deg,var(--fade-0),var(--bg));
 }
-/* "Activity log" + "Quit launcher" buttons: left-aligned on the launch bar. The
-   Save-one-click + Launch group is pushed to the right by margin-left:auto on
-   .btn-shortcut (the first of the right group), so Activity log and Quit stay
-   together on the left. Nothing is printed inline, so the row never wraps a
-   status message above the buttons. */
+/* "Activity log": left on the launch bar; Launch is pushed to the right by
+   margin-left:auto. Quit launcher moved to the Lab Settings footer (S5,
+   2026-10-08): the bar holds the log and the one primary action. Nothing is
+   printed inline, so the row never wraps a status message above the buttons. */
 .btn-logexpand{
   font-family:inherit;font-size:12.5px;font-weight:600;color:var(--muted);flex:0 0 auto;
   background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);
@@ -849,7 +920,8 @@ input::placeholder{color:var(--faint)}
 .btn-logexpand:active{transform:translateY(1px)}
 /* Quit launcher: reuses the Activity-log button look but highlights red on hover
    (it stops the launcher's OWN server; a running study keeps running). */
-.btn-quit:hover{background:var(--err-soft);border-color:var(--err);color:var(--err)}
+/* Quit launcher (Lab Settings footer): a quiet outlined button, red on hover. */
+.ls-foot-quit:hover{background:var(--err-soft);border-color:var(--err);color:var(--err)}
 .btn-launch{
   font-family:inherit;font-size:15.5px;font-weight:650;letter-spacing:.01em;color:var(--accent-on);
   background:linear-gradient(180deg,var(--accent-hi),var(--accent));border:1px solid var(--accent-dim);border-radius:var(--r-md);
@@ -1331,15 +1403,21 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
   <!-- ============================ MAIN ============================ -->
   <div class="main">
     <div class="main-head">
+      <!-- The title is the config NAME; an amber dot follows it while there are
+           unsaved changes (the .main-head gets .dirty) and the subline says who
+           saved it and when (setConfigTitle / renderConfigSubline). -->
       <div class="htext">
-        <h1 id="cfgTitle">Config: Dictator study</h1>
+        <h1 id="cfgTitle"><span id="cfgTitleText">Dictator study</span><span class="dirty-dot" id="cfgDirtyDot" aria-hidden="true"></span></h1>
+        <p class="sub" id="cfgSub"></p>
       </div>
       <!-- "Save one-click shortcut": always visible on the config page, the same
            size as "Save as new config..." and right next to it (Julian,
-           2026-10-01: people do it once but must recognise it). Hovering it shows
-           what it gives you (the info-tip pattern, text from core). -->
+           2026-10-01: people do it once but must recognise it). A GHOST button
+           since 2026-10-08 (S2): the frequent action stands out, the once-only
+           one recedes. Hovering it shows what it gives you (the info-tip
+           pattern, text from core). -->
       <span class="info-wrap tip-host tip-right">
-        <button class="btn" id="shortcutBtn" onclick="onExport()">Save one-click shortcut</button>
+        <button class="btn ghost" id="shortcutBtn" onclick="onExport()">Save one-click shortcut</button>
         <span class="info-tip" role="tooltip" id="shortcutTip"></span>
       </span>
       <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save as new config...</button>
@@ -1354,27 +1432,34 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
         <section class="card">
           <h2 class="card-num"><span class="n">1</span> oTree project</h2>
 
-          <!-- Line 1: the folder path field + the GitHub org button (between the
-               field and Browse; shown only when Org Sync is on) + Browse. The org
-               button carries the GitHub logo + organisation name (filled by
-               updateGithubOrgBtn). -->
-          <div class="pathrow">
-            <input class="pathinput" id="projPathInput" type="text" spellcheck="false"
-              placeholder="Click Browse to choose your oTree project folder">
-            <button class="btn btn-gh" id="githubOrgBtn" hidden onclick="onGithubOrgClone()"
-              title="Get a study from your lab GitHub organisation">GitHub</button>
-            <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
+          <!-- Line 1 (2026-10-08): the chosen folder as a SUMMARY, not a box. The
+               folder NAME in bold + its parent as a short muted hint (filled by
+               renderPathChip from projectPathDisplay, the mirror of
+               core.project_path_display); the full path is the hover / focus tip
+               with a Copy button; the pen opens the text field (#projPathInput:
+               type or paste a path, Enter validates, Esc cancels). This is the
+               same field browser mode has always relied on; it is just hidden
+               until asked for. While no folder is chosen nothing but the actions
+               shows (right-aligned): the empty-state line sits in the status card
+               below. The GitHub org button (only with Org Sync on; logo + name
+               from updateGithubOrgBtn) keeps its place left of Browse. -->
+          <div class="pathrow" id="pathRow">
+            <span class="info-wrap tip-host pp-wrap" id="projPathWrap" hidden>
+              <span class="pp-chip" id="projPathChip" tabindex="0" aria-describedby="projPathTip">
+                <span class="pp-name" id="projPathName"></span><span class="pp-parent" id="projPathParent"></span>
+              </span>
+              <span class="info-tip pp-tip" role="tooltip" id="projPathTip"></span>
+            </span>
+            <button type="button" class="db-edit pp-edit" id="projPathEdit" hidden
+              aria-label="Type or paste the folder path" onclick="openPathEditor()">&#9998;</button>
+            <input class="pathinput" id="projPathInput" type="text" spellcheck="false" hidden
+              placeholder="Type or paste the full path to your oTree project folder, then press Enter">
+            <span class="pp-actions">
+              <button class="btn btn-gh" id="githubOrgBtn" hidden onclick="onGithubOrgClone()"
+                title="Get a study from your lab GitHub organisation">GitHub</button>
+              <button class="btn" id="browseProjBtn" onclick="onBrowseProject()">Browse...</button>
+            </span>
           </div>
-          <script>
-          /* In browser mode Browse pops a native folder dialog on the local
-             server machine (POST /api/browse_folder); pasting a path also works.
-             Give the field a placeholder that mentions both, synchronously during
-             parse, so it is right on the first paint with no flicker. */
-          if(document.documentElement.getAttribute("data-webmode")==="browser"){
-            var _pin=document.getElementById("projPathInput");
-            if(_pin)_pin.placeholder="Click Browse, or paste the full path to your oTree project folder";
-          }
-          </script>
 
           <!-- Line 2: ONE always-present STATUS CARD. It absorbs the old loose grey
                helper lines and the not-an-oTree warning. Contents are rendered by
@@ -1388,6 +1473,9 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
               <ul class="bullets" id="appBullets" hidden></ul>
               <ul class="ways" id="projWays" hidden></ul>
+              <!-- Empty state (S1): Browse + GitHub move in here from the row
+                   above (placeProjectActions), with the paste link beside them. -->
+              <div class="proj-actions" id="projActions" hidden></div>
               <!-- The automatic update check (once per selected project, in the
                    background): nothing / "Experiment up to date" / the amber
                    "changes on GitHub" banner / the local-changes line. -->
@@ -1440,7 +1528,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               <span class="db-host-note" id="dbHostNote" hidden></span>
               <button class="db-edit" id="dbEditBtn" title="Change database" aria-label="Change database" onclick="openDbPicker(event)">&#9998;</button>
             </span>
-            <label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label>
+            <span class="db-reset-wrap"><label class="chk db-reset"><input type="checkbox" id="resetdb" checked> Reset before start</label><span id="resetTip"></span></span>
           </div>
           <!-- A warning when a localhost database was created on another
                computer, and a note when this config's database is not on this
@@ -1449,7 +1537,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <div class="db-warn" id="dbNote" hidden></div>
           <!-- Feature 3: the selected database shows only the summary above; this
                discloses the connection READ-ONLY. Editing is in Lab Settings. -->
-          <button type="button" class="db-details-toggle" id="dbDetailsToggle" onclick="toggleDbDetails()">Details &#9656;</button>
+          <button type="button" class="db-details-toggle" id="dbDetailsToggle" onclick="toggleDbDetails()"><span class="arw" id="dbDetailsArw">&#9656;</span><span>Details</span></button>
 
           <div class="db-section" id="dbSection" hidden>
             <div id="dbDetails">
@@ -1492,9 +1580,14 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <div id="labBody">
             <div class="lab-tiles" id="labTiles"></div>
 
+            <!-- The localhost chip IS the tip host: what localhost is for
+                 (core.ui_tip "localhost_run", filled by fillStaticTips) appears on
+                 hover or keyboard focus of the chip itself. No separate (i). -->
             <div class="host-pick" id="hostLinks">
-              <button type="button" class="btn tiny host-pill" id="localHostBtn" aria-pressed="false" onclick="selectLocalHost()">localhost</button>
-              <span id="localTip"></span>
+              <span class="info-wrap tip-host">
+                <button type="button" class="btn tiny host-pill" id="localHostBtn" aria-pressed="false" aria-describedby="localTip" onclick="selectLocalHost()">localhost</button>
+                <span class="info-tip" role="tooltip" id="localTip"></span>
+              </span>
               <button type="button" class="btn tiny host-pill" id="otherHostLink" aria-pressed="false" onclick="selectCustomHost()">Other host&hellip;</button>
             </div>
             <button class="link otherhost" id="backToLabLink" onclick="backToLab()" hidden>&larr; Back to a lab</button>
@@ -1560,8 +1653,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          and Save-one-click + Launch sit to the right. -->
     <div class="launchbar">
       <button class="btn-logexpand" onclick="openLogModal()">Activity log</button>
-      <button class="btn-logexpand btn-quit" onclick="quitLauncher()"
-        title="Shut down the launcher. Any running study keeps running.">Quit launcher</button>
+      <!-- The quit action lives in the Lab Settings footer (S5, 2026-10-08). -->
       <button class="btn-launch" onclick="onLaunch()">Launch</button>
     </div>
   </div>
@@ -1747,14 +1839,17 @@ var PREVIEW_LABS=[
   {"id":"large","name":"Large lab","host":"localhost","seats":["A1","A2","A3","A5","A6","A7","A8","B1","B2","B3","B4","B5","B6","B7","B8","C1","C2","C3","C4","C5","C6","C7","C8","D1","D2","D3","D4","E1","E2","E3","E4"],"map":{"cols":9,"rows":5,"cells":[{"r":5,"c":9,"kind":"seat"},{"r":5,"c":8,"kind":"seat"},{"r":5,"c":7,"kind":"seat"},{"r":5,"c":6,"kind":"exp"},{"r":5,"c":4,"kind":"seat"},{"r":5,"c":3,"kind":"seat"},{"r":5,"c":2,"kind":"seat"},{"r":5,"c":1,"kind":"seat"},{"r":4,"c":9,"kind":"seat"},{"r":4,"c":8,"kind":"seat"},{"r":4,"c":7,"kind":"seat"},{"r":4,"c":6,"kind":"seat"},{"r":4,"c":4,"kind":"seat"},{"r":4,"c":3,"kind":"seat"},{"r":4,"c":2,"kind":"seat"},{"r":4,"c":1,"kind":"seat"},{"r":3,"c":9,"kind":"seat"},{"r":3,"c":8,"kind":"seat"},{"r":3,"c":7,"kind":"seat"},{"r":3,"c":6,"kind":"seat"},{"r":3,"c":4,"kind":"seat"},{"r":3,"c":3,"kind":"seat"},{"r":3,"c":2,"kind":"seat"},{"r":3,"c":1,"kind":"seat"},{"r":2,"c":9,"kind":"seat"},{"r":2,"c":8,"kind":"seat"},{"r":2,"c":2,"kind":"seat"},{"r":2,"c":1,"kind":"seat"},{"r":1,"c":9,"kind":"seat"},{"r":1,"c":8,"kind":"seat"},{"r":1,"c":2,"kind":"seat"},{"r":1,"c":1,"kind":"seat"},{"r":1,"c":4,"kind":"wall"},{"r":1,"c":5,"kind":"wall"},{"r":1,"c":6,"kind":"wall"}]}},
   {"id":"small","name":"Small lab","host":"localhost","seats":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22"],"map":{"cols":5,"rows":5,"cells":[{"r":5,"c":1,"kind":"exp"},{"r":5,"c":2,"kind":"seat"},{"r":5,"c":3,"kind":"seat"},{"r":5,"c":4,"kind":"seat"},{"r":5,"c":5,"kind":"seat"},{"r":4,"c":1,"kind":"seat"},{"r":4,"c":2,"kind":"seat"},{"r":4,"c":3,"kind":"seat"},{"r":4,"c":4,"kind":"seat"},{"r":4,"c":5,"kind":"wall"},{"r":3,"c":1,"kind":"seat"},{"r":3,"c":2,"kind":"seat"},{"r":3,"c":3,"kind":"seat"},{"r":3,"c":4,"kind":"seat"},{"r":3,"c":5,"kind":"wall"},{"r":2,"c":1,"kind":"seat"},{"r":2,"c":2,"kind":"seat"},{"r":2,"c":3,"kind":"seat"},{"r":2,"c":4,"kind":"seat"},{"r":2,"c":5,"kind":"seat"},{"r":1,"c":1,"kind":"seat"},{"r":1,"c":2,"kind":"seat"},{"r":1,"c":3,"kind":"seat"},{"r":1,"c":4,"kind":"seat"},{"r":1,"c":5,"kind":"seat"}]}}
 ];
+/* Rows shaped like Api preset_row: "when" is the LAST RUN (core.format_last_run,
+   "Never run" until launched; S10) and "saved" is who saved it and when
+   (core.saved_by_line) for the header subline. */
 var PREVIEW_CONFIGS=[
-  {name:"Lab default",builtin:true,lab:"large",folder:"",author:"builtin",when:""},
-  {name:"Dictator study",builtin:false,lab:"large",folder:"C:\\experiments\\dictator_game",author:"J. Tait",when:"15 Sep 2026"},
-  {name:"Bargaining wave 2",builtin:false,lab:"large",folder:"C:\\experiments\\bargaining_v2",author:"S. Vermeer",when:"11 Sep 2026"},
-  {name:"Trust game pilot",builtin:false,lab:"small",folder:"C:\\experiments\\trust_pilot",author:"M. Researcher",when:"3 Sep 2026"},
-  {name:"Public goods",builtin:false,lab:"small",folder:"C:\\experiments\\public_goods",author:"A. Kowalski",when:"28 Aug 2026"},
-  {name:"Risk elicitation",builtin:false,lab:"large",folder:"C:\\experiments\\risk_task",author:"L. Rossi",when:"22 Aug 2026"},
-  {name:"Auction study",builtin:false,lab:"small",folder:"C:\\experiments\\auction",author:"P. Andersson",when:"9 Aug 2026"}
+  {name:"Lab default",builtin:true,lab:"large",folder:"",author:"builtin",when:"",saved:""},
+  {name:"Dictator study",builtin:false,lab:"large",folder:"C:\\experiments\\dictator_game",author:"J. Tait",when:"Last run 15 Sep 2026 at 14:03",saved:"saved by J. Tait · 12 Sep 2026"},
+  {name:"Bargaining wave 2",builtin:false,lab:"large",folder:"C:\\experiments\\bargaining_v2",author:"S. Vermeer",when:"Last run 11 Sep 2026 at 09:40",saved:"saved by S. Vermeer · 2 Sep 2026"},
+  {name:"Trust game pilot",builtin:false,lab:"small",folder:"C:\\experiments\\trust_pilot",author:"M. Researcher",when:"Last run 3 Sep 2026 at 16:12",saved:"saved by M. Researcher · 1 Sep 2026"},
+  {name:"Public goods",builtin:false,lab:"small",folder:"C:\\experiments\\public_goods",author:"A. Kowalski",when:"Never run",saved:"saved by A. Kowalski · 28 Aug 2026"},
+  {name:"Risk elicitation",builtin:false,lab:"large",folder:"C:\\experiments\\risk_task",author:"L. Rossi",when:"Last run 22 Aug 2026 at 11:05",saved:"saved by L. Rossi · 20 Aug 2026"},
+  {name:"Auction study",builtin:false,lab:"small",folder:"C:\\experiments\\auction",author:"P. Andersson",when:"Never run",saved:"saved by P. Andersson · 9 Aug 2026"}
 ];
 var PREVIEW_ROOMS=["study","pilot","bargaining","teaching_demo"];
 /* Fake custom databases + researcher roster for the static preview (no real
@@ -1898,6 +1993,10 @@ var UI_TEXT={
   git_fresh_copy:"Get a fresh copy",
   update_check:"Check for updates",
   update_discard:"Discard these changes and update",
+  quit_launcher:"Quit launcher",
+  quit_launcher_note:"Shuts down the launcher. A study you already launched keeps running; the launcher never stops it.",
+  unsaved_changes:"Unsaved changes",
+  unsaved_settings:"Unsaved settings",
   github_login_note:"Saved in this computer's own credential store (Windows Credential Manager or the macOS Keychain), never in a launcher file. A computer can hold several tokens (the lab's read-only token, a researcher's own token); a clone uses the first one that can open the study. Make the lab token with the lab account, a member of the organisation.",
   github_login_prompt:"Say who is adding the token, paste it, then Save.",
   github_login_missing:"Paste the token.",
@@ -1923,9 +2022,11 @@ function tip(key){
 function tipBadge(key){var t=tip(key);return t?infoBadge(t):"";}
 /* The few tips that sit in the static page markup, filled once core's texts are in. */
 function fillStaticTips(){
-  var a=el("localTip");if(a)a.innerHTML=tipBadge("localhost_run");
+  /* localhost: the chip is its own tip host (hover / focus), not an (i) badge. */
+  var a=el("localTip");if(a)a.textContent=tip("localhost_run");
   var b=el("seatFileTip");if(b)b.innerHTML=tipBadge("seat_file");
   var pt=el("productionTip");if(pt)pt.innerHTML=tipBadge("production_mode");
+  var rt=el("resetTip");if(rt)rt.innerHTML=tipBadge("reset_db");
   var sc=el("shortcutTip");if(sc)sc.textContent=tip("one_click_shortcut");
   var w=el("blockWarnBtn");if(w)w.textContent=UI_TEXT.get_ready_label;
 }
@@ -2041,6 +2142,35 @@ window.pywOnCloneProgress=function(p){
    ====================================================================== */
 function labSuffix(lab){var l=LAB_BY_ID[lab];return l?(" ("+l.name+")"):"";}
 function configDisplay(c){return c.name+(c.builtin?labSuffix(c.lab):"");}
+/* The folder / person marks of a sidebar row: inline SVG outlines (S4). */
+var FOLDER_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">'+
+  '<path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1H7.6L6.2 3.5H2.5a1 1 0 0 0-1 1z"/></svg>';
+var PERSON_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">'+
+  '<circle cx="8" cy="5.2" r="2.7"/><path d="M2.8 14c.5-3 2.6-4.4 5.2-4.4s4.7 1.4 5.2 4.4"/></svg>';
+/* ---- header title + subline (mirror of core.config_title / config_subline) ----
+   The title is the config name ("Unsaved settings" for a scratch setup); the
+   subline is "Unsaved changes · saved by A · D" while edited, "Saved by A · D"
+   when clean, "Unsaved changes" for an edited scratch setup, else nothing. */
+function configSubline(saved,dirty){
+  saved=saved||"";
+  if(dirty&&saved)return UI_TEXT.unsaved_changes+" · "+saved;
+  if(dirty)return UI_TEXT.unsaved_changes;
+  return saved?(saved.charAt(0).toUpperCase()+saved.slice(1)):"";
+}
+/* ---- end header title + subline ---- */
+function currentConfigRow(){
+  return CONFIG_ROWS.filter(function(x){return x.name===currentConfigName;})[0]||null;
+}
+function setConfigTitle(row){
+  var t=el("cfgTitleText");if(t)t.textContent=row?configDisplay(row):UI_TEXT.unsaved_settings;
+  renderConfigSubline();
+}
+function renderConfigSubline(){
+  var head=document.querySelector(".main-head"),sub=el("cfgSub");if(!head||!sub)return;
+  var dirty=isFormDirty(),row=currentConfigRow();
+  head.classList.toggle("dirty",dirty);
+  sub.textContent=configSubline(row?row.saved:"",dirty);
+}
 function renderConfigList(configs,selected){
   CONFIG_ROWS=configs||[];
   var list=el("cfgList");list.innerHTML="";
@@ -2056,26 +2186,26 @@ function renderConfigList(configs,selected){
     // folder (basename, or "empty" when unset) + author.
     if(!c.builtin){
       var fold=document.createElement("span");
-      if(c.folder){fold.className="fold";fold.textContent=c.folder.replace(/[\\/]+$/,"").split(/[\\/]/).pop();}else{fold.className="fold empty";fold.textContent="empty";}
+      if(c.folder){fold.className="fold";fold.innerHTML=FOLDER_SVG+'<span>'+escapeHtml(c.folder.replace(/[\\/]+$/,"").split(/[\\/]/).pop())+'</span>';}
+      else{fold.className="fold empty";fold.textContent="empty";}
       meta.appendChild(fold);
-      if(c.author){var au=document.createElement("span");au.className="au";au.textContent=c.author;meta.appendChild(au);}
+      if(c.author){var au=document.createElement("span");au.className="au";au.innerHTML=PERSON_SVG+'<span>'+escapeHtml(c.author)+'</span>';meta.appendChild(au);}
     }
     b.appendChild(meta);
+    /* line 3: the LAST RUN (core.format_last_run; "Never run" until launched) */
     var wh=document.createElement("span");wh.className="wh";wh.textContent=c.when;b.appendChild(wh);
     if(!c.builtin){var d=document.createElement("span");d.className="del";d.title="Delete this config";d.textContent="✕";
       d.onclick=function(e){e.stopPropagation();deleteConfig(c.name);};b.appendChild(d);}
     list.appendChild(b);
   });
   var cur=configs.filter(function(c){return c.name===selected;})[0];
-  if(cur)el("cfgTitle").textContent="Config: "+configDisplay(cur);
+  if(cur){currentConfigName=cur.name;setConfigTitle(cur);}
 }
 function selectConfig(name,row){
   document.querySelectorAll("#cfgList .cfg-row").forEach(function(r){r.classList.remove("sel");});
   if(row)row.classList.add("sel");
   currentConfigName=name;
-  var disp=name;var c=(NATIVE?null:PREVIEW_CONFIGS.filter(function(x){return x.name===name;})[0]);
-  if(c)disp=configDisplay(c);
-  el("cfgTitle").textContent="Config: "+disp;
+  setConfigTitle(currentConfigRow()||{name:name});
   if(NATIVE&&API){
     API.select_config(name).then(function(r){
       if(r&&r.ok){
@@ -2084,7 +2214,7 @@ function selectConfig(name,row){
         // selected instead of falling back to a displayed one (BUG B).
         if(r.labs)setLabs(r.labs);
         applyFields(r.fields);applyProject(r.project);applySettings(r.settings);
-        var cd=lastConfigDisplay(name);if(cd)el("cfgTitle").textContent="Config: "+cd;}
+        setConfigTitle(currentConfigRow()||{name:name});}
     });
   }
 }
@@ -2099,11 +2229,85 @@ function lastConfigDisplay(name){
 /* ======================================================================
    CARD 1: oTree project
    ====================================================================== */
-function setPath(p){var i=el("projPathInput");if(i){i.value=p||"";i.title=p||"";showPathTail();}updateProjectGitPull();updateDirtyState();}
+function setPath(p){shownProjectPath=p||"";var i=el("projPathInput");if(i){i.value=shownProjectPath;i.title=shownProjectPath;showPathTail();}renderPathChip();updateProjectGitPull();updateDirtyState();}
 /* A long path shows its END (the folder name) while the box is not focused. */
 function showPathTail(){
   var i=el("projPathInput");if(!i||document.activeElement===i)return;
   try{i.scrollLeft=i.scrollWidth;}catch(e){}
+}
+/* ---- project path display (mirror of core.project_path_display) ----
+   Folder NAME + parent folder of a path, for either OS's separator, and the
+   parent cut to about PROJECT_PARENT_MAX characters keeping the root and as
+   many final segments as fit ("C:\\…\\Desktop\\TAIT"). A test runs these under
+   node and holds them equal to core on a set of sample paths. */
+var PROJECT_PARENT_MAX=36;
+function projectPathParts(path){
+  var cleaned=String(path||"").trim().replace(/[\\\/]+$/,"");
+  if(!cleaned)return ["",""];
+  var at=Math.max(cleaned.lastIndexOf("\\"),cleaned.lastIndexOf("/"));
+  if(at<0)return [cleaned,""];
+  var name=cleaned.slice(at+1),parent=cleaned.slice(0,at);
+  if(!parent||/:$/.test(parent))parent=cleaned.slice(0,at+1);
+  return [name,parent];
+}
+function shortenParent(parent,limit){
+  var text=String(parent||"");limit=limit||PROJECT_PARENT_MAX;
+  if(text.length<=limit)return text;
+  var sep=(text.indexOf("\\")>=0&&text.indexOf("/")<0)?"\\":"/";
+  var parts=text.split(/[\\\/]/);var head=parts[0];
+  var rest=parts.slice(1).filter(function(p){return !!p;});var tail=[];
+  while(rest.length){
+    var seg=rest.pop();var cand=[head,"\u2026",seg].concat(tail).join(sep);
+    if(cand.length>limit&&tail.length)break;
+    tail.unshift(seg);
+  }
+  return [head,"\u2026"].concat(tail).join(sep);
+}
+function projectPathDisplay(path){
+  var p=projectPathParts(path);
+  return {name:p[0],parent:p[1],parent_short:shortenParent(p[1]),full:String(path||"").trim()};
+}
+/* ---- end project path display ---- */
+/* The project row (card 1, line 1): the folder summary while a folder is
+   chosen and the field is closed; the text field while it is open; only the
+   actions otherwise. shownProjectPath is what setPath last put on screen. */
+var shownProjectPath="",pathEditing=false;
+function renderPathChip(){
+  var wrap=el("projPathWrap"),pen=el("projPathEdit"),input=el("projPathInput");
+  if(!wrap||!pen||!input)return;
+  var d=projectPathDisplay(shownProjectPath);
+  var show=!!d.name&&!pathEditing;
+  wrap.hidden=!show;pen.hidden=!show;input.hidden=!pathEditing;
+  placeProjectActions();
+  if(!show)return;
+  el("projPathName").textContent=d.name;
+  var par=el("projPathParent");par.textContent=d.parent_short;par.hidden=!d.parent_short;
+  el("projPathTip").innerHTML='<span class="pp-full">'+escapeHtml(d.full)+'</span>'+
+    '<button type="button" class="link pp-copy" onclick="copyProjectPath(this)">Copy</button>';
+}
+/* The pen (and the empty state's "paste the full path" link): show the text
+   field with the current path selected. Enter validates (the keydown handler),
+   Esc or leaving the field closes it again. */
+function openPathEditor(){
+  var i=el("projPathInput");if(!i)return;
+  pathEditing=true;i.value=shownProjectPath;renderPathChip();
+  i.focus();try{i.select();}catch(e){}
+}
+function closePathEditor(){
+  var i=el("projPathInput");if(!i)return;
+  pathEditing=false;i.value=shownProjectPath;renderPathChip();
+}
+function copyProjectPath(btn){
+  copyText(shownProjectPath);
+  if(btn){btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy";},1200);}
+}
+/* Clipboard: the async API where the window has it (a click is a user
+   gesture), else the old execCommand route (older WebView2 / WKWebView). */
+function copyText(text){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return;}}catch(e){}
+  try{var t=document.createElement("textarea");t.value=text;t.setAttribute("readonly","");
+    t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();
+    document.execCommand("copy");document.body.removeChild(t);}catch(e){}
 }
 /* Whether a project folder is currently chosen (typed or picked). */
 function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")||"").trim());}
@@ -2127,11 +2331,11 @@ function applyProject(p){
   projectIsRepo=!!p.is_repo;
   /* A project was (re)selected: one background update check for it. */
   if(!_noUpdateCheck)startUpdateCheck();
-  var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets");
+  var line=el("projStatus"),bul=el("appBullets");
   var lvl=p.level||"muted";
   var empty=!hasProjectFolder()&&!p.message;
   if(empty)lvl="muted";
-  msg.textContent=hasProjectFolder()?(p.message||noProjectText()):noProjectText();
+  renderProjectStatusMsg(p);
   line.className="statusline "+lvl;
   line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
   bul.innerHTML="";
@@ -2142,25 +2346,54 @@ function applyProject(p){
   /* Another project has other label files. */
   var sm=el("seat_mode");if(sm&&sm.value==="file")refreshSeatFiles();
 }
-/* Render the empty-state "ways to add a project" list, shown ONLY when no folder
-   is chosen and there is no problem message. It folds in the old loose helper
-   line and serves both native and browser modes. Bullet 3 (the GitHub
-   organisation) appears only when the GitHub org button is itself visible. */
+/* ---- lead sentence (mirror of core.split_lead_sentence) ---- */
+function splitLead(text){
+  text=String(text||"").trim();
+  var m=/^([\s\S]*?[.!?])(?:\s+([\s\S]*))?$/.exec(text);
+  if(!m)return [text,""];
+  return [m[1],(m[2]||"").trim()];
+}
+/* ---- end lead sentence ---- */
+/* The status line of card 1. With a folder: core's message as it is. Without:
+   the empty line (core.no_project_message) with its FIRST sentence in bold,
+   the actions placed right under it (S1). */
+function renderProjectStatusMsg(p){
+  var m=el("projStatusMsg");if(!m)return;
+  p=p||lastProject||{};
+  if(hasProjectFolder()){m.textContent=p.message||noProjectText();return;}
+  var parts=splitLead(noProjectText());
+  m.innerHTML="<b>"+escapeHtml(parts[0])+"</b>"+(parts[1]?" "+escapeHtml(parts[1]):"");
+}
+/* Whether card 1 is in its EMPTY state: no folder chosen, no problem message. */
+function projectIsEmpty(){return !hasProjectFolder()&&!(lastProject&&lastProject.message);}
+/* The empty state of card 1 (S1, 2026-10-08): nothing in the row above the
+   status card; inside the card, the bold lead line, then Browse and the GitHub
+   button with "or paste the full path" beside them (the link opens the same text
+   field the pen opens once a folder is chosen: browser mode's way in). While the
+   text field is open, or once a folder is chosen, the row holds the actions
+   again. Kept under its old name: it is the empty-state renderer. */
 function renderProjectEmptyWays(){
-  /* The GitHub setting may have changed: keep the empty line in step. */
-  var m=el("projStatusMsg");if(m&&!hasProjectFolder())m.textContent=noProjectText();
-  var ways=el("projWays");if(!ways)return;
-  var empty=!hasProjectFolder()&&!(lastProject&&lastProject.message);
-  if(!empty){ways.hidden=true;ways.innerHTML="";return;}
-  var items=[
-    'Just click "Browse" to pick your oTree project folder with a native dialog.',
-    "Paste the full path into the box above."
-  ];
-  var gh=el("githubOrgBtn");
-  if(gh&&!gh.hidden)items.push("Use your lab's GitHub organisation by clicking the GitHub button.");
-  ways.innerHTML="";
-  items.forEach(function(t){var li=document.createElement("li");li.textContent=t;ways.appendChild(li);});
-  ways.hidden=false;
+  /* Re-render the status line on every path change: the GitHub setting may
+     have changed the empty line, and a project applied BEFORE its path was set
+     (applyProject then setPath) must not keep the empty-state text. */
+  renderProjectStatusMsg(lastProject);
+  var ways=el("projWays");if(ways){ways.hidden=true;ways.innerHTML="";}
+  placeProjectActions();
+}
+function placeProjectActions(){
+  var acts=document.querySelector(".pp-actions"),row=el("pathRow"),box=el("projActions"),card=el("projDetect");
+  if(!acts||!row||!box)return;
+  var inCard=projectIsEmpty()&&!pathEditing;
+  row.hidden=inCard;box.hidden=!inCard;
+  if(card)card.classList.toggle("empty",inCard);
+  if(inCard){
+    if(acts.parentNode!==box){
+      box.innerHTML='<span class="alt">or <button type="button" class="link inline" onclick="openPathEditor()">paste the full path</button></span>';
+      box.insertBefore(acts,box.firstChild);
+    }
+  }else if(acts.parentNode!==row){
+    row.appendChild(acts);box.innerHTML="";
+  }
 }
 /* Show the small Git pull button inside the status card only when Org Sync is on
    AND a project folder is selected (item 7). Also refresh the empty-state ways
@@ -2290,12 +2523,19 @@ function adminSummaryText(){
     el("auto_login").checked?"auto login":"manual login"].join(" \u00b7 ");
 }
 var _adminSumSeq=0;
+/* The summary with its first segment (the username) in bold: the value is what
+   the eye should land on, as in the database row (S3). */
+function adminSummaryHtml(text){
+  text=String(text||"");var at=text.indexOf(" · ");
+  if(at<0)return "<b>"+escapeHtml(text)+"</b>";
+  return "<b>"+escapeHtml(text.slice(0,at))+"</b>"+escapeHtml(text.slice(at));
+}
 function refreshAdminSummary(){
   var box=el("adminSummary");if(!box)return;
-  box.textContent=adminSummaryText();
+  box.innerHTML=adminSummaryHtml(adminSummaryText());
   if(NATIVE&&API&&API.admin_summary){
     var seq=++_adminSumSeq;
-    API.admin_summary(gatherFields()).then(function(r){if(r&&r.ok&&r.text&&seq===_adminSumSeq)box.textContent=r.text;});
+    API.admin_summary(gatherFields()).then(function(r){if(r&&r.ok&&r.text&&seq===_adminSumSeq)box.innerHTML=adminSummaryHtml(r.text);});
   }
 }
 
@@ -2392,7 +2632,8 @@ function toggleDbDetails(){dbDetailsShown=!dbDetailsShown;applyDbDetailsView();}
 function applyDbDetailsView(){
   var s=el("dbSection"),t=el("dbDetailsToggle");if(!s||!t)return;
   s.hidden=!dbDetailsShown;
-  t.innerHTML=dbDetailsShown?"Details &#9662;":"Details &#9656;";
+  var a=el("dbDetailsArw");if(a)a.innerHTML=dbDetailsShown?"&#9662;":"&#9656;";
+  t.setAttribute("aria-expanded",dbDetailsShown?"true":"false");
 }
 function setDbVals(n,u,p,h,pt){el("db_name").value=n;el("db_user").value=u;el("db_pw").value=p;el("db_host").value=h;el("db_port").value=pt;}
 /* Feature 1: a host is "local" (creating a database is allowed) only when it is
@@ -2854,6 +3095,7 @@ function isFormDirty(){return (cleanSnapshot!==null&&formSnapshot()!==cleanSnaps
 function updateDirtyState(){
   var b=el("saveAsBtn");if(!b)return;
   b.classList.toggle("dirty",isFormDirty());
+  renderConfigSubline();   /* the amber dot + "Unsaved changes" in the header */
   _adminSummaryLater();
 }
 /* Any edit may change the admin summary; coalesce to one refresh per tick. */
@@ -3263,9 +3505,14 @@ document.addEventListener("DOMContentLoaded",function(){
   applyHoldDuration();   /* derive the hold-to-delete CSS fill duration from DELETE_HOLD_MS */
   var i=el("projPathInput");
   if(i){
-    i.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();validateProjectPath(true);}});
+    /* Enter = use this path (validate); Esc = never mind. Leaving the field
+       fires "change" first (a changed path validates), then closes it. */
+    i.addEventListener("keydown",function(e){
+      if(e.key==="Enter"){e.preventDefault();validateProjectPath(true);closePathEditor();}
+      else if(e.key==="Escape"){e.preventDefault();closePathEditor();}
+    });
     i.addEventListener("change",validateProjectPath);
-    i.addEventListener("blur",function(){setTimeout(showPathTail,0);});
+    i.addEventListener("blur",function(){setTimeout(function(){if(pathEditing)closePathEditor();},0);});
   }
   var rd=el("resetdb");if(rd)rd.addEventListener("change",refreshDbSummary);
   /* Any field edit re-checks the dirty state (capture phase catches every
@@ -4013,6 +4260,10 @@ function openLabSettings(openCard){
         '<div class="ls-foot-left">'+
           '<button class="btn ls-foot-hist" onclick="openLaunchHistory()">Launch history</button>'+
           '<button class="btn ls-foot-hist" onclick="viewBlock()">View settings.py block&hellip;</button>'+
+          /* Quit launcher (S5, 2026-10-08): out of the launch bar, here at the
+             bottom of Settings. Hover says what it does (core.QUIT_LAUNCHER_NOTE). */
+          '<span class="info-wrap tip-host"><button class="btn ls-foot-hist ls-foot-quit" id="lsQuitBtn" onclick="quitLauncher()">'+escapeHtml(UI_TEXT.quit_launcher)+'</button>'+
+          '<span class="info-tip" role="tooltip">'+escapeHtml(UI_TEXT.quit_launcher_note)+'</span></span>'+
         '</div>'+
         '<div class="ls-foot-id">'+
           '<span class="ls-foot-name">oTree Lab Launcher</span>'+
@@ -5582,15 +5833,13 @@ function hideBrowseButtons(){
      participant-FILE Browse has no server-side equivalent yet, so it is hidden
      and that path is pasted instead. The head <script> already set
      data-webmode="browser" before first paint (CSS hides just the file Browse,
-     with no flicker); this re-asserts the mode and the placeholder
-     belt-and-suspenders. The paste field stays visible and editable, and the
-     status box's empty-state "ways to add a project" list guides browser mode
-     too. */
+     with no flicker); this re-asserts the mode belt-and-suspenders. The paste
+     field (#projPathInput) is the same in both modes since 2026-10-08: hidden
+     until the pen or the empty state's "paste the full path" link opens it,
+     with the one placeholder set in the markup. */
   document.documentElement.setAttribute("data-webmode","browser");
   var b1=el("browseProjBtn");if(b1)b1.hidden=false;   /* project Browse works in browser mode */
   var b2=el("browseFileBtn");if(b2)b2.hidden=true;
-  var pin=el("projPathInput");
-  if(pin)pin.placeholder="Click Browse, or paste the full path to your oTree project folder";
 }
 function bootBrowser(){
   if(booted)return;booted=true;NATIVE=true;BROWSER=true;

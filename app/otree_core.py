@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -10313,6 +10313,9 @@ UI_TIPS = {
     "pg_new_user_password": PG_NEW_USER_PASSWORD_HINT,
     "room_help": ROOM_HELP,
     "production_mode": "Serve as a real study, no debug pages.",
+    "reset_db": "Runs otree resetdb before the server starts: the database is "
+                "emptied and rebuilt, so the session starts clean. Untick to keep "
+                "the data already in it.",
     "one_click_shortcut": "Starts this config from one desktop shortcut and opens "
                           "the oTree monitor straight away. Save the config first: "
                           "the shortcut runs a saved config by name.",
@@ -10333,6 +10336,134 @@ UI_TIPS = {
 def ui_tip(key):
     """The info-tip text for ``key`` ("" for an unknown key)."""
     return UI_TIPS.get(key, "")
+
+
+# The project folder on the main page (2026-10-08): the folder NAME is what the
+# user recognises, so it is shown prominently; the parent folder is a short
+# muted hint (cut to about this many characters, root + final segments kept);
+# the full path is the hover tip. Both faces render project_path_display; the
+# web page keeps a JS mirror (projectPathDisplay) that a test holds equal.
+PROJECT_PARENT_MAX = 36
+
+
+def project_path_parts(path):
+    """Split a project folder path into ``(name, parent)``: the final folder
+    name and the folder it sits in, for either OS's separator. An empty path
+    gives ``("", "")``; a bare name has an empty parent; the parent of a
+    folder directly under a root keeps that root ("C:\\\\" / "/")."""
+    cleaned = str(path or "").strip().rstrip("\\/")
+    if not cleaned:
+        return "", ""
+    sep_at = max(cleaned.rfind("\\"), cleaned.rfind("/"))
+    if sep_at < 0:
+        return cleaned, ""
+    name = cleaned[sep_at + 1:]
+    parent = cleaned[:sep_at]
+    if not parent or parent.endswith(":"):
+        parent = cleaned[:sep_at + 1]
+    return name, parent
+
+
+def shorten_parent(parent, limit=PROJECT_PARENT_MAX):
+    """A parent folder path cut to about ``limit`` characters, keeping the
+    root (drive letter or "/") and as many FINAL segments as fit:
+    "C:\\\\Users\\\\julian\\\\Desktop\\\\TAIT" -> "C:\\\\…\\\\Desktop\\\\TAIT". The last
+    segment is always kept, so the hint still says where the folder is."""
+    text = str(parent or "")
+    if len(text) <= limit:
+        return text
+    sep = "\\" if ("\\" in text and "/" not in text) else "/"
+    parts = re.split(r"[\\/]", text)
+    head = parts[0]                       # "C:" or "" for a unix root
+    rest = [part for part in parts[1:] if part]
+    tail = []
+    while rest:
+        segment = rest.pop()
+        candidate = sep.join([head, "\u2026", segment] + tail)
+        if len(candidate) > limit and tail:
+            break
+        tail.insert(0, segment)
+    return sep.join([head, "\u2026"] + tail)
+
+
+def project_path_display(path, limit=PROJECT_PARENT_MAX):
+    """What the main page shows for the chosen project folder: ``name`` (bold),
+    ``parent_short`` (the muted hint), ``parent`` and ``full`` (the tooltip).
+    Empty ``name`` = no folder chosen = nothing is shown."""
+    name, parent = project_path_parts(path)
+    return {"name": name, "parent": parent, "parent_short": shorten_parent(parent, limit),
+            "full": str(path or "").strip()}
+
+
+# Main page pass 2 (2026-10-08, Julian's decisions on MAIN_PAGE_UI_SUGGESTIONS):
+# the header names the config (no "Config:" prefix) with a muted "saved by"
+# subline and an unsaved marker; Quit launcher moved from the launch bar into
+# Lab Settings; the empty project state leads with one bold sentence.
+QUIT_LAUNCHER_LABEL = "Quit launcher"
+QUIT_LAUNCHER_NOTE = ("Shuts down the launcher. A study you already launched keeps "
+                      "running; the launcher never stops it.")
+UNSAVED_CHANGES_TEXT = "Unsaved changes"
+UNSAVED_SETTINGS_TITLE = "Unsaved settings"
+
+
+def format_saved_date(stamp):
+    """A config's ``created`` stamp as "15 Sep 2026" ("" when unknown)."""
+    if not stamp:
+        return ""
+    try:
+        when = _dt.datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return ""
+    return "%d %s" % (when.day, when.strftime("%b %Y"))
+
+
+def saved_by_line(preset):
+    """"saved by J. Tait · 15 Sep 2026" for a researcher config: who saved it and
+    when (either part alone when the other is unknown); "" for the built-in Lab
+    default (a template, never saved) or when nothing is known."""
+    preset = preset or {}
+    if is_builtin(preset):
+        return ""
+    author = str(preset.get("author", "") or "").strip()
+    date = format_saved_date(preset.get("created"))
+    if author and date:
+        return "saved by %s · %s" % (author, date)
+    if author:
+        return "saved by %s" % author
+    if date:
+        return "saved %s" % date
+    return ""
+
+
+def config_title(preset):
+    """The header title: the config's display name, or "Unsaved settings" for a
+    scratch setup that is not a saved config (``preset`` None)."""
+    return display_name(preset) if preset else UNSAVED_SETTINGS_TITLE
+
+
+def config_subline(preset, dirty):
+    """The muted line under the header title: "Unsaved changes · saved by A ·
+    D" while edited, "Saved by A · D" when clean, "Unsaved changes" for an
+    edited scratch setup, "" when there is nothing to say (the built-in Lab
+    default, unedited). The web page mirrors this in JS (configSubline)."""
+    saved = saved_by_line(preset) if preset else ""
+    if dirty and saved:
+        return UNSAVED_CHANGES_TEXT + " · " + saved
+    if dirty:
+        return UNSAVED_CHANGES_TEXT
+    return (saved[:1].upper() + saved[1:]) if saved else ""
+
+
+def split_lead_sentence(text):
+    """``(lead, rest)``: the first sentence of ``text`` (up to and including its
+    full stop) and whatever follows. The empty project state shows the lead in
+    bold with the actions right under it. A text with one sentence gives
+    ``(text, "")``."""
+    text = str(text or "").strip()
+    match = re.match(r"(.*?[.!?])(?:\s+(.*))?$", text, re.S)
+    if not match:
+        return text, ""
+    return match.group(1), (match.group(2) or "").strip()
 
 
 def admin_summary(config):
