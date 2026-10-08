@@ -3518,7 +3518,8 @@ class LauncherApp(object):
 
         # Project validation: a one-line summary, plus the app packages as a
         # title-cased bullet list when the folder really is an oTree project.
-        level, message = validate_project(cfg["project_path"])
+        level, message = validate_project(cfg["project_path"],
+                                          clone_enabled=self._clone_enabled())
         if level == "ok":
             apps = find_app_packages(cfg["project_path"])
             self.project_status.set("ok",
@@ -3728,6 +3729,12 @@ class LauncherApp(object):
         if btn is not None and str(btn.cget("state")) != "disabled":
             btn.config(text=self._github_button_text())
         if getattr(self, "project_status", None) is not None:
+            # The empty project line names the GitHub organisation only while
+            # the GitHub button shows: keep it in step with the setting.
+            path_var = getattr(self, "var", {}).get("project_path")
+            if path_var is not None and not path_var.get().strip():
+                self.project_status.set(*validate_project(
+                    "", clone_enabled=self._clone_enabled()))
             self._wrap_project_status()
 
     def _set_github_sync(self, enabled, org):

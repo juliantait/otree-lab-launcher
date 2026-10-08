@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.6.3"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -1915,15 +1915,35 @@ def refresh_block(project_path):
 # ---------------------------------------------------------------------------
 
 
-def validate_project(path):
+# The empty project state. With a GitHub organisation set (the clone button is
+# shown, ``github_clone_enabled``) it also points at that button.
+NO_PROJECT_TEXT = "No project folder chosen yet. Click Browse to pick one."
+NO_PROJECT_GITHUB_TEXT = ("No project folder chosen yet. Click Browse to pick one, "
+                          "or download one from your GitHub organisation.")
+
+
+def no_project_message(clone_enabled=None):
+    """The empty project state line. ``clone_enabled`` None = read the GitHub
+    setting (fail-soft: unreadable = no organisation)."""
+    if clone_enabled is None:
+        try:
+            clone_enabled = github_clone_enabled()
+        except Exception:
+            clone_enabled = False
+    return NO_PROJECT_GITHUB_TEXT if clone_enabled else NO_PROJECT_TEXT
+
+
+def validate_project(path, clone_enabled=None):
     """Check that a folder looks like an oTree project.
 
     Returns (level, message) where level is "ok", "warn" or "error".
     A missing folder is an error and blocks launching; anything else only warns.
+    ``clone_enabled`` only shapes the empty-path message (see
+    ``no_project_message``).
     """
     path = (path or "").strip()
     if not path:
-        return "warn", "No project folder chosen yet. Click Browse to pick one."
+        return "warn", no_project_message(clone_enabled)
     if not os.path.isdir(path):
         return "error", "Folder not found: " + path
     if not os.path.isfile(os.path.join(path, "settings.py")):

@@ -249,6 +249,8 @@ def _ui_text():
     each so the static preview reads the same)."""
     return {
         "activity_log_button": core.ACTIVITY_LOG_BUTTON_LABEL,
+        "no_project": core.NO_PROJECT_TEXT,
+        "no_project_github": core.NO_PROJECT_GITHUB_TEXT,
         "pg_blank_password_hint": core.PG_BLANK_PASSWORD_HINT,
         "pg_new_user_password_hint": core.PG_NEW_USER_PASSWORD_HINT,
         "admin_login_note": core.ADMIN_LOGIN_NOTE,

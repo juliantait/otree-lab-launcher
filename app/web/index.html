@@ -1385,7 +1385,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
                detection text) stays LEFT and is never shoved right by the button. -->
           <div class="study-card" id="projDetect">
             <div class="sc-body">
-              <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet.</span></div>
+              <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
               <ul class="bullets" id="appBullets" hidden></ul>
               <ul class="ways" id="projWays" hidden></ul>
               <!-- The automatic update check (once per selected project, in the
@@ -1875,6 +1875,8 @@ function openLogModal(){
    here keep the static preview identical -- a test compares them to core). */
 var UI_TEXT={
   activity_log_button:"See activity log",
+  no_project:"No project folder chosen yet. Click Browse to pick one.",
+  no_project_github:"No project folder chosen yet. Click Browse to pick one, or download one from your GitHub organisation.",
   pg_blank_password_hint:"Leave blank if this Postgres user has no password (e.g. Postgres.app on a Mac, or a trust login).",
   pg_new_user_password_hint:"Optional. Leave blank only if this Postgres lets users in without a password (e.g. Postgres.app on a Mac); on a standard Windows install, set one.",
   github_login_action:"GitHub login…",
@@ -2105,10 +2107,16 @@ function showPathTail(){
 }
 /* Whether a project folder is currently chosen (typed or picked). */
 function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")||"").trim());}
+/* The empty project line, worded by core (core.no_project_message): it names the
+   GitHub organisation only while the GitHub (clone) button is shown. */
+function noProjectText(){
+  var gh=el("githubOrgBtn");
+  return (gh&&!gh.hidden)?UI_TEXT.no_project_github:UI_TEXT.no_project;
+}
 /* The one project STATUS CARD (v1.4.0). It replaces the old loose grey helper
    lines and shows, by state:
-     empty   -> "No project folder chosen yet. Click Browse to pick one." and,
-                only when Org Sync is on, a second line pointing at the org button;
+     empty   -> core's empty line (noProjectText: core.no_project_message, the
+                GitHub variant while the GitHub button shows);
      valid   -> a green line naming the detected project + its app bullets;
      problem -> the red not-an-oTree warning (level warn/err), in this same card.
    The Git pull button (left) is shown whenever Org Sync is on and a folder is
@@ -2122,12 +2130,8 @@ function applyProject(p){
   var msg=el("projStatusMsg"),line=el("projStatus"),bul=el("appBullets");
   var lvl=p.level||"muted";
   var empty=!hasProjectFolder()&&!p.message;
-  if(empty){
-    lvl="muted";
-    msg.textContent="No project folder chosen yet.";
-  }else{
-    msg.textContent=p.message||"No project folder chosen yet.";
-  }
+  if(empty)lvl="muted";
+  msg.textContent=hasProjectFolder()?(p.message||noProjectText()):noProjectText();
   line.className="statusline "+lvl;
   line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
   bul.innerHTML="";
@@ -2143,6 +2147,8 @@ function applyProject(p){
    line and serves both native and browser modes. Bullet 3 (the GitHub
    organisation) appears only when the GitHub org button is itself visible. */
 function renderProjectEmptyWays(){
+  /* The GitHub setting may have changed: keep the empty line in step. */
+  var m=el("projStatusMsg");if(m&&!hasProjectFolder())m.textContent=noProjectText();
   var ways=el("projWays");if(!ways)return;
   var empty=!hasProjectFolder()&&!(lastProject&&lastProject.message);
   if(!empty){ways.hidden=true;ways.innerHTML="";return;}
