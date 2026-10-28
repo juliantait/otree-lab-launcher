@@ -345,10 +345,10 @@ A **GitHub** button now appears next to **Browse**.
 
 A study **picked from the list** is cloned straight away: the list already proved this computer's token can read it. A typed name or a pasted link is checked first (at most 20 s).
 
-**Saves to** shows the folder that will be created. It is already filled in:
-the folder used last time on this computer, and the first time the launcher's
-`local/` folder (a scratch folder git ignores, never touched by updating the
-launcher). **Change…** picks another.
+**Saves to** shows the folder that will be created. It is already filled in,
+every time the dialog opens, with the launcher's `local/` folder (a scratch
+folder git ignores, never touched by updating the launcher). **Change…** picks
+another for that one study; the next time the dialog starts at `local/` again.
 
 The dialog stays open and shows *Checking that `<your-org>/<study-repo>`
 exists…*, then *Cloning…*. **On success it closes and the new folder is selected

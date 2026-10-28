@@ -78,7 +78,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.4"
+APP_VERSION = "1.6.5"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -3136,18 +3136,89 @@ def open_folder(folder, opener=None):
     return {"ok": True, "message": "Opened %s." % folder}
 
 
+def clone_entry_for(folder, path=None):
+    """The newest clone-log entry for the study in ``folder`` (or the
+    repository it sits in), or None when it is not in the log. The folder
+    itself is matched first; git is only asked for the repository's top
+    folder when that finds nothing (so a selected clone costs no subprocess)."""
+    def norm(value):
+        return os.path.normcase(os.path.realpath(str(value or ""))) if value else ""
+    folder = str(folder or "").strip()
+    if not folder:
+        return None
+    entries = read_clone_history(path=path)
+    if not entries:
+        return None
+    wanted = norm(folder)
+    for entry in entries:
+        if norm(entry.get("folder")) == wanted:
+            return entry
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10)
+    top = norm(top) if top else ""
+    if top and top != wanted:
+        for entry in entries:
+            if norm(entry.get("folder")) == top:
+                return entry
+    return None
+
+
 def clone_researcher_for(folder, path=None):
     """Who got the study in ``folder`` (or the repository it was cloned into),
     from the clone log: "" when it is not in the log."""
-    def norm(value):
-        return os.path.normcase(os.path.realpath(str(value or ""))) if value else ""
-    wanted = norm(folder)
-    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) if folder else None
-    tops = {wanted, norm(top) if top else ""} - {""}
-    for entry in read_clone_history(path=path):
-        if norm(entry.get("folder")) in tops:
-            return str(entry.get("researcher") or "")
-    return ""
+    entry = clone_entry_for(folder, path=path)
+    return str((entry or {}).get("researcher") or "")
+
+
+PROJECT_ADDED_BY_TEXT = "added by %s"
+PROJECT_ADDED_BY_TIP = "Got from GitHub (%s) by %s on %s."
+PROJECT_FRESH_COPY_TIP = "Fresh copy of %s from GitHub for %s, %s."
+
+
+def project_added_by(folder, path=None):
+    """Who added the study in ``folder`` through the GitHub dialog, for the
+    project row of both faces::
+
+        {"researcher": "Julian", "line": "added by Julian",
+         "tip": "Got from GitHub (org/repo) by Julian on 1 Oct 2026, 14:05."}
+
+    All three are "" when the folder is not in this computer's clone log (a
+    folder picked with Browse or a pasted path) or the log has no name for it.
+    Fail-soft: a broken log gives the empty answer."""
+    empty = {"researcher": "", "line": "", "tip": ""}
+    try:
+        entry = clone_entry_for(folder, path=path)
+    except Exception:
+        return empty
+    who = str((entry or {}).get("researcher") or "").strip()
+    if not who:
+        return empty
+    org = str(entry.get("org") or "")
+    repo = str(entry.get("repo") or "")
+    name = "%s/%s" % (org, repo) if org else (repo or "a repository")
+    when = str(entry.get("timestamp") or "")
+    try:
+        moment = _dt.datetime.fromisoformat(when)
+        date = "%d %s" % (moment.day, moment.strftime("%b %Y, %H:%M"))
+    except (TypeError, ValueError):
+        date = when or "an unknown date"
+    tip = (PROJECT_FRESH_COPY_TIP if entry.get("fresh_copy") else PROJECT_ADDED_BY_TIP) % (
+        name, who, date)
+    return {"researcher": who, "line": PROJECT_ADDED_BY_TEXT % who, "tip": tip}
+
+
+def suggested_author(extra, project_path="", fallback=""):
+    """The name a Save-as-new config (and the other researcher fields) is
+    prefilled with: whoever added the chosen project folder through the GitHub
+    dialog (the clone log), else the last author used on this computer, else
+    ``fallback`` (the faces pass the OS user name)."""
+    who = ""
+    if str(project_path or "").strip():
+        try:
+            who = clone_researcher_for(project_path)
+        except Exception:
+            who = ""
+    return (who.strip() or str((extra or {}).get("last_author", "") or "").strip()
+            or str(fallback or "").strip())
 
 
 # ---------------------------------------------------------------------------
@@ -4194,6 +4265,27 @@ GIT_FRESH_COPY_LABEL = "Get a fresh copy"
 # The one-click shortcut's line for the same state.
 HEADLESS_UPDATE_PROBLEM = ("A newer version of this study is available on GitHub "
                            "(not downloaded yet).")
+# The one-click shortcut's line when a git study folder could not be compared
+# with its online copy (project_update_status ``unchecked``). A plain folder
+# (not git) never gets it.
+# The one-click shortcut's line when a newer version is online but this folder
+# cannot be moved forward (project_update_status "local_changes": a file edited
+# here also changed online, or commits of its own). Only Launch anyway / Cancel:
+# the shortcut never tries to sort that out itself.
+HEADLESS_LOCAL_CHANGES_PROBLEM = (
+    "A newer version of this study is on GitHub, but this folder has its own "
+    "changes, so it cannot be updated automatically. Sort this out yourself (for "
+    "example with git or in the launcher), then run the shortcut again.")
+HEADLESS_UPDATE_UNCHECKED = "Could not check GitHub for updates (%s)."
+UPDATE_UNCHECKED_REASONS = {
+    "offline": "GitHub could not be reached",
+    "timeout": "GitHub took too long to answer",
+    "no_access": "the GitHub login was not accepted",
+    "no_upstream": "this folder is not linked to a branch on GitHub",
+    "no_git": "git is not installed on this computer",
+    "unreadable": "git could not read this folder",
+    "error": "git reported an error",
+}
 
 
 def _run_git_no_prompt(args, timeout):
@@ -4337,22 +4429,37 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     ``is_repo`` is True for any git working tree (even when the remote cannot be
     reached), so the faces can keep the Git pull button for a repo and hide it for
     a plain folder. The fetch never changes the working files and never prompts.
-    Bounded by ``timeout``; never raises."""
+
+    ``unchecked`` says why a study folder that IS (or clearly was) a git checkout
+    could not be compared with its online copy, one of
+    :data:`UPDATE_UNCHECKED_REASONS` ("" when the check completed, or when there
+    is nothing to compare: a plain folder, a repository with no remote at all).
+    The faces stay quiet about it; only the one-click shortcut names it
+    (:func:`headless_ask_problems`). Bounded by ``timeout``; never raises."""
     folder = str(folder or "").strip()
     out = {"state": UPDATE_STATE_NONE, "is_repo": False, "message": "", "action": "",
            "action_label": "", "behind": 0, "ahead": 0, "dirty": False, "checked": "",
-           "checked_at": 0.0, "files": [], "reason": ""}
+           "checked_at": 0.0, "files": [], "reason": "", "unchecked": ""}
     if not folder or not os.path.isdir(folder):
         return out
     try:
-        if _is_launcher_folder(folder) or not is_git_repo(folder):
+        if _is_launcher_folder(folder):
+            return out
+        if not is_git_repo(folder):
+            # A .git that git cannot use: git is missing, or refuses the folder.
+            if os.path.exists(os.path.join(folder, ".git")):
+                out["unchecked"] = "no_git" if not shutil.which("git") else "unreadable"
             return out
     except Exception:
         return out
     out["is_repo"] = True
     _remote, _branch, url = _upstream_remote(folder)
     if not _remote:
-        return out                       # no upstream branch: nothing to compare with
+        # No upstream branch: nothing to compare with. Worth naming only when the
+        # folder does have a remote (a purely local repository is not "behind").
+        if _git_text(folder, "remote", timeout=10):
+            out["unchecked"] = "no_upstream"
+        return out
     try:
         code, output = _run_git_no_prompt(["-C", folder, "fetch", "--quiet"], timeout)
         if code != 0:   # another token may open it (see git_update_study)
@@ -4360,8 +4467,15 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
                 extra + ["-C", folder, "fetch", "--quiet"], timeout), output)
             if retry is not None:
                 code, output = retry, again
+    except FileNotFoundError:
+        out["unchecked"] = "no_git"
+        return out
+    except subprocess.TimeoutExpired:
+        out["unchecked"] = "timeout"
+        return out
     except (OSError, ValueError, subprocess.SubprocessError):
-        return out                       # git missing / timeout: say nothing
+        out["unchecked"] = "error"
+        return out                       # git missing / timeout: the faces say nothing
     moment = now or _dt.datetime.now()
     stamp = moment.strftime("%H:%M")
     if code != 0:
@@ -4375,13 +4489,16 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
             out.update(state=UPDATE_STATE_NO_ACCESS, message=GIT_NO_ACCESS_TEXT,
                        action="github_login" if github else "",
                        action_label=GITHUB_LOGIN_ACTION_LABEL if github else "",
-                       checked=stamp, checked_at=time.time())
+                       checked=stamp, checked_at=time.time(), unchecked="no_access")
+        else:
+            out["unchecked"] = "offline" if why == "network" else "error"
         return out
     counts = _git_text(folder, "rev-list", "--left-right", "--count", "HEAD...@{u}",
                        timeout=10)
     try:
         ahead, behind = [int(x) for x in (counts or "").split()]
     except ValueError:
+        out["unchecked"] = "error"
         return out
     porcelain = _git_text(folder, "status", "--porcelain", "--untracked-files=no",
                           timeout=10)
@@ -4658,33 +4775,19 @@ def default_clone_parent():
     return path
 
 
-CLONE_PARENT_KEY = "clone_parent"
-
-
 def clone_parent_default():
-    """The folder a clone is saved into unless the user changes it: the folder
-    used LAST time on this computer (machine.json) when it still exists, else
-    the launcher's git-ignored ``local/`` scratch folder. So a clone is: type
-    the name, Enter. "" only when neither is available."""
-    try:
-        last = str(load_machine().get(CLONE_PARENT_KEY) or "").strip()
-    except Exception:
-        last = ""
-    if last and os.path.isdir(last):
-        return last
+    """The folder a clone is saved into unless the user changes it: ALWAYS the
+    launcher's git-ignored ``local/`` scratch folder (:func:`default_clone_parent`).
+    Julian (2026-10-28): the GitHub dialog starts at the DEFAULT folder every
+    time it opens, never the folder used last time, so one researcher's choice
+    does not carry over to the next person on a shared lab PC. A different
+    folder picked inside the dialog counts for that clone only. "" only when
+    local/ cannot be created.
+
+    (Until 2026-10-28 this returned the folder of the last clone, stored in
+    machine.json under ``clone_parent``; that key is no longer read or written
+    and an old value is simply ignored.)"""
     return default_clone_parent()
-
-
-def remember_clone_parent(path):
-    """Remember the parent folder of a successful clone for next time (this
-    computer only). Fail-soft."""
-    path = str(path or "").strip()
-    if not path:
-        return
-    try:
-        update_machine(lambda m: m.__setitem__(CLONE_PARENT_KEY, path))
-    except Exception:
-        pass
 
 
 _GITHUB_LINK_RE = re.compile(
@@ -5783,16 +5886,18 @@ def version_footer_lines():
 # ---------------------------------------------------------------------------
 
 
-def resetdb_command():
-    """`otree resetdb`, exactly as the batch file ran it."""
-    return ["otree", "resetdb"]
+def resetdb_command(otree=None):
+    """`otree resetdb`, exactly as the batch file ran it. ``otree`` is the full
+    path of the command to run instead of the bare ``otree`` (the path a
+    one-click shortcut recorded when it was saved)."""
+    return [otree or "otree", "resetdb"]
 
 
 def _applescript_string(text):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _prodserver_argv(cfg):
+def _prodserver_argv(cfg, otree=None):
     """``["otree", "prodserver"]`` plus the validated port when one is set.
 
     oTree 6's ``prodserver`` takes an optional positional ``addrport`` (a port,
@@ -5801,25 +5906,28 @@ def _prodserver_argv(cfg):
     :func:`launch_port` (the same validated 1..65535 int the port preflight and
     the opened URLs use); a blank/invalid port omits the arg and lets oTree use
     its own default, so this is version-safe (the arg is only ever a bare port).
+    ``otree`` is a full path to run instead of the bare ``otree``.
     """
-    argv = ["otree", "prodserver"]
+    argv = [otree or "otree", "prodserver"]
     port = launch_port(cfg)
     if port is not None:
         argv.append(str(port))
     return argv
 
 
-def macos_shell_script(cfg, project_path, env_pairs):
-    """The shell line that a new macOS Terminal window will run."""
+def macos_shell_script(cfg, project_path, env_pairs, otree=None):
+    """The shell line that a new macOS Terminal window will run. The window
+    gets the login shell's PATH, not ours, so a recorded ``otree`` path is
+    written into the line itself."""
     parts = ["cd " + shlex.quote(project_path)]
     for key, value in env_pairs:
         parts.append("export %s=%s" % (key, shlex.quote(value)))
     parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
-    parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg)))
+    parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg, otree)))
     return "; ".join(parts)
 
 
-def build_server_launch(cfg, project_path, env, platform_name=None):
+def build_server_launch(cfg, project_path, env, platform_name=None, otree=None):
     """How to start `otree prodserver` in a window the researcher can see.
 
     Returns a dict with the command to run, the platform branch that produced
@@ -5827,11 +5935,18 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
     the running of it so both branches can be tested off their own platform.
     The configured port (:func:`launch_port`) is passed to prodserver on every
     platform so the server, the readiness probe and the opened URLs agree.
+
+    ``otree`` (a full path, from a one-click shortcut) is run instead of the
+    bare ``otree`` on macOS and Linux. On Windows the ``cmd /k`` line keeps the
+    bare ``otree``: a quoted path inside it does not survive Python's
+    command-line quoting for cmd, so there the caller puts the command's folder
+    first on ``env``'s PATH (:func:`env_with_otree_first`), which the console
+    inherits.
     """
     platform_name = platform_name or sys.platform
     env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
-    argv = _prodserver_argv(cfg)
-    prodserver = " ".join(argv)  # e.g. "otree prodserver 8000"
+    argv = _prodserver_argv(cfg, otree)
+    prodserver = " ".join(_prodserver_argv(cfg))  # e.g. "otree prodserver 8000"
 
     if platform_name.startswith("win"):
         # cmd /k keeps the console open after the server stops, so the
@@ -5848,7 +5963,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
 
     if platform_name == "darwin":
         script = 'tell application "Terminal"\nactivate\ndo script %s\nend tell' % _applescript_string(
-            macos_shell_script(cfg, project_path, env_pairs)
+            macos_shell_script(cfg, project_path, env_pairs, otree)
         )
         return {
             "kind": "macos",
@@ -5988,7 +6103,61 @@ def sanitize_shortcut_name(name):
     return safe or "config"
 
 
-def headless_shortcut(config_name, launcher_path, platform_name=None):
+# The launcher's private Python environment on the Mac (made by the Start
+# script). It holds certifi only, never oTree or psycopg2, so a shortcut does not
+# record it as the Python to run (see shortcut_python_path).
+LAUNCHER_VENV_DIR = os.path.join(os.path.expanduser("~"), ".otree-lab-launcher-venv")
+
+# Said when a one-click shortcut is saved on a computer where the launcher sees
+# no ``otree`` command: the file is still saved.
+SHORTCUT_OTREE_MISSING_NOTE = (
+    "oTree was not found on this computer, so this shortcut will not launch "
+    "anything until oTree is installed. After installing it, save the shortcut "
+    "again so it remembers where oTree is.")
+
+
+def shortcut_otree_path(env=None):
+    """The full path of the ``otree`` command a launch from the launcher runs
+    right now (the first one on the PATH that :func:`build_env` passes on), to
+    record in a one-click shortcut when it is saved. "" when there is none."""
+    found = otree_command_path(env)
+    return os.path.abspath(found) if found else ""
+
+
+def shortcut_python_path(executable=None, platform_name=None, venv_dir=None):
+    """The Python a one-click shortcut should run the launcher with: the one the
+    launcher itself runs on, or "" to leave it to the PATH as before.
+
+    * Windows: the windowless ``pythonw.exe`` next to the launcher's
+      ``python.exe`` (a shortcut must not open a console); "" when there is no
+      pythonw.exe there.
+    * The launcher's private Mac environment (:data:`LAUNCHER_VENV_DIR`) is
+      never recorded: it holds certifi only, so the database pre-check and the
+      "install oTree for this Python" hint would point at the wrong Python.
+      Those shortcuts keep finding ``python3`` on the PATH.
+    * Anything else: ``sys.executable`` itself.
+
+    The shortcut checks the file still exists when it is clicked and otherwise
+    falls back to the PATH, so a removed Python never breaks it."""
+    platform_name = platform_name or sys.platform
+    exe = sys.executable if executable is None else executable
+    if not exe or not os.path.isfile(exe):
+        return ""
+    exe = os.path.abspath(exe)
+    venv = os.path.normcase(os.path.abspath(venv_dir or LAUNCHER_VENV_DIR))
+    if os.path.normcase(exe).startswith(venv + os.sep):
+        return ""
+    if platform_name.startswith("win"):
+        folder, base = os.path.split(exe)
+        if base.lower() not in ("python.exe", "pythonw.exe"):
+            return ""
+        windowless = os.path.join(folder, "pythonw.exe") if base.lower() == "python.exe" else exe
+        return windowless if os.path.isfile(windowless) else ""
+    return exe
+
+
+def headless_shortcut(config_name, launcher_path, platform_name=None,
+                      otree_path=None, python_path=None):
     """A one-click shortcut that launches a SAVED config with no UI.
 
     Unlike :func:`export_bat_text` (a frozen snapshot that bakes the DB password
@@ -5998,12 +6167,22 @@ def headless_shortcut(config_name, launcher_path, platform_name=None):
     ``presets.json`` and never lands in this file, and the shortcut always
     reflects the latest saved settings.
 
-    Returns ``{"ext", "filename", "content"}``:
+    ``otree_path`` (:func:`shortcut_otree_path`) is passed on as
+    ``--otree "<path>"``: the headless run uses that oTree when the file is
+    still there (else the PATH, as before). ``python_path``
+    (:func:`shortcut_python_path`) is the Python to run the launcher with, when
+    that file still exists at click time; otherwise ``pythonw`` / ``python3``
+    from the PATH, as before. Both left out = the file this function always made.
+
+    Returns ``{"ext", "filename", "content", "otree", "warning"}``:
       - Windows: a ``.vbs`` that runs the launcher under ``pythonw`` with NO
         console window (the same zero-window trick as ``Start ... .vbs``),
         invoked by absolute path.
       - macOS / other: a ``.command`` shell script that runs it with ``python3``
         (a Terminal window is fine on the Mac, matching the mac launcher).
+    ``otree`` is the recorded path ("" for none); ``warning`` is
+    :data:`SHORTCUT_OTREE_MISSING_NOTE` when ``otree_path`` was given as ""
+    (looked for, not found), else "".
 
     The config name and launcher path are the only things written; no database
     password, DATABASE_URL, or admin password is ever put in the file.
@@ -6012,6 +6191,9 @@ def headless_shortcut(config_name, launcher_path, platform_name=None):
     name = str(config_name or "").strip()
     launcher_path = os.path.abspath(launcher_path)
     launcher_dir = os.path.dirname(launcher_path)
+    otree = str(otree_path or "").strip()
+    python = str(python_path or "").strip()
+    warning = SHORTCUT_OTREE_MISSING_NOTE if otree_path is not None and not otree else ""
     # Suggested file NAME only: prefix with "Launch_" so a config "Auction study"
     # is offered as "Launch_Auction study.vbs" (or .command). This changes only
     # the suggested filename -- the shortcut's contents and behaviour are untouched.
@@ -6023,22 +6205,55 @@ def headless_shortcut(config_name, launcher_path, platform_name=None):
         # the real command-line quotes come from Chr(34), so the two never clash.
         v_name = name.replace('"', '""')
         v_path = launcher_path.replace('"', '""')
+        otree_arg = (' & " --otree " & Chr(34) & "%s" & Chr(34)' % otree.replace('"', '""')
+                     if otree else "")
+        if not python:
+            content = "\r\n".join([
+                "' oTree Lab Launcher one-click shortcut.",
+                "' Runs the SAVED config \"%s\" headlessly, with no window." % v_name,
+                "' It calls the launcher under pythonw (no console); the config is read",
+                "' from presets.json at click time, so the DB password is NOT in this file.",
+                "' Generated by %s on %s." % (APP_NAME, stamp),
+                "Option Explicit",
+                "Dim sh",
+                'Set sh = CreateObject("WScript.Shell")',
+                ('sh.Run "pythonw " & Chr(34) & "%s" & Chr(34) & " --run " '
+                 '& Chr(34) & "%s" & Chr(34)%s, 0, False') % (v_path, v_name, otree_arg),
+                "",
+            ])
+            return {"ext": ".vbs", "filename": base + ".vbs", "content": content,
+                    "otree": otree, "warning": warning}
+        v_python = python.replace('"', '""')
         content = "\r\n".join([
             "' oTree Lab Launcher one-click shortcut.",
             "' Runs the SAVED config \"%s\" headlessly, with no window." % v_name,
-            "' It calls the launcher under pythonw (no console); the config is read",
+            "' It calls the launcher under the launcher's own pythonw (no console),",
+            "' or pythonw from the PATH when that file is gone. The config is read",
             "' from presets.json at click time, so the DB password is NOT in this file.",
             "' Generated by %s on %s." % (APP_NAME, stamp),
             "Option Explicit",
-            "Dim sh",
+            "Dim sh, fso, py",
             'Set sh = CreateObject("WScript.Shell")',
-            ('sh.Run "pythonw " & Chr(34) & "%s" & Chr(34) & " --run " '
-             '& Chr(34) & "%s" & Chr(34), 0, False') % (v_path, v_name),
+            'Set fso = CreateObject("Scripting.FileSystemObject")',
+            'py = "pythonw"',
+            'If fso.FileExists("%s") Then py = Chr(34) & "%s" & Chr(34)' % (v_python, v_python),
+            ('sh.Run py & " " & Chr(34) & "%s" & Chr(34) & " --run " '
+             '& Chr(34) & "%s" & Chr(34)%s, 0, False') % (v_path, v_name, otree_arg),
             "",
         ])
-        return {"ext": ".vbs", "filename": base + ".vbs", "content": content}
+        return {"ext": ".vbs", "filename": base + ".vbs", "content": content,
+                "otree": otree, "warning": warning}
 
     # macOS and Linux: a double-clickable .command that finds python3 itself.
+    run_args = "%s --run %s%s" % (shlex.quote(launcher_path), shlex.quote(name),
+                                  (" --otree " + shlex.quote(otree)) if otree else "")
+    own_python = ([
+        "# The Python the launcher ran on when this shortcut was saved, if it is",
+        "# still there; otherwise python3 from the PATH.",
+        "if [ -x %s ]; then" % shlex.quote(python),
+        "  exec %s %s" % (shlex.quote(python), run_args),
+        "fi",
+    ] if python else [])
     content = "\n".join([
         "#!/bin/bash",
         "# oTree Lab Launcher one-click shortcut.",
@@ -6047,16 +6262,18 @@ def headless_shortcut(config_name, launcher_path, platform_name=None):
         "# is NOT stored in this file.",
         "# Generated by %s on %s." % (APP_NAME, stamp),
         "cd %s || exit 1" % shlex.quote(launcher_dir),
+    ] + own_python + [
         'for PY in python3 python; do',
         '  if command -v "$PY" >/dev/null 2>&1; then',
-        '    exec "$PY" %s --run %s' % (shlex.quote(launcher_path), shlex.quote(name)),
+        '    exec "$PY" %s' % run_args,
         "  fi",
         "done",
         'echo "Could not find python3 on this machine."',
         'read -r -p "Press return to close this window. "',
         "",
     ])
-    return {"ext": ".command", "filename": base + ".command", "content": content}
+    return {"ext": ".command", "filename": base + ".command", "content": content,
+            "otree": otree, "warning": warning}
 
 
 
@@ -8650,15 +8867,30 @@ PORT_IN_USE_MESSAGE = ("Port %d is in use: a session is already running on it. S
 # everything else (the shared-database caution, local changes, being offline,
 # info items). A running session on the port is not asked about: it stops the
 # shortcut outright (HEADLESS_SESSION_RUNNING_MESSAGE), as before.
-#   1. a newer version of the study is waiting online (quiet check; offline, not
-#      a repository or a login problem = silent)
+#   1. a newer version of the study is waiting online. Then the box offers a
+#      third choice, Git pull: the same fast-forward pull as the launcher's
+#      button (git_update_study), after which the shortcut starts again from
+#      the top, so every check runs again on the pulled code (2026-10-23).
+#      When the study folder is a git checkout but the check could not finish
+#      (offline, too slow, the login refused, not linked to a branch, git
+#      missing) it says so in one line. A plain folder (not git) = silent.
 #   2. the database cannot be reached
 #   3. the config's saved room is not the lab's default room (a config saved
 #      WITH the lab default follows it and never warns: follow_lab_room)
+# Before any of that, the shortcut stops outright when the ``otree`` command
+# the launch runs cannot be found (HEADLESS_OTREE_MISSING_EXIT).
 HEADLESS_UPDATE_TIMEOUT = 5
 HEADLESS_ASK_TITLE = "oTree Lab Launcher"
 HEADLESS_ASK_QUESTION = "Launch anyway?"
 HEADLESS_CANCELLED_EXIT = 10
+HEADLESS_OTREE_MISSING_EXIT = 11
+# The answers of the three-button box (a newer version online).
+HEADLESS_CHOICE_PULL = "pull"
+HEADLESS_CHOICE_LAUNCH = "launch"
+HEADLESS_CHOICE_CANCEL = "cancel"
+HEADLESS_PULL_BUTTON = "Git pull"
+HEADLESS_LAUNCH_BUTTON = "Launch anyway"
+HEADLESS_CANCEL_BUTTON = "Cancel"
 
 
 def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker=None):
@@ -8676,7 +8908,7 @@ def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker
                 path, timeout=HEADLESS_UPDATE_TIMEOUT))
             found["update"] = checker(c["project_path"].strip())
         except Exception:
-            found["update"] = None
+            found["update"] = {"state": UPDATE_STATE_NONE, "unchecked": "error"}
 
     def check_database():
         try:
@@ -8692,8 +8924,18 @@ def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker
         worker.join(HEADLESS_UPDATE_TIMEOUT + PREFLIGHT_DB_TIMEOUT + 10)
 
     problems = []
-    if (found.get("update") or {}).get("state") == UPDATE_STATE_BEHIND:
+    update_state = (found.get("update") or {}).get("state")
+    if update_state == UPDATE_STATE_BEHIND:
         problems.append(HEADLESS_UPDATE_PROBLEM)
+    elif update_state == UPDATE_STATE_LOCAL_CHANGES:
+        # Newer online, but a pull cannot move this folder forward: say so, no
+        # Git pull choice (headless_run offers it only for HEADLESS_UPDATE_PROBLEM).
+        problems.append(HEADLESS_LOCAL_CHANGES_PROBLEM)
+    else:
+        unchecked = headless_update_unchecked(c["project_path"].strip(),
+                                              found.get("update"))
+        if unchecked:
+            problems.append(unchecked)
     database = found.get("database")
     if database and not database.get("ok"):
         problems.append(str(database.get("message") or "The database cannot be reached."))
@@ -8708,15 +8950,147 @@ def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker
     return problems
 
 
-def headless_ask_text(problems, config_name=""):
-    """The text of the one-click shortcut's question box: every problem on its
-    own line, then "Launch anyway?"."""
+def headless_update_unchecked(folder, status):
+    """The one-click shortcut's line when the update check of a GIT study folder
+    could not finish, else "". ``status`` is :func:`project_update_status`'s
+    answer, or None when the check did not come back in time. A folder that is
+    not a git checkout (and has no ``.git``) never gets a line: whether it is up
+    to date does not matter there."""
+    status = status or None
+    if status is None:
+        code = "timeout" if os.path.exists(os.path.join(str(folder or ""), ".git")) else ""
+    elif status.get("state") == UPDATE_STATE_NO_ACCESS and status.get("is_repo"):
+        code = "no_access"
+    else:
+        code = str(status.get("unchecked") or "")
+        if code and not (status.get("is_repo") or
+                         os.path.exists(os.path.join(str(folder or ""), ".git"))):
+            code = ""
+    if not code:
+        return ""
+    return HEADLESS_UPDATE_UNCHECKED % UPDATE_UNCHECKED_REASONS.get(
+        code, UPDATE_UNCHECKED_REASONS["error"])
+
+
+def _headless_problem_lines(problems, config_name):
     problems = [str(p).strip() for p in problems if str(p).strip()]
     head = ('"%s" has %s to look at first:' % (
         config_name, "something" if len(problems) == 1 else "a few things")
         if config_name else "Before this launch:")
-    lines = [head, ""] + [("• " + p) for p in problems] + ["", HEADLESS_ASK_QUESTION]
-    return "\n".join(lines)
+    return [head, ""] + [("• " + p) for p in problems]
+
+
+def headless_ask_text(problems, config_name=""):
+    """The text of the one-click shortcut's question box: every problem on its
+    own line, then "Launch anyway?"."""
+    return "\n".join(_headless_problem_lines(problems, config_name)
+                     + ["", HEADLESS_ASK_QUESTION])
+
+
+def headless_choice_text(problems, config_name="", windows=False):
+    """The text of the THREE-choice box (a newer version is online): the
+    problems, then one line per button. Windows' message box can only say
+    Yes / No / Cancel, so there the lines say what each of those does."""
+    if windows:
+        legend = ["Yes: Git pull (download the newer version), then launch.",
+                  "No: Launch anyway, with the version on this computer.",
+                  "Cancel: do nothing."]
+    else:
+        legend = ["%s: download the newer version, then launch." % HEADLESS_PULL_BUTTON,
+                  "%s: launch the version on this computer." % HEADLESS_LAUNCH_BUTTON,
+                  "%s: do nothing." % HEADLESS_CANCEL_BUTTON]
+    return "\n".join(_headless_problem_lines(problems, config_name) + [""] + legend)
+
+
+def headless_pull_failed_text(result):
+    """The box after Git pull failed in the one-click shortcut: the plain
+    reason (:func:`git_update_study`), then "Launch anyway?". Git pull only
+    ever moves a folder forward, so the folder is as it was."""
+    reason = str((result or {}).get("reason") or "").strip() or \
+        "Git reported an error."
+    return "\n".join([
+        "Git pull did not work, so the study folder was not changed.", "",
+        reason, "",
+        "Launch anyway starts the version already on this computer.", "",
+        HEADLESS_ASK_QUESTION])
+
+
+def otree_command_path(env=None):
+    """Where the ``otree`` command the launch runs is found: ``resetdb`` and
+    ``prodserver`` are started as a bare ``otree`` (resetdb_command,
+    _prodserver_argv), so this is the first one on the PATH of the environment
+    they get (build_env copies this process's environment). "" when there is
+    none."""
+    env = os.environ if env is None else env
+    return shutil.which("otree", path=env.get("PATH")) or ""
+
+
+def _runnable_file(path):
+    path = str(path or "").strip()
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def headless_otree_command(recorded=""):
+    """The ``otree`` a one-click run starts: the path the shortcut recorded when
+    it was saved (``--otree``) while that file is still there, else "" = the
+    bare ``otree`` from the PATH, exactly as before the path was recorded."""
+    recorded = str(recorded or "").strip()
+    return recorded if _runnable_file(recorded) else ""
+
+
+def env_with_otree_first(env, otree):
+    """A copy of ``env`` with the folder of the ``otree`` command first on its
+    PATH, so whatever the launch starts with that environment (the Windows
+    server console, which runs a bare ``otree``) finds that same command.
+    ``otree`` "" = ``env`` unchanged."""
+    env = dict(env)
+    if not otree:
+        return env
+    folder = os.path.dirname(os.path.abspath(otree))
+    parts = [p for p in str(env.get("PATH") or "").split(os.pathsep) if p]
+    if not parts or os.path.normcase(parts[0]) != os.path.normcase(folder):
+        env["PATH"] = os.pathsep.join([folder] + parts)
+    return env
+
+
+def headless_otree_problem(env=None, python=None, recorded=""):
+    """The one-click shortcut's stop message when the ``otree`` command cannot
+    be found, else "". Names the Python the shortcut ran with and what to do.
+    Checked before anything is written, reset or started. ``recorded`` is the
+    path the shortcut was saved with (``--otree``): when it is still there all
+    is well; when it is gone the PATH is tried, and only when that fails too
+    does the message name the missing path and ask for the shortcut to be saved
+    again."""
+    if headless_otree_command(recorded) or otree_command_path(env):
+        return ""
+    recorded = str(recorded or "").strip()
+    python = python or sys.executable or "python3"
+    try:
+        import importlib.util
+        importable = importlib.util.find_spec("otree") is not None
+    except (ImportError, ValueError):
+        importable = False
+    head = ["oTree was not found, so the one-click shortcut did not start anything.", ""]
+    if recorded:
+        head += ["This shortcut was saved to run oTree from:", recorded,
+                 "That file is not there any more.", ""]
+    head += ["The shortcut ran with this Python:", python]
+    # A recorded path that went missing: after the fix, save the shortcut again
+    # so it records where oTree is now.
+    then = ("then save the one-click shortcut again in the launcher" if recorded
+            else "then run the shortcut again")
+    if importable:
+        return "\n".join(head + [
+            "oTree is installed for it, but its 'otree' command is not on the PATH.", "",
+            "Add the folder that holds the 'otree' command (that Python's Scripts "
+            "or bin folder) to the PATH, %s." % then])
+    # pythonw (the windowless Windows shortcut) shows no pip output: name the
+    # console python next to it for the install line.
+    pip_python = re.sub(r"(?i)pythonw\.exe$", "python.exe", python)
+    return "\n".join(head + [
+        "The 'otree' command was not found on this computer's PATH.", "",
+        "Install oTree for that Python (in a terminal), %s:" % then,
+        '"%s" -m pip install otree' % pip_python])
 
 
 def running_server_problem(config):

@@ -198,9 +198,11 @@ takes the setup.
    - **Get a study.** Click **GitHub**, **pick the study from the list** (the
      organisation's repositories this computer's tokens can see) or type its
      name, **pick your name under Researcher** (required), and press **Enter**. The folder it is saved into is already filled in
-     (the one used last time, else the launcher's git-ignored `local/` folder);
-     **Change…** picks another. On success the dialog closes and the new folder
-     is selected. If something is wrong the dialog **stays open**, says what to
+     (always the launcher's git-ignored `local/` folder, each time the dialog
+     opens); **Change…** picks another for that one study. On success the dialog
+     closes and the new folder is selected, with *added by <your name>* after its
+     name (hover it for the repository and date), and **Save as new config** is
+     prefilled with that name. If something is wrong the dialog **stays open**, says what to
      do in bold, and the button becomes **Retry**: *Check the name, or use
      another GitHub login* (GitHub answers the same way for a repository that
      does not exist and a private one this login cannot see); *Use that folder,
@@ -365,15 +367,43 @@ only closes the launcher: a study you already launched keeps running.
 **What the one-click shortcut checks first.** It has no window, so it only
 stops for the things that matter:
 
+- **oTree is not found**: it stops, names the Python it ran with and says how
+  to install oTree for it, and touches nothing. When you save a shortcut, it
+  **remembers which oTree the launcher would run** (and, on Windows, which
+  Python the launcher runs on), so it uses that same oTree even when it is not
+  on the PATH, for example oTree in a virtual environment. If that oTree is
+  gone later, the shortcut uses the `otree` command on the PATH instead; if
+  there is none either, the box names the oTree that went missing: **install
+  oTree again, then save the shortcut again**. If the launcher finds no oTree
+  at all when you save a shortcut, it still saves it but tells you so: the
+  shortcut will not launch anything until oTree is installed.
 - **A session is already running** (the port is in use): it stops, says so, and
   touches nothing.
-- For exactly three other things it **asks, in one box: "Launch anyway?"** (on a
-  Mac the buttons read *Launch anyway* / *Cancel*; on Windows *Yes* / *No*):
-  **a newer version of the study is available** (the same quiet check as in the
-  launcher; offline, not a git folder or a login problem = no question), **the
-  database cannot be reached**, and **the config's room is not the lab's default
-  room** (the participant computers open the lab's room). Several at once are
-  listed in the same box. **Cancel** changes nothing.
+- For a few other things it **asks, in one box: "Launch anyway?"** (on a Mac the
+  buttons read *Launch anyway* / *Cancel*; on Windows *Yes* / *No*): **the
+  database cannot be reached**, **the config's room is not the lab's default
+  room** (the participant computers open the lab's room), and, when the study
+  folder is a git folder, **"Could not check GitHub for updates"** with the
+  reason (offline, too slow, the login was not accepted, the folder is not
+  linked to a branch on GitHub). A folder that is not a git folder never gets
+  that line. Several at once are listed in the same box. **Cancel** changes
+  nothing.
+- **A newer version of the study is on GitHub**: the box has a third choice,
+  **Git pull**. On a Mac the buttons read *Git pull* / *Launch anyway* /
+  *Cancel*; on Windows they read *Yes* / *No* / *Cancel* and the text says what
+  each does (**Yes = Git pull, then launch**, No = launch the version on this
+  computer, Cancel = do nothing). Git pull downloads the newer version the same
+  way as the launcher's Git pull button (it only moves the folder forward and
+  never touches your own edits), then the shortcut starts again from the top,
+  so every check runs again on the new version, and launches. If the pull does
+  not work (for example a file was changed on this computer and online), the
+  folder stays as it was and a box says why and asks "Launch anyway?".
+- **A newer version is on GitHub, but this folder has its own changes** (a file
+  changed here that also changed online, or commits made on this computer): it
+  cannot be updated automatically, so the box only offers *Launch anyway* /
+  *Cancel* and says so. **Sort it out yourself** (for example with git, or with
+  **Get a fresh copy** in the launcher), then run the shortcut again. Changes of
+  your own with nothing newer online never get a box.
 - Everything else is silent.
 
 **A config saved with the lab's default room follows the lab.** If the lab later

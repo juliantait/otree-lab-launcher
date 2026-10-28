@@ -431,12 +431,12 @@ format_last_run = core.format_last_run
 # ---------------------------------------------------------------------------
 
 
-def resetdb_command():
+def resetdb_command(otree=None):
     """`otree resetdb`, exactly as the batch file ran it.
 
     De-duplicated: the exact resetdb argv lives once in core.
     """
-    return core.resetdb_command()
+    return core.resetdb_command(otree)
 
 
 def _prodserver_argv(cfg):
@@ -455,7 +455,7 @@ def macos_shell_script(cfg, project_path, env_pairs):
     return core.macos_shell_script(cfg, project_path, env_pairs)
 
 
-def build_server_launch(cfg, project_path, env, platform_name=None):
+def build_server_launch(cfg, project_path, env, platform_name=None, otree=None):
     """How to start `otree prodserver` in a window the researcher can see.
 
     De-duplicated: the per-platform launch spec (Windows ``cmd /k``, macOS
@@ -465,7 +465,7 @@ def build_server_launch(cfg, project_path, env, platform_name=None):
     three platforms), so the configured port and env still reach prodserver the
     same way on every platform.
     """
-    return core.build_server_launch(cfg, project_path, env, platform_name)
+    return core.build_server_launch(cfg, project_path, env, platform_name, otree)
 
 
 # ---------------------------------------------------------------------------
@@ -574,10 +574,11 @@ def _hlog(msg):
         pass
 
 
-def _headless_resetdb(path, env):
+def _headless_resetdb(path, env, otree=None):
     """Run ``otree resetdb`` (answering the y) and stream its output. Returns the
-    exit code, or ``None`` if it could not be started."""
-    command = resetdb_command()
+    exit code, or ``None`` if it could not be started. ``otree`` = the full path
+    the shortcut recorded (None = the bare ``otree`` on the PATH)."""
+    command = resetdb_command(otree)
     _hlog("$ " + " ".join(command) + '     (answering "y" on stdin)')
     kwargs = {}
     if sys.platform.startswith("win"):
@@ -603,12 +604,13 @@ def _headless_resetdb(path, env):
     return process.wait()
 
 
-def _headless_start_server(cfg, path, env):
+def _headless_start_server(cfg, path, env, otree=None):
     """Start ``otree prodserver`` in its own terminal, exactly as the GUI does
     (via build_server_launch). Returns ``(ok, process)``: ``ok`` is True on a
     successful spawn; ``process`` is the linux-background child (so the caller can
-    surface an early exit) or None on the terminal paths / on failure."""
-    spec = build_server_launch(cfg, path, env)
+    surface an early exit) or None on the terminal paths / on failure.
+    ``otree`` = the full path the shortcut recorded (None = the PATH's)."""
+    spec = build_server_launch(cfg, path, env, otree=otree)
     _hlog("Starting the server in a %s." % spec["description"])
     _hlog("$ " + " ".join(spec["cmd"][:2]) + (" ..." if len(spec["cmd"]) > 2 else ""))
     kwargs = {"cwd": path, "env": env}
@@ -682,7 +684,63 @@ def _ask_headless_launch_anyway(text):
     return True
 
 
-def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
+def _ask_headless_update_choice(problems, config_name):
+    """The one-click shortcut's THREE-choice box, shown when a newer version of
+    the study is online: Git pull (then launch) / Launch anyway / Cancel.
+    Returns core.HEADLESS_CHOICE_PULL / _LAUNCH / _CANCEL.
+
+    macOS: an alert with the three named buttons (Cancel is the default).
+    Windows: MessageBoxW can only label its buttons Yes / No / Cancel, so the
+    text says what each one does (Yes = Git pull, then launch; No = Launch
+    anyway; Cancel = do nothing) and Cancel is the default button. A
+    TaskDialog could carry real labels, but it needs the version 6 common
+    controls, which python.exe / pythonw.exe do not load without a manifest:
+    too fragile for a box that must always appear. Anywhere else there is no
+    way to ask: the launch goes ahead as before (never a pull nobody chose).
+    Never raises."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+            # MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON3 | MB_SETFOREGROUND
+            answer = ctypes.windll.user32.MessageBoxW(
+                0, core.headless_choice_text(problems, config_name, windows=True),
+                core.HEADLESS_ASK_TITLE, 0x03 | 0x30 | 0x200 | 0x10000)
+            return {6: core.HEADLESS_CHOICE_PULL,             # IDYES
+                    7: core.HEADLESS_CHOICE_LAUNCH}.get(      # IDNO
+                        answer, core.HEADLESS_CHOICE_CANCEL)
+        if sys.platform == "darwin":
+            script = ('display alert %s message %s as warning buttons {%s, %s, %s} '
+                      'default button %s cancel button %s'
+                      % (core._applescript_string(core.HEADLESS_ASK_TITLE),
+                         core._applescript_string(
+                             core.headless_choice_text(problems, config_name)),
+                         core._applescript_string(core.HEADLESS_CANCEL_BUTTON),
+                         core._applescript_string(core.HEADLESS_LAUNCH_BUTTON),
+                         core._applescript_string(core.HEADLESS_PULL_BUTTON),
+                         core._applescript_string(core.HEADLESS_CANCEL_BUTTON),
+                         core._applescript_string(core.HEADLESS_CANCEL_BUTTON)))
+            result = subprocess.run(["osascript", "-e", script],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            output = result.stdout.decode("utf-8", "replace") \
+                if isinstance(result.stdout, (bytes, bytearray)) else str(result.stdout or "")
+            if result.returncode != 0:
+                return core.HEADLESS_CHOICE_CANCEL
+            if core.HEADLESS_PULL_BUTTON in output:
+                return core.HEADLESS_CHOICE_PULL
+            if core.HEADLESS_LAUNCH_BUTTON in output:
+                return core.HEADLESS_CHOICE_LAUNCH
+            return core.HEADLESS_CHOICE_CANCEL
+    except Exception:
+        return core.HEADLESS_CHOICE_LAUNCH
+    return core.HEADLESS_CHOICE_LAUNCH
+
+
+# headless_run's signal to start the whole flow again (after a Git pull).
+_HEADLESS_RESTART = object()
+
+
+def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
+                 choose=None, puller=None, otree_check=None, otree_path=None):
     """Launch a SAVED config by name with no UI. Returns a process exit code.
 
     ``0`` means the server was started and the dashboard was opened. A missing
@@ -691,10 +749,54 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
     ``9`` means a session is already running on the launch port, so nothing was
     reset or started (core.running_server_problem). ``10`` means the user chose
     Cancel in the question box (core.headless_ask_problems: a newer version of
-    the study online, the database not reachable, the room not the lab default).
-    ``ask(text) -> bool`` and ``problem_finder(cfg, lab_presets) -> [text]`` are
-    test seams.
+    the study online, the update check of a git folder could not finish, the
+    database not reachable, the room not the lab default). ``11`` means the
+    ``otree`` command the launch runs was not found (nothing touched).
+
+    When a newer version is online the box has a third choice, Git pull: the
+    same fast-forward pull as the launcher's button (core.git_update_study).
+    After a pull that worked the flow starts again from the top IN THIS PROCESS
+    (every check runs again on the pulled code; at most one pull per run). A
+    re-exec'd child would be cut off from the Mac GUI session, which is why the
+    launcher's own self-update stopped relaunching itself. A pull that fails
+    changes nothing and falls back to Launch anyway / Cancel.
+
+    Test seams: ``ask(text) -> bool`` (the two-choice box), ``choose(problems,
+    name) -> "pull" | "launch" | "cancel"`` (the three-choice box; when only
+    ``ask`` is given, it answers that box as Launch anyway / Cancel),
+    ``problem_finder(cfg, lab_presets) -> [text]``, ``puller(folder) -> dict``
+    and ``otree_check() -> message``.
+
+    ``otree_path`` is the ``otree`` command the shortcut recorded when it was
+    saved (``--otree``). While that file exists, resetdb and prodserver run it
+    (and its folder goes first on the PATH they get); when it is gone the
+    ``otree`` on the PATH is used, as for a shortcut saved before the path was
+    recorded. With neither, exit 11 names the missing path.
     """
+    pulled = False
+    while True:
+        code = _headless_run_once(config_name, store_path, ask, problem_finder,
+                                  choose, puller, otree_check, allow_pull=not pulled,
+                                  otree_path=otree_path)
+        if code is not _HEADLESS_RESTART:
+            return code
+        pulled = True
+        _hlog("Starting the one-click launch again on the pulled version.")
+
+
+def _headless_run_once(config_name, store_path, ask, problem_finder, choose, puller,
+                       otree_check, allow_pull=True, otree_path=None):
+    """One pass of :func:`headless_run`: an exit code, or _HEADLESS_RESTART
+    after a Git pull that worked."""
+    # oTree itself first: resetdb and prodserver run the ``otree`` command on
+    # this PATH. Without it nothing is touched (not even the data folder).
+    recorded = str(otree_path or "").strip()
+    missing = (otree_check or (lambda: core.headless_otree_problem(recorded=recorded)))()
+    if missing:
+        _hlog("ERROR: " + missing.replace("\n", " ").replace("  ", " "))
+        return core.HEADLESS_OTREE_MISSING_EXIT
+    # The recorded oTree while it is there, else the bare ``otree`` (PATH).
+    otree = core.headless_otree_command(recorded) or None
     # Upgrade an old data folder first (same startup step as the GUI). A data
     # folder written by a NEWER launcher is refused: exit code 8.
     storage = core.prepare_storage()
@@ -758,6 +860,12 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
         _hlog("ERROR: the config's project folder does not exist: %r" % path)
         return 3
     _hlog("Project folder: %s" % path)
+    if otree:
+        _hlog("oTree: %s (recorded in the shortcut)" % otree)
+    elif recorded:
+        _hlog("NOTE: the oTree recorded in the shortcut is not there any more (%s); "
+              "using the 'otree' command on the PATH. Save the shortcut again to "
+              "record the new one." % recorded)
 
     # 0. A server already answering on the launch port = a session is running.
     #    Refuse BEFORE the seat file or the database is touched (N1): a relaunch
@@ -782,8 +890,28 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
     if problems:
         for problem in problems:
             _hlog("ASK: %s" % problem)
-        if not (ask or _ask_headless_launch_anyway)(
-                core.headless_ask_text(problems, wanted)):
+        if allow_pull and core.HEADLESS_UPDATE_PROBLEM in problems and (
+                choose is not None or ask is None):
+            # A newer version online: Git pull / Launch anyway / Cancel.
+            choice = (choose or _ask_headless_update_choice)(problems, wanted)
+        else:
+            choice = (core.HEADLESS_CHOICE_LAUNCH
+                      if (ask or _ask_headless_launch_anyway)(
+                          core.headless_ask_text(problems, wanted))
+                      else core.HEADLESS_CHOICE_CANCEL)
+        if choice == core.HEADLESS_CHOICE_PULL:
+            _hlog("Git pull was chosen: running git pull in %s" % path)
+            result = (puller or core.git_update_study)(path)
+            if result.get("ok"):
+                _hlog(result.get("message") or "Git pull worked.")
+                return _HEADLESS_RESTART
+            _hlog("Git pull failed: %s" % (result.get("reason") or result.get("message")))
+            # Nothing was changed: the folder only ever moves forward.
+            choice = (core.HEADLESS_CHOICE_LAUNCH
+                      if (ask or _ask_headless_launch_anyway)(
+                          core.headless_pull_failed_text(result))
+                      else core.HEADLESS_CHOICE_CANCEL)
+        if choice != core.HEADLESS_CHOICE_LAUNCH:
             _hlog("Cancelled before launching: nothing was reset or started.")
             return core.HEADLESS_CANCELLED_EXIT
         _hlog("Launch anyway was chosen.")
@@ -798,12 +926,15 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
 
     # 2. Resolve the environment (DATABASE_URL, admin/auth, room + label file).
     env = build_env(cfg, label_file=label_file)
+    # The recorded oTree's folder first on the PATH, so anything started with
+    # this env (the Windows server console runs a bare ``otree``) finds it too.
+    env = core.env_with_otree_first(env, otree)
     keys = launcher_env_keys(cfg, label_file=label_file)
     _hlog(core.env_log_line(keys, env))
 
     # 3. Reset the database if the config asks for it.
     if cfg["resetdb"]:
-        code = _headless_resetdb(path, env)
+        code = _headless_resetdb(path, env, otree)
         if code is None:
             return 5
         if code != 0:
@@ -816,7 +947,7 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None):
 
     # 4. Start the server in its own terminal window (the wanted Launch terminal).
     server_start = time.monotonic()
-    ok, server_proc = _headless_start_server(cfg, path, env)
+    ok, server_proc = _headless_start_server(cfg, path, env, otree)
     if not ok:
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
@@ -898,6 +1029,18 @@ def _cli_config_name(argv):
     return None
 
 
+def _cli_otree_path(argv):
+    """The path after ``--otree`` (the oTree a one-click shortcut recorded when
+    it was saved), or "" when the shortcut has none (saved before 2026-10-23).
+    Accepts ``--otree "<path>"`` and ``--otree=<path>``."""
+    for index, token in enumerate(argv):
+        if token == "--otree":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--otree="):
+            return token[len("--otree="):]
+    return ""
+
+
 def _notify_headless_failure(message):
     """Show ONE native message box on a headless one-click failure, so a
     windowless (pythonw) shortcut failure is not silent (fable review item 9).
@@ -935,8 +1078,9 @@ if __name__ == "__main__":
     _install_crash_log()
     _run_name = _cli_config_name(sys.argv[1:])
     if _run_name is not None:
+        _otree_path = _cli_otree_path(sys.argv[1:])
         try:
-            _code = headless_run(_run_name)
+            _code = headless_run(_run_name, otree_path=_otree_path)
         except SystemExit:
             raise
         except Exception as exc:  # noqa: BLE001 - report, don't vanish silently
@@ -949,6 +1093,11 @@ if __name__ == "__main__":
         if _code == 9:
             # A session already answers on the launch port: say exactly that.
             _notify_headless_failure(core.HEADLESS_SESSION_RUNNING_MESSAGE)
+        elif _code == core.HEADLESS_OTREE_MISSING_EXIT:
+            # The otree command the launch runs is missing: say which Python ran.
+            _notify_headless_failure(core.headless_otree_problem(recorded=_otree_path) or
+                                     "oTree was not found, so the one-click "
+                                     "shortcut did not start anything.")
         elif _code == core.HEADLESS_CANCELLED_EXIT:
             pass      # the user chose Cancel in the question box: nothing to report
         elif _code != 0:
@@ -1491,19 +1640,45 @@ class ProjectPathSummary(tk.Frame):
                              font=fonts.bold, anchor="w")
         self.parent = tk.Label(self, text="", bg=COLORS["card"], fg=COLORS["muted"],
                                font=fonts.small, anchor="w")
+        # "· added by Julian": who got this folder through the GitHub dialog
+        # (core.project_added_by, from the clone log); empty for Browse / a
+        # pasted path. Looked up when the path is written (_added_for caches it
+        # for resizes and the tooltip).
+        self.who = tk.Label(self, text="", bg=COLORS["card"], fg=COLORS["faint"],
+                            font=fonts.small, anchor="w")
+        self._added_for = (None, {"line": "", "tip": ""})
         self.name.pack(side="left", pady=3)
         self.parent.pack(side="left", padx=(8, 0), pady=3)
+        self.who.pack(side="left", padx=(6, 0), pady=3)
         self.tooltip = Tooltip(self, self._tooltip_text)
-        for widget in (self, self.name, self.parent):
+        for widget in (self, self.name, self.parent, self.who):
             self.tooltip.attach(widget)
             widget.bind("<Double-Button-1>", self._copy)
         self.bind("<Configure>", lambda _e: self.render())
-        variable.trace_add("write", lambda *_a: self.render())
+        # Every write of the path looks the clone log up again (a folder set
+        # right after its clone, or set again, shows the fresh name); a resize
+        # only re-renders from the cache.
+        variable.trace_add("write", lambda *_a: self._refresh_added())
         self.render()
+
+    def _refresh_added(self):
+        self._added_for = (None, {"line": "", "tip": ""})
+        self.render()
+
+    def added_by(self):
+        """core.project_added_by for the shown folder, cached per path."""
+        path = self.var.get().strip()
+        if self._added_for[0] != path:
+            self._added_for = (path, core.project_added_by(path) if path
+                               else {"line": "", "tip": ""})
+        return self._added_for[1]
 
     def _tooltip_text(self):
         path = self.var.get().strip()
-        return (path + "\n(double-click to copy)") if path else ""
+        if not path:
+            return ""
+        tip = self.added_by()["tip"]
+        return path + ("\n" + tip if tip else "") + "\n(double-click to copy)"
 
     def _copy(self, _event=None):
         path = self.var.get().strip()
@@ -1516,12 +1691,17 @@ class ProjectPathSummary(tk.Frame):
         if not shown["name"]:
             self.name.configure(text="")
             self.parent.configure(text="")
+            self.who.configure(text="")
             return
         self.name.configure(text=shown["name"])
+        line = self.added_by()["line"]
+        who = ("· " + line) if line else ""
+        self.who.configure(text=who)
         # core cuts the hint with "…"; "..." where the font cannot draw it (S11).
         hint = shown["parent_short"].replace("…", glyph_or_fallback("…", "..."))
         # The hint gives way before the name: cut from the front to the room left.
-        room = self.winfo_width() - self.fonts.bold.measure(shown["name"]) - 14
+        room = (self.winfo_width() - self.fonts.bold.measure(shown["name"]) - 14
+                - (self.fonts.small.measure(who) + 14 if who else 0))
         if hint and self.winfo_width() > 1 and self.fonts.small.measure(hint) > room:
             low, high = 0, len(hint)
             while low < high:
@@ -2207,6 +2387,10 @@ class LauncherApp(object):
         self.shortcut_button.pack(side="right", padx=(8, 0))
         self.subline = tk.Label(header, text="", bg=COLORS["window"], fg=COLORS["muted"],
                                 font=self.fonts.small, anchor="w")
+        # ALWAYS packed (2026-10-28): an empty label keeps its one line, so the
+        # header does not change height (and the page under it does not jump)
+        # between a saved config ("Saved by ...") and the Lab default (no line).
+        self.subline.pack(side="top", fill="x")
         self.shortcut_tooltip = Tooltip(
             self.shortcut_button, lambda: core.ui_tip("one_click_shortcut"), delay=250)
         self.shortcut_tooltip.attach(self.shortcut_button)
@@ -3796,12 +3980,8 @@ class LauncherApp(object):
             self.dirty_dot.pack(side="left", padx=(7, 0), after=self.subtitle)
         else:
             self.dirty_dot.pack_forget()
-        text = core.config_subline(preset, edited)
-        self.subline.configure(text=text)
-        if text:
-            self.subline.pack(side="top", fill="x")
-        else:
-            self.subline.pack_forget()
+        # The subline stays packed even when empty, so the header keeps its height.
+        self.subline.configure(text=core.config_subline(preset, edited))
 
     def _needs_save(self):
         """True when the on-screen setup is not a saved, named config: a brand-new
@@ -4341,7 +4521,6 @@ class LauncherApp(object):
         self.github_org_btn.config(state="normal", text=self._github_button_text())
         if result.get("ok") and result.get("path"):
             path = os.path.normpath(result["path"])
-            core.remember_clone_parent(os.path.dirname(path))   # prefilled next time
             self.var["project_path"].set(path)
             level, message = validate_project(path)
             self.log(result.get("message") or ("Cloned into %s." % path), "ok")
@@ -4521,9 +4700,12 @@ class LauncherApp(object):
         """Save the on-screen settings as a new config. ``on_success`` (used by
         the save-and-launch flow) is called only after a successful save."""
         suggestion = ""
-        # Prefill the Researcher field with the last author used on this machine
-        # (remembered across sessions in store_extra), else the OS username.
-        author = str(self.store_extra.get("last_author", "")).strip() or default_author()
+        # Prefill the Researcher field with whoever added the chosen project
+        # folder through the GitHub dialog (the clone log), else the last author
+        # used on this machine (store_extra), else the OS username
+        # (core.suggested_author; the web Save-as uses the same rule).
+        author = core.suggested_author(self.store_extra, self.var["project_path"].get(),
+                                       default_author())
         if self.selected_index is not None:
             suggestion = self.presets[self.selected_index].get("name", "") + " (copy)"
         dialog = NameDialog(self.root, self.fonts, suggestion,
@@ -4889,7 +5071,11 @@ class LauncherApp(object):
                      "one-click shortcut.", "warn")
             return
         name = self.presets[self.selected_index].get("name", "config")
-        shortcut = core.headless_shortcut(name, os.path.abspath(__file__))
+        # Record the oTree a launch from here runs (and this Python), so the
+        # shortcut runs the same one even when the PATH differs at click time.
+        shortcut = core.headless_shortcut(
+            name, os.path.abspath(__file__), otree_path=core.shortcut_otree_path(),
+            python_path=core.shortcut_python_path())
         # Default suggested filename: the "Launch_"-prefixed name from core
         # (e.g. MyStudy -> Launch_MyStudy.vbs), matching the web app. Only the
         # SUGGESTION changes -- the user can still rename it, and the shortcut's
@@ -4920,6 +5106,11 @@ class LauncherApp(object):
         self.log("Saved one-click shortcut: %s" % target, "ok")
         self.log('Double-click it to launch the saved config "%s". The database '
                  "password is not stored in the file." % name, "muted")
+        if shortcut.get("warning"):
+            # Saved anyway: it starts working once oTree is installed.
+            self.log(shortcut["warning"], "warn")
+            messagebox.showwarning("Shortcut saved, but oTree was not found",
+                                   shortcut["warning"], parent=self.root)
 
     # -- Lab Settings (admin config + lab presets, Feature 4) --------------
 

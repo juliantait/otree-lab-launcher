@@ -315,7 +315,12 @@ def project_status(path):
     if level == "ok" and apps:
         message = "Looks like an oTree project with settings.py and %d app package%s:" % (
             len(apps), "" if len(apps) == 1 else "s")
+    # Who added this folder through the GitHub dialog (this computer's clone
+    # log): "added by Julian" after the folder name, the details in its tip.
+    # Empty for a folder picked with Browse or a pasted path.
+    added = core.project_added_by(path) if path else {"line": "", "tip": ""}
     return {"level": level, "message": message, "name": name, "apps": apps,
+            "added_by": added["line"], "added_by_tip": added["tip"],
             # Whether the Git pull button applies to this folder (a git working
             # tree that is not the launcher's own; since 2026-10-01 whatever the
             # GitHub Organisation Sync setting): the page hides the button for a
@@ -1331,11 +1336,13 @@ class Api(object):
                 "fields": core.database_config_fields(entry)}
 
     @api_call
-    def list_researchers(self):
+    def list_researchers(self, project_path=""):
         """The shared researcher roster (Round 3, Task 2): the same list that
         feeds Save-as-new's author field AND the create-database Researcher
-        field. ``suggested`` prefills the last author used."""
-        suggested = str(self.store_extra.get("last_author", "")).strip() or self._default_author()
+        field. ``suggested`` prefills whoever added ``project_path`` through the
+        GitHub dialog, else the last author used (core.suggested_author)."""
+        suggested = core.suggested_author(self.store_extra, project_path,
+                                          self._default_author())
         return {"ok": True,
                 "researchers": core.list_researchers(self.store_extra, self.presets),
                 "suggested": suggested}
@@ -1722,7 +1729,6 @@ class Api(object):
                 "pywOnCloneProgress", {"phase": phase, "org": org, "repo": repo}))
         if result.get("ok") and result.get("path"):
             path = result["path"]
-            core.remember_clone_parent(dest)      # prefilled next time (this PC)
             try:   # a new name joins the shared researcher roster, as elsewhere
                 self._mutate_store(lambda: core.add_researcher(self.store_extra, researcher))
             except Exception:
@@ -1735,8 +1741,8 @@ class Api(object):
     @api_call
     def clone_dialog_state(self):
         """What the clone dialog opens with: the folder a clone is saved into
-        (the one used last time on this computer, else local/) and the
-        organisation."""
+        (ALWAYS the default local/ folder, never the last one used:
+        core.clone_parent_default), the organisation and the researcher roster."""
         return {"ok": True, "parent": core.clone_parent_default(),
                 "org": core.load_github_org(),
                 "researchers": core.list_researchers(self.store_extra, self.presets),
@@ -2452,19 +2458,25 @@ class Api(object):
         # an absolute path next to this file (both apps ship in the same folder).
         launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "otree_lab_launcher.py")
-        shortcut = core.headless_shortcut(name, launcher_path)
+        # Record the oTree a launch from here runs (and this Python), so the
+        # shortcut runs the same one even when the PATH differs at click time.
+        shortcut = core.headless_shortcut(
+            name, launcher_path, otree_path=core.shortcut_otree_path(),
+            python_path=core.shortcut_python_path())
+        # Saved anyway when oTree is missing; the page says so after the save.
+        warning = shortcut.get("warning", "")
         # Browser mode: no native Save dialog -> hand the file back to the page,
         # which downloads it through the browser. (A .command still needs a
         # `chmod +x` afterwards, which the page notes; a Windows .bat does not.)
         if getattr(self, "browser_mode", False):
             return {"ok": True, "browser": True, "download": True,
                     "filename": shortcut["filename"], "ext": shortcut["ext"],
-                    "content": shortcut["content"]}
+                    "content": shortcut["content"], "warning": warning}
         self._spawn(lambda: self._dialog_export(shortcut["content"], shortcut["filename"],
-                                                shortcut["ext"]), "dlg-export")
-        return {"ok": True, "pending": True}
+                                                shortcut["ext"], warning), "dlg-export")
+        return {"ok": True, "pending": True, "warning": warning}
 
-    def _dialog_export(self, text, default_name, ext=".bat"):
+    def _dialog_export(self, text, default_name, ext=".bat", warning=""):
         import webview
         try:
             result = self.window.create_file_dialog(
@@ -2481,7 +2493,8 @@ class Api(object):
             return
         written = self._write_export_file(path, text)
         if written.get("ok"):
-            self._callback("pywOnBatResult", {"ok": True, "path": written["path"]})
+            self._callback("pywOnBatResult", {"ok": True, "path": written["path"],
+                                              "warning": warning})
         else:
             self._callback("pywOnBatResult",
                            {"ok": False, "message": written.get("message", "Save failed.")})

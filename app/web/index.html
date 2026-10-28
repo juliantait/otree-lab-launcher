@@ -317,8 +317,11 @@ body{
 .main-head .htext{margin-right:auto;min-width:0}
 .main-head h1{margin:0;font-size:20px;font-weight:650;color:var(--text-strong);letter-spacing:-.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.main-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.main-head .sub:empty{display:none}
+/* The subline ALWAYS keeps its line (2026-10-28): the Lab default has nothing
+   to say there, and hiding the empty line made the header (and everything under
+   it) jump up and down when clicking between saved configs. */
+.main-head .sub{margin:3px 0 0;font-size:12.5px;line-height:18px;min-height:18px;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Header (S2, 2026-10-08): the title is the config NAME (no "Config:" prefix),
    an amber dot after it while there are unsaved changes, and the muted subline
    says who saved it and when (core.config_subline / configSubline). */
@@ -394,6 +397,10 @@ body{
 .pp-parent{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   flex:0 4 auto;min-width:0}   /* when the row is tight the hint gives way before the name */
 .pp-parent[hidden]{display:none}
+/* "added by Julian": who got this folder through the GitHub dialog (clone log). */
+.pp-who{font-size:11.5px;color:var(--faint);white-space:nowrap;flex:0 0 auto}
+.pp-who[hidden]{display:none}
+.pathrow .pp-tip .pp-added{display:block;margin-top:4px;font-family:var(--sans);color:var(--muted)}
 .pathrow .pp-tip{width:max-content;max-width:min(480px,72vw);top:calc(100% + 4px);
   font-family:var(--mono);color:var(--text);overflow-wrap:anywhere;white-space:normal}
 /* an invisible bridge over the gap, so the tip stays open while the pointer
@@ -1446,7 +1453,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <div class="pathrow" id="pathRow">
             <span class="info-wrap tip-host pp-wrap" id="projPathWrap" hidden>
               <span class="pp-chip" id="projPathChip" tabindex="0" aria-describedby="projPathTip">
-                <span class="pp-name" id="projPathName"></span><span class="pp-parent" id="projPathParent"></span>
+                <span class="pp-name" id="projPathName"></span><span class="pp-parent" id="projPathParent"></span><span class="pp-who" id="projPathWho" hidden></span>
               </span>
               <span class="info-tip pp-tip" role="tooltip" id="projPathTip"></span>
             </span>
@@ -2073,7 +2080,8 @@ window.pywOnProjectPicked=function(p){if(!p||!p.path)return;
   maybeOfferGetReady(p.settings);};
 window.pywOnFilePicked=function(p){if(!p||!p.path)return;currentSeatFile=p.path;setSeatFilePath(p.path);};
 window.pywOnBatResult=function(r){if(!r)return;
-  if(r.ok)window.pywStatus("ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file.");
+  /* No oTree found when saving: still saved, but the line turns amber and says so. */
+  if(r.ok)window.pywStatus(r.warning?"warn":"ok","Saved one-click shortcut: "+r.path+". Double-click it to launch this saved config; the database password is not stored in the file."+(r.warning?" "+r.warning:""));
   else if(r.message)window.pywStatus("err",r.message);};
 window.pywOnShortcutsResult=function(r){pcShortcutsResult(r);};
 /* GitHub Organisation Sync: the background clone finished. On success auto-select
@@ -2229,7 +2237,7 @@ function lastConfigDisplay(name){
 /* ======================================================================
    CARD 1: oTree project
    ====================================================================== */
-function setPath(p){shownProjectPath=p||"";var i=el("projPathInput");if(i){i.value=shownProjectPath;i.title=shownProjectPath;showPathTail();}renderPathChip();updateProjectGitPull();updateDirtyState();}
+function setPath(p){if((p||"")!==shownProjectPath){projectAddedBy="";projectAddedTip="";}shownProjectPath=p||"";var i=el("projPathInput");if(i){i.value=shownProjectPath;i.title=shownProjectPath;showPathTail();}renderPathChip();updateProjectGitPull();updateDirtyState();}
 /* A long path shows its END (the folder name) while the box is not focused. */
 function showPathTail(){
   var i=el("projPathInput");if(!i||document.activeElement===i)return;
@@ -2272,6 +2280,9 @@ function projectPathDisplay(path){
    chosen and the field is closed; the text field while it is open; only the
    actions otherwise. shownProjectPath is what setPath last put on screen. */
 var shownProjectPath="",pathEditing=false;
+/* Who added the shown folder through the GitHub dialog (project_status
+   added_by / added_by_tip, from core.project_added_by); "" otherwise. */
+var projectAddedBy="",projectAddedTip="";
 function renderPathChip(){
   var wrap=el("projPathWrap"),pen=el("projPathEdit"),input=el("projPathInput");
   if(!wrap||!pen||!input)return;
@@ -2282,7 +2293,9 @@ function renderPathChip(){
   if(!show)return;
   el("projPathName").textContent=d.name;
   var par=el("projPathParent");par.textContent=d.parent_short;par.hidden=!d.parent_short;
+  var who=el("projPathWho");if(who){who.textContent=projectAddedBy?"· "+projectAddedBy:"";who.hidden=!projectAddedBy;}
   el("projPathTip").innerHTML='<span class="pp-full">'+escapeHtml(d.full)+'</span>'+
+    (projectAddedTip?'<span class="pp-added">'+escapeHtml(projectAddedTip)+'</span>':'')+
     '<button type="button" class="link pp-copy" onclick="copyProjectPath(this)">Copy</button>';
 }
 /* The pen (and the empty state's "paste the full path" link): show the text
@@ -2329,6 +2342,7 @@ var lastProject=null;
 function applyProject(p){
   lastProject=p=p||{};
   projectIsRepo=!!p.is_repo;
+  projectAddedBy=p.added_by||"";projectAddedTip=p.added_by_tip||"";renderPathChip();
   /* A project was (re)selected: one background update check for it. */
   if(!_noUpdateCheck)startUpdateCheck();
   var line=el("projStatus"),bul=el("appBullets");
@@ -3138,15 +3152,20 @@ function onBrowseFile(){
 /* GitHub: get (clone) a study from the configured organisation.
    ONE field to fill: the repository name (pick it from the list of the
    organisation's repositories this computer's login can see, type it, or paste a
-   full GitHub link). The folder it is saved into is PREFILLED (the one used last
-   time on this computer, else local/) and can be changed. Enter clones. The
+   full GitHub link). The folder it is saved into is PREFILLED with the DEFAULT
+   folder (local/, core.clone_parent_default) EVERY time the dialog opens, never
+   the folder used last time (Julian, 2026-10-28), and can be changed for that
+   one clone. Enter clones. The
    clone runs in the BACKGROUND and finishes via window.pywOnCloneDone
    (auto-selects the folder). */
 var ghClonePath="";   /* the folder the clone is saved into ("" = unknown yet) */
+var ghClonePicked=false;   /* Change… was used in THIS opening of the dialog */
 var ghRepos=null;     /* the organisation's repositories, once fetched */
 function onGithubOrgClone(){
   if(!GITHUB_ORG){openLabSettings("github");return;}
-  ghClonePath=GITHUB_CLONE_PARENT||"";
+  /* Always the default folder on open (GITHUB_CLONE_PARENT only ever holds the
+     server's default, never a folder picked or cloned into earlier). */
+  ghClonePath=GITHUB_CLONE_PARENT||"";ghClonePicked=false;
   ghCloneRunning=false;ghRepos=null;
   openModal("Get a study from "+GITHUB_ORG,
     '<div class="mfield gh-top"><label for="ghRepo">Repository</label><div>'+
@@ -3170,7 +3189,7 @@ function onGithubOrgClone(){
   updateGhClonePreview();updateGhCloneState();
   var r=el("ghRepo");if(r)r.focus();
   if(NATIVE&&API&&API.clone_dialog_state)API.clone_dialog_state().then(function(st){
-    if(st&&st.ok&&st.parent&&!ghClonePath){ghClonePath=st.parent;GITHUB_CLONE_PARENT=st.parent;}
+    if(st&&st.ok&&st.parent){GITHUB_CLONE_PARENT=st.parent;if(!ghClonePicked)ghClonePath=st.parent;}
     if(st&&st.ok)fillGhWho(st.researchers||[],st.suggested||"");
     updateGhClonePreview();updateGhCloneState();});
   else fillGhWho(typeof PREVIEW_RESEARCHERS!=="undefined"?PREVIEW_RESEARCHERS:[],"");
@@ -3275,7 +3294,7 @@ function onGhPickFolder(){
   API.pick_clone_folder(ghCloneRepoName()).then(function(r){
     r=r||{};
     if(r.ok&&r.path){
-      ghClonePath=r.path;
+      ghClonePath=r.path;ghClonePicked=true;   /* this clone only */
       var e=el("ghCloneErr");if(e)e.style.display="none";
     }
     updateGhClonePreview();updateGhCloneState();
@@ -3299,7 +3318,7 @@ function doGithubOrgClone(){
   API.clone_org_repo(repo,dest,who).then(function(r){
     /* Native pushes the real result via pywOnCloneDone; this promise only carries
        the "pending" ack (or an immediate error). */
-    if(r&&r.ok&&r.pending){GITHUB_CLONE_PARENT=dest;return;}
+    if(r&&r.ok&&r.pending)return;
     if(r&&!r.ok){window.pywOnCloneDone(r);}
   });
 }
@@ -3629,7 +3648,9 @@ function onSaveAs(){
      one canonical spelling per person and no near-duplicate misspellings. A name
      typed here is added to the roster when the config is saved. */
   if(NATIVE&&API){
-    API.list_researchers().then(function(r){
+    /* Prefilled with whoever added this folder through the GitHub dialog, else
+       the last author (core.suggested_author). */
+    API.list_researchers(currentProjectPath||"").then(function(r){
       renderSaveAs((r&&r.researchers)||[],(r&&r.suggested)||defaultAuthor||"");});
   }else{
     renderSaveAs((RESEARCHERS.length?RESEARCHERS:PREVIEW_RESEARCHERS),defaultAuthor||"");
@@ -5320,7 +5341,7 @@ function onExport(){
         if(!s.path){window.pywStatus("","Save cancelled.");return;}
         /* A .command was made executable server-side, so no manual chmod needed. */
         var note=(r.ext===".command")?" It has been made executable, so it is ready to double-click.":"";
-        window.pywStatus("ok","Saved the one-click shortcut to "+s.path+". The database password is not stored in the file."+note);
+        window.pywStatus(r.warning?"warn":"ok","Saved the one-click shortcut to "+s.path+". The database password is not stored in the file."+note+(r.warning?" "+r.warning:""));
       });
     }
   });
