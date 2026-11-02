@@ -754,6 +754,40 @@ _HEADLESS_RESTART = object()
 HEADLESS_FAILURE = {}
 
 
+# The participant-link check of the last successful headless run (2026-11-02):
+# core.check_participant_link's dict, empty before a run reaches it.
+HEADLESS_LINK_CHECK = {}
+
+
+def _headless_link_check(cfg, lab_presets, checker=None):
+    """Run the participant-link check once the headless server is ready; keep
+    the result in HEADLESS_LINK_CHECK and log one line. Never raises."""
+    HEADLESS_LINK_CHECK.clear()
+    try:
+        result = (checker or core.check_participant_link)(cfg, lab_presets)
+    except Exception as error:  # noqa: BLE001 - never break a launch
+        result = {"status": core.LINK_CHECK_SKIPPED, "reason": str(error)}
+    HEADLESS_LINK_CHECK.update(result or {})
+    level, line = core.link_check_log_line(result)
+    if level:
+        _hlog(line if level == "ok" else "WARNING: " + line)
+    return result
+
+
+def report_headless_link_warning(code=0, notify=None, log_path=None):
+    """After a SUCCESSFUL one-click launch: when the participant-link check
+    failed, ONE native warning box says the server IS running but participant
+    PCs probably cannot reach it, and why. Silent when the link works (or the
+    run was localhost-only, or did not succeed). Returns the text shown ("" for
+    none). Seam: ``notify(text)``."""
+    if code != 0 or HEADLESS_LINK_CHECK.get("status") != core.LINK_CHECK_WARNING:
+        return ""
+    log_path = _resolve_crash_log_path() if log_path is None else log_path
+    text = core.headless_link_warning_text(HEADLESS_LINK_CHECK, log_path)
+    (notify or (lambda message: _notify_headless_failure(message, warning=True)))(text)
+    return text
+
+
 def _headless_fail(code, reason, **info):
     """Record why the headless run stops with ``code`` and return ``code``."""
     HEADLESS_FAILURE.clear()
@@ -764,7 +798,8 @@ def _headless_fail(code, reason, **info):
 
 
 def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
-                 choose=None, puller=None, otree_check=None, otree_path=None):
+                 choose=None, puller=None, otree_check=None, otree_path=None,
+                 link_checker=None):
     """Launch a SAVED config by name with no UI. Returns a process exit code.
 
     ``0`` means the server was started and the dashboard was opened. A missing
@@ -798,11 +833,12 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
     recorded. With neither, exit 11 names the missing path.
     """
     HEADLESS_FAILURE.clear()
+    HEADLESS_LINK_CHECK.clear()
     pulled = False
     while True:
         code = _headless_run_once(config_name, store_path, ask, problem_finder,
                                   choose, puller, otree_check, allow_pull=not pulled,
-                                  otree_path=otree_path)
+                                  otree_path=otree_path, link_checker=link_checker)
         if code is not _HEADLESS_RESTART:
             return code
         pulled = True
@@ -810,7 +846,8 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
 
 
 def _headless_run_once(config_name, store_path, ask, problem_finder, choose, puller,
-                       otree_check, allow_pull=True, otree_path=None):
+                       otree_check, allow_pull=True, otree_path=None,
+                       link_checker=None):
     """One pass of :func:`headless_run`: an exit code, or _HEADLESS_RESTART
     after a Git pull that worked."""
     # oTree itself first: resetdb and prodserver run the ``otree`` command on
@@ -1058,6 +1095,10 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
                         outcome="ok", server_ready_seconds=time.monotonic() - server_start,
                         lab_presets=lab_presets)
 
+    # The participant-link check (2026-11-02): the server is up, so check that
+    # the participant PCs can reach it. Never changes the exit code; a warning
+    # becomes a native box AFTER the run (report_headless_link_warning).
+    _headless_link_check(cfg, lab_presets, link_checker)
     _hlog("Done. The server keeps running in its own window.")
     return 0
 
@@ -1213,20 +1254,24 @@ def report_headless_failure(code, otree_path="", shortcut_path="", notify=None,
     return ""
 
 
-def _notify_headless_failure(message):
+def _notify_headless_failure(message, warning=False):
     """Show ONE native message box on a headless one-click failure, so a
     windowless (pythonw) shortcut failure is not silent (fable review item 9).
     Windows: ctypes MessageBoxW; macOS: osascript 'display alert'; otherwise a
-    stderr line. Never raises."""
+    stderr line. ``warning`` = the launch worked and the box only informs (the
+    participant-link check): the warning icon instead of the red one. Never
+    raises."""
     try:
         if sys.platform.startswith("win"):
             import ctypes
+            flags = (0x30 | 0x10000) if warning else 0x10  # WARNING|SETFOREGROUND / ERROR
             ctypes.windll.user32.MessageBoxW(0, str(message),
-                                             "oTree Lab Launcher", 0x10)  # MB_ICONERROR
+                                             "oTree Lab Launcher", flags)
             return
         if sys.platform == "darwin":
-            script = ('display alert "oTree Lab Launcher" message %s as critical'
-                      % core._applescript_string(str(message)))
+            script = ('display alert "oTree Lab Launcher" message %s as %s'
+                      % (core._applescript_string(str(message)),
+                         "warning" if warning else "critical"))
             subprocess.run(["osascript", "-e", script],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
@@ -1264,6 +1309,9 @@ if __name__ == "__main__":
             sys.exit(1)
         report_headless_failure(_code, otree_path=_otree_path,
                                 shortcut_path=_cli_shortcut_path(sys.argv[1:]))
+        # A launch that worked but whose participant link fails: the server is
+        # already running in its own window, this box only informs.
+        report_headless_link_warning(_code)
         sys.exit(_code)
 
 
@@ -1604,8 +1652,25 @@ class FlowRow(tk.Frame):
         self.configure(height=max(y, 1))
 
 
+# The GitHub mark on the "Experiment up to date" line: a 14 px PNG, embedded so
+# nothing loads from the internet (the web face draws the same mark as an SVG).
+GITHUB_MARK_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABqUlEQVR4nIxSzSuEYRCfefZBKRE5K23OSsnBxV/AwZWDm69NEiu0j5RYy2IRiv/Awc3VyVfas4/ak4vWJkWx+86Y5/3Q2lZrDu8zM+/v9/xm5hkNRTY+u9yMha8pQOxggHY3yZxGxJsqhzfW1002wGLgRKYXBwSckkQ9lDPmHDAObSdipz/E8WkTQcAt+IchQ//WWuwEJ6KmlQjuJKWJsVsj5gioXzAhT4hJjkuReJXLrxj4o9qBFu04OIUI2oIU4PNmfOFB3KVSpZGoCWuyJWJtPgTDSkh97s0A6e01l1TW9lbMo4BuvX6hV8m3yQ+uoYIx8oV3QlgJ4c2fUmMlogymwXcLigHvPEHoNMbov0j2nyh1+doZW+o5M3xKRLkPPB6dXW4qJdncyzscyWDCfltnqpogKTU4CLwio64LOfmsvOtYQIrMmEmbk+0ZdDkMji7ofeWuEeGkrFmCUM0Dq7ZU3OwUTST9u1GYSybnn5T1U4nYAQFHFXEakO5l/XoCHJFoeFJZuzWpeGzVhioA7MTNHioKC+BQKc78CLLOSE+7+VBNm121IP8NAAD//+ZBQxwAAAAGSURBVAMAFDazZiLGC5IAAAAASUVORK5CYII=")
+
+
+def github_mark_image(master):
+    """The GitHub mark as a PhotoImage, or None where this Tk cannot show a PNG.
+    The caller keeps a reference to it, or Tk drops the picture."""
+    try:
+        return tk.PhotoImage(master=master, data=GITHUB_MARK_PNG)
+    except tk.TclError:
+        return None
+
+
 class Tooltip(object):
     """A plain hover tooltip, used to show a path that does not fit its box."""
+
+    pinned_tip = None       # the one tip a click has pinned open (info_tip)
 
     def __init__(self, widget, text_provider, delay=450):
         self.widget = widget
@@ -1654,18 +1719,51 @@ class Tooltip(object):
         self.window.wm_geometry("+%d+%d" % (x, y))
 
     def _hide(self, _event=None):
+        if _event is not None and Tooltip.pinned_tip is self:
+            return                  # pinned: the pointer leaving does not close it
         self._cancel()
         if self.window is not None:
             self.window.destroy()
             self.window = None
+        if Tooltip.pinned_tip is self:
+            Tooltip.pinned_tip = None
 
     def toggle(self, _event=None):
-        """Show the tip at once, or hide it when it is showing (a click)."""
-        if self.window is not None:
+        """A click: pin the tip open (it may already show from hovering), or close
+        it when it is pinned. A click anywhere else closes it too."""
+        if Tooltip.pinned_tip is self:
             self._hide()
-        else:
-            self._cancel()
-            self._show()
+            return
+        if Tooltip.pinned_tip is not None:
+            Tooltip.pinned_tip._hide()
+        self._cancel()
+        self._show()
+        if self.window is not None:
+            Tooltip.pinned_tip = self
+            self._watch_clicks()
+
+    def _watch_clicks(self):
+        """One application-wide click watcher, installed the first time a tip is
+        pinned. The "all" bindings run after the clicked widget's own, so a click
+        on an (i) has already done its own pinning by then."""
+        root = self.widget.winfo_toplevel()._root()
+        if not getattr(root, "_pinned_tip_watcher", False):
+            root._pinned_tip_watcher = True
+            root.bind_all("<Button>", Tooltip._close_pinned, add="+")
+
+    @staticmethod
+    def _close_pinned(event):
+        tip = Tooltip.pinned_tip
+        if tip is None:
+            return
+        clicked = str(event.widget)
+        inside = clicked == str(tip.widget) or (tip.window is not None and (
+            clicked == str(tip.window) or clicked.startswith(str(tip.window) + ".")))
+        if not inside:
+            try:
+                tip._hide()
+            except tk.TclError:     # its dialog is already gone
+                Tooltip.pinned_tip = None
 
 
 def run_in_background(widget, work, done, poll_ms=100, limit=6000):
@@ -1705,7 +1803,8 @@ def run_in_background(widget, work, done, poll_ms=100, limit=6000):
 
 def info_tip(parent, text, bg=None, font=None):
     """THE info tip of the Tk face: a small "ⓘ" that shows ``text`` on hover
-    (after 100 ms) and on click. Every explanation that is not an instruction
+    (after 100 ms); a click pins it open and a click anywhere else closes it.
+    Every explanation that is not an instruction
     lives behind one of these instead of a visible grey sentence (the wording
     comes from ``core.ui_tip``). ``text`` may be a string or a zero-argument
     callable (for a tip whose text changes). Returns the label, un-placed: the
@@ -4731,6 +4830,7 @@ class LauncherApp(object):
         self.update_pull_button = None
         self.update_message_label = None
         self.update_action_button = None
+        self.update_github_mark = None
         status = self._update_status or {}
         state = status.get("state") or core.UPDATE_STATE_NONE
         message = str(status.get("message") or "")
@@ -4770,6 +4870,17 @@ class LauncherApp(object):
                 row, text=message, bg=bg, fg=COLORS["warn"] if warn else COLORS["faint"],
                 font=self.fonts.small, anchor="w", justify="left", wraplength=300)
             self.update_message_label.grid(row=0, column=0, sticky="ew")
+            # "Experiment up to date": the GitHub mark, where the valid-project
+            # line above has its tick.
+            if state == core.UPDATE_STATE_CURRENT:
+                self._github_image = github_mark_image(row)
+                if self._github_image is not None:
+                    row.columnconfigure(0, weight=0)
+                    row.columnconfigure(1, weight=1)
+                    self.update_github_mark = tk.Label(
+                        row, image=self._github_image, bg=bg, bd=0)
+                    self.update_github_mark.grid(row=0, column=0, padx=(0, 5))
+                    self.update_message_label.grid(row=0, column=1, sticky="ew")
             action = status.get("action")
             if action == "fresh_copy":
                 self.update_action_button = ttk.Button(
@@ -5045,6 +5156,13 @@ class LauncherApp(object):
                                 ("" if result.get("title") else result.get("message", "")))
         line = tk.Frame(frame, bg=bg)
         line.pack(fill="x")
+        # "Nothing new": the GitHub mark, as on the "Experiment up to date" line.
+        self.git_result_mark = None
+        if result.get("ok") and not result.get("busy") and result.get("status") == "current":
+            self._git_result_image = github_mark_image(line)
+            if self._git_result_image is not None:
+                self.git_result_mark = tk.Label(line, image=self._git_result_image, bg=bg, bd=0)
+                self.git_result_mark.pack(side="left", padx=(0, 5))
         tk.Label(line, text=head, bg=bg, fg=color, font=self.fonts.small_bold,
                  anchor="w", justify="left", wraplength=320).pack(side="left")
         tk.Label(line, text=stamp, bg=bg, fg=COLORS["faint"],
@@ -5841,6 +5959,12 @@ class LauncherApp(object):
                 issue["field"] = failure["field"]
             self._attach_inline_fix(issue, failure, cfg)
             issues.append(issue)
+        # The participant link's address is not this computer (2026-11-02): an
+        # amber warning, never a block; the same check runs again after launch.
+        address_issue = core.participant_address_issue(cfg, self.lab_presets)
+        if address_issue:
+            address_issue["fix"] = None
+            issues.append(address_issue)
         # Non-blocking: the lab's default room changed since this config was saved.
         # One click switches THIS config to the lab default; ignoring it and
         # launching as-is is fine (silent when the rooms already match).
@@ -6138,6 +6262,43 @@ class LauncherApp(object):
         finally:
             ok, info = result
             self._on_main(lambda: self._deliver_launch_result(ok, info))
+        # The participant-link check (2026-11-02): only after a real success,
+        # and only once the result is on its way to the screen, so it never
+        # delays or blocks the launch. This is still the launch worker thread.
+        if result[0]:
+            self._run_link_check(cfg)
+
+    def _run_link_check(self, cfg, checker=None):
+        """Check the launched config's participant link (core, never raises,
+        bounded), log ONE line and show it in the popup (or, with the popup
+        closed, a warning on the status line). Worker thread; ``checker`` is a
+        test seam."""
+        try:
+            result = (checker or core.check_participant_link)(cfg, self.lab_presets)
+        except Exception as error:  # noqa: BLE001 - never break a launch
+            result = {"status": core.LINK_CHECK_SKIPPED, "reason": str(error)}
+        level, line = core.link_check_log_line(result)
+        if level:
+            self.log(line, level)
+        self._on_main(lambda: self._deliver_link_check(result))
+        return result
+
+    def _deliver_link_check(self, result):
+        """GUI thread: the popup shows the result; with the popup gone a
+        warning goes to the status line (an ok stays silent there)."""
+        dialog = getattr(self, "_briefing_dialog", None)
+        shown = False
+        if dialog is not None:
+            try:
+                shown = dialog.set_link_check(result)
+            except (tk.TclError, AttributeError):
+                shown = False
+        if not shown and result.get("status") == core.LINK_CHECK_WARNING:
+            try:
+                self.inline_status.set("warn", "%s: %s" % (
+                    core.LINK_CHECK_FAIL_TITLE, result.get("reason", "")))
+            except tk.TclError:
+                pass
 
     def _on_main(self, callback):
         """Run a callback on the GUI thread, unless the window has gone."""
@@ -8125,24 +8286,22 @@ class LaunchBriefingDialog(object):
         # Exactly the ticked items of "Opens in your browser on launch": the
         # oTree admin page (open_browser), then the services (core decides).
         self.services_box = None
+        self.opens_copy_buttons = []
         services = briefing.get("services") or []
         if briefing.get("opens_admin") or services:
             box = self.services_box = tk.Frame(summary, bg=COLORS["card"])
-            box.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+            box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
             sr += 1
-            tk.Label(box, text=briefing.get("services_title", ""), bg=COLORS["card"],
-                     fg=COLORS["muted"], font=fonts.small, anchor="w").pack(fill="x")
+            title = briefing.get("services_title", "")
+            if getattr(self, "_launched", False):
+                title = briefing.get("services_title_launched") or title
+            tk.Label(box, text=title, bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
             if briefing.get("opens_admin"):
-                tk.Label(box, text=briefing.get("opens_admin_label", ""), bg=COLORS["card"],
-                         fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x")
+                self._opens_row(box, briefing.get("opens_admin_label", ""),
+                                briefing.get("opens_admin_url", ""))
             for service in services:
-                line = tk.Frame(box, bg=COLORS["card"])
-                line.pack(fill="x")
-                tk.Label(line, text=service.get("name", ""), bg=COLORS["card"],
-                         fg=COLORS["text"], font=fonts.bold, anchor="w").pack(side="left")
-                tk.Label(line, text=service.get("url", ""), bg=COLORS["card"],
-                         fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
-                    side="left", padx=(8, 0))
+                self._opens_row(box, service.get("name", ""), service.get("url", ""))
 
         # Dashboard login: collapsed by default, so the username/password are not
         # on screen until asked for (the password stays masked behind Show).
@@ -8155,6 +8314,36 @@ class LaunchBriefingDialog(object):
                                                         pady=(2, 6))
                 sr += 1
         tk.Frame(summary, bg=COLORS["card"], height=6).grid(row=sr, column=0)
+
+    def _opens_row(self, box, name, url):
+        """One browser page of the popup: its name + Copy link. The address stays
+        off the screen; it is only on the button (``button.copy_url``)."""
+        line = tk.Frame(box, bg=COLORS["card"])
+        line.pack(fill="x", pady=(0, 3))
+        tk.Label(line, text=name, bg=COLORS["card"], fg=COLORS["text"],
+                 font=self.fonts.body, anchor="w").pack(side="left")
+        if url:
+            button = ttk.Button(line, text="Copy link", style="Slim.TButton")
+            button.configure(command=lambda: self._copy_opens_link(button, url))
+            button.copy_url = url
+            button.pack(side="right")
+            self.opens_copy_buttons.append(button)
+
+    def _copy_opens_link(self, button, url):
+        try:
+            self.top.clipboard_clear()
+            self.top.clipboard_append(url)
+            button.configure(text="Copied")
+        except tk.TclError:
+            return
+
+        def _restore():
+            try:
+                if button.winfo_exists():
+                    button.configure(text="Copy link")
+            except tk.TclError:
+                pass
+        button.after(1200, _restore)
 
     def _lab_about(self, briefing):
         """One plain sentence on what the chosen lab is (from the briefing only)."""
@@ -8769,6 +8958,7 @@ class LaunchBriefingDialog(object):
                         activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
                         relief="flat", bd=0, padx=16, pady=6, cursor="hand2")
                     self.open_dashboard_button.grid(row=0, column=1, sticky="e", padx=(0, 8))
+                    self._show_link_checking()
                     self.top.update_idletasks()
                     _center_on(self.parent, self.top)
                 except (tk.TclError, AttributeError):
@@ -8805,6 +8995,68 @@ class LaunchBriefingDialog(object):
                 _center_on(self.parent, self.top)
             except (tk.TclError, AttributeError):
                 pass
+
+    def _show_link_checking(self):
+        """After a success: one muted "Checking the participant link…" line
+        under the success line, replaced by set_link_check."""
+        frame = getattr(self, "link_check_frame", None)
+        if frame is None or not frame.winfo_exists():
+            frame = self.link_check_frame = tk.Frame(self.action, bg=COLORS["card"])
+            frame.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        for child in list(frame.winfo_children()):
+            child.destroy()
+        self.link_check_label = tk.Label(
+            frame, text=core.LINK_CHECK_RUNNING_TEXT, bg=COLORS["card"],
+            fg=COLORS["muted"], font=self.fonts.small, anchor="w")
+        self.link_check_label.pack(side="left")
+        self.link_check_result = None
+
+    def set_link_check(self, result):
+        """Show the participant-link check (core.check_participant_link) as one
+        more checklist line under the success line: ok = a tick, failure = a
+        cross + "Not running where expected", the Local lab = a muted dash.
+        Hovering the line or its (i) shows ``hover``: what is wrong, what to
+        try. Returns True when shown here (False: the popup is gone, so the
+        caller decides)."""
+        frame = getattr(self, "link_check_frame", None)
+        try:
+            if frame is None or not frame.winfo_exists() or not self.top.winfo_exists():
+                return False
+        except tk.TclError:
+            return False
+        result = result or {}
+        status = result.get("status")
+        for child in list(frame.winfo_children()):
+            child.destroy()
+        self.link_check_result = result
+        looks = {core.LINK_CHECK_OK: ("✓", COLORS["ok"], COLORS["text"], self.fonts.small_bold),
+                 core.LINK_CHECK_WARNING: ("✗", COLORS["error"], COLORS["error"],
+                                           self.fonts.small_bold),
+                 core.LINK_CHECK_LOCAL: ("–", COLORS["muted"], COLORS["muted"],
+                                         self.fonts.small)}.get(status)
+        if looks is None:
+            frame.grid_remove()
+            return True
+        glyph, glyph_fg, text_fg, font = looks
+        hover = result.get("hover", "")
+        mark = tk.Label(frame, text=glyph_or_fallback(glyph, "x" if glyph == "✗" else glyph),
+                        bg=COLORS["card"], fg=glyph_fg, font=self.fonts.bold)
+        mark.pack(side="left", anchor="n")
+        self.link_check_label = tk.Label(
+            frame, text=result.get("title", ""), bg=COLORS["card"], fg=text_fg,
+            font=font, anchor="w", cursor="hand2" if hover else "")
+        self.link_check_label.pack(side="left", padx=(6, 0))
+        if hover:
+            self.link_check_tooltip = Tooltip(self.link_check_label, lambda: hover, delay=100)
+            for widget in (mark, self.link_check_label):
+                self.link_check_tooltip.attach(widget)
+            self.link_check_label.bind("<Button-1>", self.link_check_tooltip.toggle, add="+")
+            info_tip(frame, hover, bg=COLORS["card"]).pack(side="left")
+        try:
+            self.top.update_idletasks()
+        except tk.TclError:
+            pass
+        return True
 
     def _show_log(self):
         """[See activity log]: the launch is over (it failed), so close this popup

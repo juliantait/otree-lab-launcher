@@ -297,6 +297,8 @@ def _ui_text():
         # UX simplification: the one label for the append-block action, the
         # info-tip texts (core.UI_TIPS) and a few shared sentences.
         "get_ready_label": core.GET_READY_LABEL,
+        # The participant-link check after a launch (2026-11-02).
+        "link_check_running": core.LINK_CHECK_RUNNING_TEXT,
         "tips": dict(core.UI_TIPS),
         "seat_file_missing": core.SEAT_FILE_MISSING_WARNING,
         # Main page pass 2: the header subline words and the Quit action.
@@ -2758,6 +2760,12 @@ class Api(object):
                         if state.get("readable") and not state.get("has_block"):
                             issue["add_room"] = room
             issues.append(issue)
+        # The participant link's address is not this computer (2026-11-02): an
+        # amber warning, never a block; the same check runs again after launch.
+        address_issue = core.participant_address_issue(cfg, lab_presets)
+        if address_issue:
+            address_issue["rooms"] = []
+            issues.append(address_issue)
         # Non-blocking: the lab's default room changed since this config was saved.
         # One click switches THIS config to the lab default; launching as-is is
         # fine (silent when the rooms already match).
@@ -3097,6 +3105,9 @@ class Api(object):
             self._launch_result(True, "", url=result["monitor_url"],
                                 method=result["method"],
                                 configs=configs, selected=selected)
+            # The participant-link check (2026-11-02): only now, after the
+            # success is on screen, so it never delays or blocks the launch.
+            self._run_link_check(cfg)
         except Exception:
             LOG.exception("_run_launch: EXCEPTION")
             self._log("err", traceback.format_exc())
@@ -3104,6 +3115,22 @@ class Api(object):
             self._launch_result(False, "Launch failed. See the activity log.")
         finally:
             LOG.info("_run_launch: end")
+
+    def _run_link_check(self, cfg, checker=None):
+        """Check the participant link of a launched config (core, never raises,
+        bounded) and push the result to the page (window.pywOnLinkCheck), plus
+        ONE activity-log line. Worker-thread only. ``checker`` is a test seam."""
+        lab_presets = core.lab_presets_from_store(self.store_extra)
+        try:
+            result = (checker or core.check_participant_link)(cfg, lab_presets)
+        except Exception as error:  # noqa: BLE001 - never break a launch
+            LOG.exception("participant link check failed")
+            result = {"status": core.LINK_CHECK_SKIPPED, "reason": str(error)}
+        level, line = core.link_check_log_line(result)
+        if level:
+            self._log(level, line)
+        self._callback("pywOnLinkCheck", result)
+        return result
 
     def _launch_result(self, ok, message, url="", method="manual",
                        configs=None, selected=None):

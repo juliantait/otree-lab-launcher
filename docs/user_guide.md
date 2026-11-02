@@ -456,8 +456,9 @@ newer version of this study is available on GitHub. Git pull before launch."**
 with a **Git pull** button. It warns and never blocks: pull there, or launch as
 it is.
 
-*What opens in your browser:* the screen lists it under **Opens in your
-browser**. Once the server is ready, each ticked item opens in its own tab. To
+*What opens in your browser:* the screen lists it under **Browser pages that
+will open** (**Browser pages opened** once it runs), each with a **Copy link**
+button. Once the server is ready, each ticked item opens in its own tab. To
 change that for your study, open **Advanced** (under Database). It is one list,
 **Opens in your browser on launch**, in three groups, and each item has its
 own tick box:
@@ -478,6 +479,18 @@ page that cannot open never stops the launch; the activity log says so.
 in use: a session is already running on it."** and **Launch stays off**. Stop
 the running session first (close its server window), then click **Re-check**.
 The launcher never resets the database of a session that is still running.
+
+*Participant link check:* once the server is up, the launcher checks the link
+the participant PCs will use: is its address one of this computer's addresses,
+and does the server answer on it? The status list then shows **Participant link
+works**, or a cross with **Not running where expected**. Hover over that line to
+see what is wrong and what to try. The usual cause is a lab PC whose address
+changed: change the lab's server address in Lab Settings. The server keeps running
+either way. A one-click shortcut stays silent when the link works and shows a box
+when it does not. The check runs from this computer, so it cannot see a firewall
+that blocks other PCs: if they still cannot join, allow the port through the
+firewall. If the address is already wrong before you launch, the "Before you
+launch" screen warns about it too.
 
 *If the launch fails:* the screen says **Launch failed.** at the top, with a
 **See activity log** button right next to it. **Click it** to open the launcher's activity log

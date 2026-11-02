@@ -80,7 +80,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -8172,7 +8172,10 @@ SERVICE_OWN_CHOICE_TAG = "(your choice)"
 SERVICE_RESET_LABEL = "Use lab default"
 SERVICE_ADD_LABEL = "Add service"
 SERVICE_ADD_OWN_LABEL = "Add your own"
-SERVICES_BRIEFING_TITLE = "Opens in your browser"
+# The launch popup's heading for that list: what WILL open before the launch,
+# what opened on the running screen.
+SERVICES_BRIEFING_TITLE = "Browser pages that will open"
+SERVICES_BRIEFING_TITLE_LAUNCHED = "Browser pages opened"
 SERVICES_NONE_TEXT = "None"
 SERVICES_NO_LAB_TEXT = "This lab has no additional services. Add them in Settings."
 SERVICE_NAME_MISSING = "Give the service a name."
@@ -8656,9 +8659,550 @@ def launch_briefing(cfg, lab_presets=None):
         # oTree admin page (open_browser) and the services that will open.
         "opens_admin": bool(c["open_browser"]),
         "opens_admin_label": OPENS_GROUP_ADMIN,
+        # The plain monitor address on this computer, for the popup's Copy link
+        # (the same page open_dashboard_authenticated opens; never a login).
+        "opens_admin_url": "http://%s:%s%s" % (AUTOLOGIN_HOST, port,
+                                               room_monitor_path(room)),
         "services": [{"name": s["name"], "url": s["url"]} for s in _services],
         "services_title": SERVICES_BRIEFING_TITLE,
+        "services_title_launched": SERVICES_BRIEFING_TITLE_LAUNCHED,
     }
+
+
+# ---------------------------------------------------------------------------
+# Participant-link check (2026-11-02)
+#
+# After a lab PC's IP changed, the server started fine but the participant link
+# (http://<lab host>:<port>/room/<room>, the host from lab_info.json labs[].host)
+# pointed at an address that no longer belonged to the server PC, and nothing
+# said so. This check runs once the server is up (both faces + the one-click
+# shortcut) and, instantly, before launch (the address part only):
+#
+#   1. Address check: is the link's host one of THIS computer's addresses? An
+#      address is "this computer's" when a socket can be bound to it (exact on
+#      every OS, no dependency, no firewall prompt: it never listens); the list
+#      of this computer's addresses (for the message) comes from
+#      local_ipv4_addresses().
+#   2. Reachability: an HTTP GET of http://<host>:<port>/ (the site root: it
+#      only redirects to the login / demo page, so it creates no participant,
+#      unlike a room link), no proxy, no redirect following, ~5 s per attempt,
+#      a few attempts while the server finishes starting. Any HTTP answer = ok.
+#
+# Pure description: never raises, bounded in time, changes nothing.
+# ---------------------------------------------------------------------------
+
+LINK_CHECK_TIMEOUT = 5.0        # seconds per HTTP attempt
+LINK_CHECK_ATTEMPTS = 3         # first try + 2 retries
+LINK_CHECK_PAUSE = 1.0          # seconds between attempts
+LINK_CHECK_DEADLINE = 15.0      # hard cap on the whole poll
+_HOST_LOOKUP_TIMEOUT = 2.0      # a host NAME (not an IP) is looked up at most this long
+
+LINK_CHECK_OK = "ok"
+LINK_CHECK_WARNING = "warning"
+LINK_CHECK_LOCAL = "local"      # the Local lab, chosen on purpose: no cross, no box
+LINK_CHECK_SKIPPED = "skipped"  # the check itself broke: the faces show nothing
+
+# The checklist lines of the launch popup, both faces.
+LINK_CHECK_RUNNING_TEXT = "Checking the participant link…"
+LINK_CHECK_OK_TITLE = "Participant link works"
+LINK_CHECK_FAIL_TITLE = "Not running where expected"
+LINK_CHECK_LOCAL_TITLE = "Local only: other PCs cannot join"
+LINK_CHECK_TRY_LABEL = "What to try:"
+LINK_CHECK_ADDRESSES_LABEL = "This computer's addresses:"
+LINK_CHECK_TRIED_LABEL = "Participant link:"
+HEADLESS_LINK_WARNING_LEAD = ("The oTree server IS running, but the participant PCs "
+                              "probably cannot reach it.")
+
+
+def _is_ipv4(text):
+    try:
+        socket.inet_aton(str(text))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", str(text)))
+
+
+def _is_loopback_host(host):
+    """localhost, 127.x and 0.0.0.0: never an address another PC can use."""
+    h = str(host or "").strip().lower().strip("[]")
+    return (h in ("localhost", "::1", "0:0:0:0:0:0:0:1", "0.0.0.0")
+            or h.startswith("127."))
+
+
+def _usable_ipv4(ip):
+    """A real interface address worth naming: not loopback, link-local, 0.0.0.0."""
+    return (_is_ipv4(ip) and not ip.startswith("127.") and not ip.startswith("169.254.")
+            and ip != "0.0.0.0")
+
+
+def _interface_command_addresses():
+    """IPv4 addresses from the OS's own interface listing, best effort.
+
+    Windows: ``ipconfig`` lines whose label holds "IPv4" (English "IPv4 Address",
+    Dutch "IPv4-adres", German "IPv4-Adresse", French "Adresse IPv4"), so subnet
+    masks and gateways are not taken. Linux: ``ip -4 -o addr`` (``inet
+    A.B.C.D/NN``). macOS/BSD: ``ifconfig`` (``inet A.B.C.D``). Each command gets
+    3 s and no console window; any failure gives [].
+    """
+    if sys.platform.startswith("win"):
+        commands = [["ipconfig"]]
+        pattern = re.compile(r"IPv4[^:\r\n]*:\s*(\d{1,3}(?:\.\d{1,3}){3})")
+    else:
+        commands = [["ip", "-4", "-o", "addr", "show"], ["ifconfig"],
+                    ["/sbin/ifconfig"]]
+        pattern = re.compile(r"\binet (?:addr:)?(\d{1,3}(?:\.\d{1,3}){3})")
+    for command in commands:
+        try:
+            out = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 timeout=3, creationflags=_no_window_flags()).stdout
+        except Exception:
+            continue
+        text = out.decode("utf-8", "replace") if isinstance(out, bytes) else str(out or "")
+        found = pattern.findall(text)
+        if found:
+            return found
+    return []
+
+
+def _hostname_addresses():
+    """The addresses of this computer's own name (on Windows: every adapter)."""
+    found = []
+    name = socket.gethostname()
+    try:
+        found.extend(socket.gethostbyname_ex(name)[2])
+    except Exception:
+        pass
+    try:
+        found.extend(info[4][0] for info in socket.getaddrinfo(name, None, socket.AF_INET))
+    except Exception:
+        pass
+    return found
+
+
+def _bounded_call(work, seconds):
+    """``work()`` on a daemon thread for at most ``seconds`` (a slow DNS must not
+    stall the check). Its list, or [] when it failed or ran out of time."""
+    box = []
+
+    def runner():
+        try:
+            box.append(list(work()))
+        except Exception:  # noqa: BLE001
+            pass
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    return box[0] if box else []
+
+
+def local_ipv4_addresses(command_reader=None):
+    """This computer's own IPv4 addresses (no loopback / link-local), the
+    address the default route uses first. Standard library only, never raises.
+
+    Sources, merged: the route the OS would use for a LAN / internet address (a
+    UDP "connect" sends no packet), the host name's own addresses (at most
+    ``_HOST_LOOKUP_TIMEOUT`` s), and the OS interface listing
+    (``_interface_command_addresses``). ``command_reader`` replaces that last
+    source in tests.
+    """
+    found = []
+
+    def add(ip):
+        ip = str(ip or "").strip()
+        if _usable_ipv4(ip) and ip not in found:
+            found.append(ip)
+
+    for target in ("10.255.255.255", "192.0.2.1", "8.8.8.8"):
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect((target, 1))
+                add(probe.getsockname()[0])
+            finally:
+                probe.close()
+        except Exception:
+            pass
+    for ip in _bounded_call(_hostname_addresses, _HOST_LOOKUP_TIMEOUT):
+        add(ip)
+    try:
+        for ip in (command_reader or _interface_command_addresses)():
+            add(ip)
+    except Exception:
+        pass
+    return found
+
+
+def _can_bind(ip):
+    """True when a socket can be bound to ``ip``: then it IS an address of this
+    computer (binding a foreign address fails with "cannot assign")."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((ip, 0))
+            return True
+        finally:
+            sock.close()
+    except Exception:
+        return False
+
+
+def _resolve_ipv4(host, timeout=_HOST_LOOKUP_TIMEOUT):
+    """The IPv4 addresses of a host NAME, looked up for at most ``timeout`` s.
+    [] when unknown."""
+    def work():
+        found = []
+        for info in socket.getaddrinfo(host, None, socket.AF_INET):
+            if info[4][0] not in found:
+                found.append(info[4][0])
+        return found
+    return _bounded_call(work, timeout)
+
+
+def _addresses_phrase(addresses):
+    if not addresses:
+        return ""
+    if len(addresses) == 1:
+        return "this computer's address is %s" % addresses[0]
+    return "this computer's addresses are %s" % ", ".join(addresses)
+
+
+def participant_link_info(cfg, lab_presets=None):
+    """The participant link of a config: ``{host, port, room, link, base,
+    check_url, local_only, lab, custom}`` (``link`` = the room link without a
+    seat, ``base`` = http://host:port, ``check_url`` = the side-effect-free URL
+    the poll asks)."""
+    c = normalize_config(cfg)
+    briefing = launch_briefing(c, lab_presets)
+    host = str(briefing.get("host") or "").strip()
+    port = str(briefing.get("port") or "8000").strip()
+    room = briefing.get("room") or ""
+    shown = ("[%s]" % host) if (":" in host and not host.startswith("[")) else host
+    base = "http://%s:%s" % (shown, port)
+    return {"host": host, "port": port, "room": room,
+            "link": "%s/room/%s" % (base, room) if host else "",
+            "base": base if host else "", "check_url": (base + "/") if host else "",
+            "local_only": bool(briefing.get("local_only")),
+            "lab": c["lab"], "custom": c["lab"] == LAB_CUSTOM}
+
+
+def _link_fix_sentence(info, own=None, verb="change"):
+    """Where to change the address, in the words of the screen it is on. ``own``
+    = this computer's addresses, named as the value to use."""
+    own = list(own or [])
+    target = ""
+    if len(own) == 1:
+        target = " to %s" % own[0]
+    elif own:
+        target = " to the one the participant PCs can reach (%s)" % ", ".join(own)
+    if info.get("custom"):
+        sentence = "%s the Other host address of this config%s and launch again." % (
+            verb.capitalize(), target)
+    else:
+        sentence = ('In Lab Settings, %s the lab\'s server address ("IP address or '
+                    'host")%s and launch again.' % (verb, target))
+    return sentence
+
+
+# The second half of the advice when the address is wrong for THIS computer.
+_LINK_WRONG_LAB_SENTENCE = ("If this is the wrong lab for this computer, pick the right "
+                            "lab instead. Shortcuts on the participant PCs that use the "
+                            "old address need the new one too.")
+
+
+def _link_hover_text(status, info, problem, action, addresses):
+    """What hovering the checklist line shows: the problem, what to try, then the
+    link tried (and this computer's addresses unless already named above)."""
+    if status == LINK_CHECK_OK:
+        link = info.get("link") or info.get("base") or ""
+        return "%s\n\n%s" % (link, ui_tip("link_check")) if link else ui_tip("link_check")
+    if status == LINK_CHECK_LOCAL:
+        return problem
+    if status != LINK_CHECK_WARNING:
+        return ""
+    parts = [problem]
+    if action:
+        parts.append("%s %s" % (LINK_CHECK_TRY_LABEL, action))
+    details = []
+    link = info.get("link") or info.get("check_url")
+    if link:
+        details.append("%s %s" % (LINK_CHECK_TRIED_LABEL, link))
+    told = "%s %s" % (problem, action)
+    if addresses and not all(ip in told for ip in addresses):
+        details.append("%s %s" % (LINK_CHECK_ADDRESSES_LABEL, ", ".join(addresses)))
+    if details:
+        parts.append("\n".join(details))
+    return "\n\n".join(p for p in parts if p)
+
+
+def _link_result(status, info, problem="", action="", addresses=None, checked=False,
+                 reachable=None, address_ok=None):
+    title = {LINK_CHECK_OK: LINK_CHECK_OK_TITLE, LINK_CHECK_WARNING: LINK_CHECK_FAIL_TITLE,
+             LINK_CHECK_LOCAL: LINK_CHECK_LOCAL_TITLE}.get(status, "")
+    return {"status": status, "ok": status == LINK_CHECK_OK,
+            "warning": status == LINK_CHECK_WARNING,
+            "title": title, "problem": problem, "action": action,
+            "reason": " ".join(p for p in (problem, action) if p),
+            "hover": _link_hover_text(status, info, problem, action, addresses),
+            "host": info.get("host", ""), "port": info.get("port", ""),
+            "link": info.get("link", ""), "url": info.get("check_url", ""),
+            "addresses": list(addresses or []), "address_ok": address_ok,
+            "checked": bool(checked), "reachable": reachable}
+
+
+def check_participant_address(cfg, lab_presets=None, addresses=None, binder=None,
+                              resolver=None):
+    """Part 1, instant: is the participant link's host THIS computer?
+
+    Returns the same dict as :func:`check_participant_link` with ``checked``
+    False: ``status`` "ok" (the host is one of this computer's addresses),
+    "warning" (not this computer, localhost on a lab with participant PCs, no
+    address, a name that cannot be looked up), or "local" (the Local lab: chosen
+    on purpose, only said in a neutral line). Seams: ``addresses`` (this
+    computer's addresses; given = also the only addresses that count as local),
+    ``binder(ip) -> bool``, ``resolver(name) -> [ip]``. Never raises.
+    """
+    try:
+        info = participant_link_info(cfg, lab_presets)
+    except Exception:
+        info = {"host": "", "port": "", "link": "", "check_url": "", "local_only": False}
+    try:
+        return _check_address(info, addresses, binder, resolver)
+    except Exception as error:  # noqa: BLE001 - the check must never break a launch
+        return _link_result(LINK_CHECK_SKIPPED, info,
+                            problem="The participant link could not be checked: %s" % error)
+
+
+def _check_address(info, addresses, binder, resolver):
+    if info.get("local_only"):
+        return _link_result(
+            LINK_CHECK_LOCAL, info,
+            problem=("This run is on the Local lab: the link %s only works on this "
+                     "computer, other PCs cannot use it. To run with participant PCs, "
+                     "pick a lab." % (info.get("link") or info.get("base") or "")))
+    explicit = addresses is not None
+    known = {"list": list(addresses) if explicit else None}
+
+    def mine():
+        if known["list"] is None:
+            known["list"] = local_ipv4_addresses()
+        return known["list"]
+
+    def is_local(ip):
+        if explicit:
+            return ip in mine()
+        # The bind answers at once and exactly; listing the addresses (which
+        # may run ipconfig) only happens when the answer is no.
+        return (binder or _can_bind)(ip) or ip in mine()
+
+    host = info.get("host", "")
+    if not host:
+        return _link_result(LINK_CHECK_WARNING, info,
+                            problem="The participant link has no server address.",
+                            action=_link_fix_sentence(info, mine(), verb="set"),
+                            addresses=mine(), address_ok=False)
+    if _is_loopback_host(host):
+        return _link_result(
+            LINK_CHECK_WARNING, info,
+            problem=("The participant link uses %s, which only works on this computer. "
+                     "Participant PCs cannot use it." % host),
+            action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False)
+    if _is_ipv4(host):
+        candidates = [host]
+    else:
+        candidates = (resolver or _resolve_ipv4)(host)
+        if not candidates:
+            return _link_result(
+                LINK_CHECK_WARNING, info,
+                problem=("The participant link uses %s, but this computer could not "
+                         "look that name up. Participant PCs may not reach it." % host),
+                action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False)
+    if any(is_local(ip) for ip in candidates if not _is_loopback_host(ip)):
+        return _link_result(LINK_CHECK_OK, info, address_ok=True,
+                            addresses=known["list"] or [])
+    own = mine()
+    used = host if _is_ipv4(host) else "%s (%s)" % (host, ", ".join(candidates))
+    if own:
+        problem = ("The participant link uses %s, but %s. Participant PCs will not "
+                   "reach this server." % (used, _addresses_phrase(own)))
+    else:
+        problem = ("The participant link uses %s, but that is not an address of this "
+                   "computer. Participant PCs will not reach this server." % used)
+    action = "%s %s" % (_link_fix_sentence(info, own), _LINK_WRONG_LAB_SENTENCE)
+    return _link_result(LINK_CHECK_WARNING, info, problem=problem, action=action,
+                        addresses=own, address_ok=False)
+
+
+def _no_proxy_opener():
+    """A urllib opener that goes DIRECT (a university proxy from the system
+    settings must not answer for the lab server) and does not follow redirects
+    (the root redirects to the login page: that answer is enough)."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):  # noqa: D401
+            return None
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+
+def poll_participant_url(url, timeout=LINK_CHECK_TIMEOUT, attempts=LINK_CHECK_ATTEMPTS,
+                         pause=LINK_CHECK_PAUSE, deadline=LINK_CHECK_DEADLINE,
+                         opener=None, sleep=time.sleep):
+    """Part 2: GET ``url`` until ANY HTTP answer comes back. Returns ``(ok,
+    kind)``: kind "answered", "timeout", "refused" or "error: <text>". At most
+    ``attempts`` tries, each ``timeout`` s, ``pause`` s apart, never past
+    ``deadline`` s in total. Never raises."""
+    import urllib.error
+    opener = opener or _no_proxy_opener()
+    start = time.monotonic()
+    kind = "timeout"
+    for attempt in range(max(1, int(attempts))):
+        left = deadline - (time.monotonic() - start)
+        if attempt and left <= 0:
+            break
+        try:
+            response = opener.open(url, timeout=max(0.2, min(float(timeout), left)))
+            try:
+                response.close()
+            except Exception:
+                pass
+            return True, "answered"
+        except urllib.error.HTTPError:
+            return True, "answered"   # a 302 / 404 / 500 is still oTree answering
+        except urllib.error.URLError as error:
+            kind = _poll_failure_kind(error.reason)
+        except Exception as error:  # noqa: BLE001
+            kind = _poll_failure_kind(error)
+        if attempt + 1 < attempts and (time.monotonic() - start + pause) < deadline:
+            try:
+                sleep(pause)
+            except Exception:
+                pass
+    return False, kind
+
+
+def _poll_failure_kind(error):
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(error, ConnectionRefusedError):
+        return "refused"
+    text = str(error or "")
+    if "timed out" in text.lower():
+        return "timeout"
+    if "refused" in text.lower() or "10061" in text:
+        return "refused"
+    return "error: %s" % (text or type(error).__name__)
+
+
+def _poll_failure_text(info, kind, timeout):
+    """(problem, action) when the address is right but nothing answered."""
+    base = info.get("base") or info.get("check_url")
+    port = info.get("port") or "8000"
+    window = ("Look at the server window: if it shows an error or has closed, fix that "
+              "and launch again. If it is still starting, wait a moment and open the "
+              "link yourself.")
+    firewall = ("Then check that the firewall on this computer allows incoming "
+                "connections on port %s." % port)
+    if kind == "refused":
+        problem = ("The address is right, but nothing is listening on port %s at %s: "
+                   "the connection was refused." % (port, base))
+    elif kind == "timeout":
+        problem = ("The address is right, but %s did not answer within %g s."
+                   % (base, float(timeout)))
+    else:
+        detail = kind[len("error: "):] if kind.startswith("error: ") else kind
+        problem = "The address is right, but %s did not answer (%s)." % (base, detail)
+    return problem, "%s %s" % (window, firewall)
+
+
+def check_participant_link(cfg, lab_presets=None, addresses=None, binder=None,
+                           resolver=None, opener=None, timeout=LINK_CHECK_TIMEOUT,
+                           attempts=LINK_CHECK_ATTEMPTS, pause=LINK_CHECK_PAUSE,
+                           deadline=LINK_CHECK_DEADLINE, sleep=time.sleep):
+    """The whole participant-link check, run once the server is up.
+
+    The address check first (instant); when it already fails, that is the
+    answer (a GET of an address that is not this computer proves nothing more
+    and could hang). Otherwise the participant link base is polled. Returns::
+
+        {"status": "ok" | "warning" | "local" | "skipped",
+         "ok": bool, "warning": bool,
+         "title": str,      # the checklist line
+         "hover": str,      # what hovering that line shows
+         "problem": str, "action": str, "reason": str,   # plain words (warning)
+         "link": str,       # the room link without a seat
+         "url": str,        # the URL polled (http://host:port/)
+         "addresses": [str],# this computer's addresses
+         "address_ok": bool | None, "reachable": bool | None, "checked": bool}
+
+    Never raises; bounded by ``deadline`` (+ a 2 s host-name lookup).
+    """
+    result = check_participant_address(cfg, lab_presets, addresses, binder, resolver)
+    if result["status"] != LINK_CHECK_OK:
+        return result
+    own = result["addresses"] or local_ipv4_addresses()
+    try:
+        info = participant_link_info(cfg, lab_presets)
+        ok, kind = poll_participant_url(info["check_url"], timeout=timeout,
+                                        attempts=attempts, pause=pause,
+                                        deadline=deadline, opener=opener, sleep=sleep)
+    except Exception as error:  # noqa: BLE001
+        info = {"host": result["host"], "port": result["port"], "link": result["link"],
+                "check_url": result["url"], "base": result["url"].rstrip("/")}
+        ok, kind = False, "error: %s" % error
+    if ok:
+        return _link_result(LINK_CHECK_OK, info, addresses=own, checked=True,
+                            reachable=True, address_ok=True)
+    problem, action = _poll_failure_text(info, kind, timeout)
+    return _link_result(LINK_CHECK_WARNING, info, problem=problem, action=action,
+                        addresses=own, checked=True, reachable=False, address_ok=True)
+
+
+def link_check_log_line(result):
+    """ONE activity-log line for a finished check: (level, text). A check with
+    nothing to say (local, skipped) = (None, "")."""
+    status = (result or {}).get("status")
+    if status == LINK_CHECK_OK:
+        return "ok", "%s: %s" % (LINK_CHECK_OK_TITLE, result.get("link", ""))
+    if status == LINK_CHECK_WARNING:
+        return "warn", "%s: %s" % (LINK_CHECK_FAIL_TITLE, result.get("reason", ""))
+    return None, ""
+
+
+def participant_address_issue(cfg, lab_presets=None, **seams):
+    """The pre-launch hint: a warning issue for the "Before you launch" screen
+    when the address check ALREADY fails (never a block), else None. Same shape
+    as the other issues: ``{level, title, hint, fix, fix_label, info}``; the
+    title says what is wrong, the hint (visible) what to do."""
+    try:
+        result = check_participant_address(cfg, lab_presets, **seams)
+    except Exception:
+        return None
+    if result.get("status") != LINK_CHECK_WARNING:
+        return None
+    return {"level": "warn", "title": result["problem"],
+            "hint": result["action"].replace(" and launch again", ""), "fix": "", "fix_label": "", "info": "", "kind": "participant_link"}
+
+
+def headless_link_warning_text(result, log_path=""):
+    """The native box of a one-click launch whose link check failed: the
+    server IS running, participant PCs probably cannot reach it, why, what to
+    try, the link tried and this computer's addresses."""
+    parts = [HEADLESS_LINK_WARNING_LEAD, result.get("problem", "")]
+    if result.get("action"):
+        parts.append("%s %s" % (LINK_CHECK_TRY_LABEL, result["action"]))
+    details = []
+    if result.get("link") or result.get("url"):
+        details.append("%s %s" % (LINK_CHECK_TRIED_LABEL, result.get("link") or result.get("url")))
+    if result.get("addresses"):
+        details.append("%s %s" % (LINK_CHECK_ADDRESSES_LABEL, ", ".join(result["addresses"])))
+    if log_path:
+        details.append("Log: %s" % log_path)
+    if details:
+        parts.append("\n".join(details))
+    return "\n\n".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------------------
@@ -11255,6 +11799,10 @@ ROOM_HELP = ("If the lab PCs already have shortcuts that open a room, put that r
              "name here so participants land in it; otherwise leave it as study.")
 
 UI_TIPS = {
+    "link_check": "Checked from this computer once the server was up: the link's address "
+                  "is one of this computer's addresses, and the server answers on it. "
+                  "A firewall on this computer is not tested this way: if the "
+                  "participant PCs still cannot join, check that port is allowed in.",
     "this_computer": "Which lab this computer is in (saved on this computer). The "
                      "main screen then shows that lab and uses its default room.",
     "labs": "Ticked labs appear on the main screen; with one ticked it is selected "

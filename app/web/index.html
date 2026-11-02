@@ -486,6 +486,8 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .git-update.local{color:var(--warn)}
 .git-update.local,.git-update.noaccess{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .git-update[hidden]{display:none}
+/* The GitHub mark on the "up to date" line, where the valid-project line has its tick. */
+.git-update .gh-mark,.git-result .gh-mark{width:13px;height:13px;vertical-align:-2px;margin-right:5px;fill:currentColor}
 /* Clone dialog: the repository list, the "Saves to" line, the result actions. */
 .gh-repos{margin-top:6px;max-height:132px;overflow:auto;border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:3px}
 .gh-repos[hidden]{display:none}
@@ -1284,6 +1286,20 @@ input::placeholder{color:var(--faint)}
 .handoff-note a{color:var(--accent);font-weight:600;cursor:pointer;text-decoration:none}
 .handoff-note.err{color:var(--err)} .handoff-note.err strong{color:var(--err)}
 .handoff-note.ok{color:var(--text)} .handoff-note.ok strong{color:var(--ok)}
+/* The participant-link check after launch (2026-11-02): one more line of the
+   status checklist under "Session running". Hovering (or focusing) it shows the
+   explanation and what to try: lc-tip is the shared info-tip, wider + multi-line. */
+.link-check{font-size:13px;line-height:1.6;margin:-10px 0 14px}
+.link-check.checking,.link-check.local{color:var(--muted)}
+.link-check.ok{color:var(--text)} .link-check.ok strong{color:var(--ok)}
+.link-check.warn strong{color:var(--err)}
+.link-check.warn .lc-text{border-bottom:1px dotted var(--err)}
+.link-check.local .lc-text{border-bottom:1px dotted var(--muted)}
+.link-check .lc-cross{color:var(--err);font-weight:800;font-size:14px;margin-right:3px}
+.link-check .lc-dash{font-weight:800;font-size:14px;margin-right:3px}
+.link-check .lc-host{cursor:help;display:inline-block;outline:none}
+.link-check .lc-host:focus-visible .lc-text{outline:1px solid var(--accent);outline-offset:2px}
+.link-check .lc-tip{width:min(440px,70vw);white-space:pre-line;color:var(--text);font-size:12px}
 #blIssues .handoff-note{margin:0 0 14px;font-size:13px;line-height:1.6}
 #blIssues .handoff-note .log-jump{margin-left:8px}
 .preflight-list{list-style:none;padding:0;margin:6px 0 0}
@@ -1368,6 +1384,12 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
 .bl-linkrow .mono-line{flex:1;min-width:0;margin:0;overflow-wrap:anywhere}
 .bl-linkrow .btn{flex:none;align-self:center}
 .bl-linklabel{font-size:12px;color:var(--muted);margin:0 0 5px}
+/* The browser pages of the launch popup: a bold heading in the size of the
+   "Open <shortcut> on each participant computer" line, then one row per page
+   with a Copy link button (the address stays off the screen). */
+.bl-services{margin:12px 0 6px}
+.bl-services-head{font-size:13.5px;font-weight:700;color:var(--text-strong);margin:0 0 6px}
+.svc-brief{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;color:var(--text);margin:0 0 5px}
 /* action bar: stays in view while a long issue list scrolls */
 .cta.bl-cta{position:sticky;bottom:-24px;align-items:center;justify-content:flex-start;
   margin:16px -26px -24px;padding:12px 26px 18px;background:var(--panel);border-top:1px solid var(--line-soft);
@@ -1437,7 +1459,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">v1.7.0</div>
+      <div class="af-ver" id="footVersion">v1.8.0</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -2042,6 +2064,7 @@ var UI_TEXT={
   opens_group_lab:"From the lab settings",
   opens_group_own:"Added for this config",
   services_advanced:"Advanced",
+  link_check_running:"Checking the participant link\u2026",
   service_include:"Include by default",
   service_default_tag:"on by default",
   service_reset:"Use lab default",
@@ -2231,6 +2254,8 @@ function configDisplay(c){return c.name+(c.builtin?labSuffix(c.lab):"");}
 /* The folder / person marks of a sidebar row: inline SVG outlines (S4). */
 var FOLDER_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">'+
   '<path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1H7.6L6.2 3.5H2.5a1 1 0 0 0-1 1z"/></svg>';
+var GITHUB_SVG='<svg class="gh-mark" viewBox="0 0 16 16" role="img" aria-label="GitHub">'+
+  '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
 var PERSON_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">'+
   '<circle cx="8" cy="5.2" r="2.7"/><path d="M2.8 14c.5-3 2.6-4.4 5.2-4.4s4.7 1.4 5.2 4.4"/></svg>';
 /* ---- header title + subline (mirror of core.config_title / config_subline) ----
@@ -2395,10 +2420,16 @@ function copyProjectPath(btn){
 /* Clipboard: the async API where the window has it (a click is a user
    gesture), else the old execCommand route (older WebView2 / WKWebView). */
 function copyText(text){
-  try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return;}}catch(e){}
-  try{var t=document.createElement("textarea");t.value=text;t.setAttribute("readonly","");
-    t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();
-    document.execCommand("copy");document.body.removeChild(t);}catch(e){}
+  function oldRoute(){
+    try{var t=document.createElement("textarea");t.value=text;t.setAttribute("readonly","");
+      t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();
+      document.execCommand("copy");document.body.removeChild(t);}catch(e){}
+  }
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){
+    /* A window can have the API and still refuse the write: fall back then too. */
+    var p=navigator.clipboard.writeText(text);if(p&&p.catch)p.catch(oldRoute);return;
+  }}catch(e){}
+  oldRoute();
 }
 /* Whether a project folder is currently chosen (typed or picked). */
 function hasProjectFolder(){return !!((currentProjectPath||val("projPathInput")||"").trim());}
@@ -2553,7 +2584,7 @@ function renderUpdateStatus(){
     box.innerHTML='<span>'+escapeHtml(s.message||"")+'</span>'+
       (s.action==="github_login"?ghLoginButtonHtml("check"):"");
   }else{
-    box.className="git-update current";box.textContent=s.message||"";
+    box.className="git-update current";box.innerHTML=GITHUB_SVG+escapeHtml(s.message||"");
   }
   box.hidden=false;
   updateProjectGitPull();
@@ -3718,7 +3749,7 @@ function renderGitPullResult(r,path){
   if(r.busy){
     h='<div class="gr-head"><b>'+escapeHtml(r.busy_text||"Pulling…")+'</b>'+when+'</div>';
   }else if(r.ok&&r.status==="current"){
-    h='<div class="gr-head"><b>'+escapeHtml(r.message||"Nothing new: already up to date.")+'</b>'+when+'</div>';
+    h='<div class="gr-head">'+GITHUB_SVG+'<b>'+escapeHtml(r.message||"Nothing new: already up to date.")+'</b>'+when+'</div>';
     if(r.note)h+='<div class="gr-sub">'+escapeHtml(r.note)+'</div>';
   }else if(r.ok){
     h='<div class="gr-head ok"><b>'+escapeHtml(r.message||"Pulled.")+'</b>'+when+'</div>';
@@ -4131,15 +4162,30 @@ function useChosenRoom(){
   useSelectedRoom();
 }
 function roomRepaint(){document.querySelectorAll("#roomList .room-item").forEach(function(b,i){b.classList.toggle("sel",i===roomSelIndex);});}
-/* A small "i" badge that reveals its help text on hover, keyboard focus, or
-   click. Replaces title= tooltips, which do not display inside pywebview. The
-   click toggle keeps it usable on touch; the button is type=button so it never
-   submits and (not being the modal backdrop) never closes the modal. */
+/* A small "i" badge: hover or keyboard focus shows its help text, a click pins it
+   open, and a click anywhere else closes it. Replaces title= tooltips, which do
+   not display inside pywebview. The button is type=button so it never submits
+   and (not being the modal backdrop) never closes the modal. A click on the tip
+   itself does nothing: some badges sit inside a tick box's label. */
 function infoBadge(text){
   return '<span class="info-wrap"><button type="button" class="info-i" aria-label="More information" '+
-    'onclick="event.stopPropagation();this.parentNode.classList.toggle(\'open\')">i</button>'+
-    '<span class="info-tip" role="tooltip">'+escapeHtml(text)+'</span></span>';
+    'onclick="infoBadgeClick(this,event)">i</button>'+
+    '<span class="info-tip" role="tooltip" onclick="event.preventDefault();event.stopPropagation()">'+escapeHtml(text)+'</span></span>';
 }
+function infoBadgeClick(btn,ev){
+  ev.stopPropagation();
+  /* Unpinned: let go of the focus too, or :focus-within would keep the tip open. */
+  if(!btn.parentNode.classList.toggle("open"))btn.blur();
+}
+/* Any click closes the pinned tips it is not inside, and the launch popup's lab
+   (i) details. In the capture phase, because plenty of handlers stop propagation. */
+function closePinnedTips(ev){
+  var t=ev.target,own=(t&&t.closest)?t.closest(".info-wrap"):null;
+  document.querySelectorAll(".info-wrap.open").forEach(function(w){if(w!==own)w.classList.remove("open");});
+  var lab=el("blLab");
+  if(lab&&lab.open&&!lab.contains(t)){lab.open=false;window._blInfoOpen=false;}
+}
+document.addEventListener("click",closePinnedTips,true);
 function useStudyRoom(){setRoom(labRoom());closeModal();}
 function useSelectedRoom(){var r=(window._roomRooms||[])[roomSelIndex];if(r){setRoom(r);closeModal();}}
 function useTypedRoom(){var n=(val("roomTypeName")||"").trim();if(n){setRoom(n);closeModal();}}
@@ -5227,9 +5273,10 @@ function briefingSummaryHtml(b,launched){
   /* What opens in the browser once the server is ready: exactly the ticked
      items of the Advanced list (core): the oTree admin page, then services. */
   if(b.opens_admin||(b.services&&b.services.length)){
-    html+='<div class="bl-services" id="blServices"><p class="bl-linklabel">'+escapeHtml(b.services_title||"Opens in your browser")+'</p>'+
-      (b.opens_admin?'<div class="svc-brief"><b>'+escapeHtml(b.opens_admin_label||"oTree admin page")+'</b></div>':'')+
-      (b.services||[]).map(function(s){return '<div class="svc-brief"><b>'+escapeHtml(s.name)+'</b> <span class="svc-url" style="font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint)">'+escapeHtml(s.url)+'</span></div>';}).join("")+'</div>';
+    var openedTitle=(launched&&b.services_title_launched)||b.services_title||"Browser pages that will open";
+    html+='<div class="bl-services" id="blServices"><div class="bl-services-head">'+escapeHtml(openedTitle)+'</div>'+
+      (b.opens_admin?blOpensRow(b.opens_admin_label||"oTree admin page",b.opens_admin_url):'')+
+      (b.services||[]).map(function(s){return blOpensRow(s.name,s.url);}).join("")+'</div>';
   }
   /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
   html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
@@ -5250,6 +5297,16 @@ function blPlaceLinkPop(){
   pop.style.left=left+"px";pop.style.top=top+"px";
   pop.style.display="";
 }
+/* One row of the popup's browser pages: the name + Copy link. The address is
+   only in the button's data-url, so it is not on screen unless it is copied. */
+function blOpensRow(name,url){
+  return '<div class="svc-brief"><span>'+escapeHtml(name)+'</span>'+
+    (url?'<button type="button" class="btn tiny svc-copy" data-url="'+escapeHtml(url)+'" onclick="blCopyOpensLink(this)">Copy link</button>':'')+'</div>';
+}
+function blCopyOpensLink(btn){
+  copyText(btn.getAttribute("data-url"));
+  btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy link";},1200);
+}
 function blCopyLink(btn){
   var box=el("blLink");if(!box)return;
   try{navigator.clipboard.writeText(box.textContent);}catch(e){}
@@ -5264,6 +5321,7 @@ function showBeforeLaunch(b,issues){
   window._blChecking=(issues===null);
   window._blBriefing=b||{};window._blIssues=window._blChecking?[]:(issues||[]);
   window._blInfoOpen=false;window._blCredsOpen=false;   /* both reveals start collapsed */
+  window._linkCheckPending=null;
   /* Order: what needs action first (must-fix, then warnings), then what will
      launch, then the sticky bottom bar. */
   var html='<div id="blIssues"></div>'+
@@ -5543,10 +5601,46 @@ function showHandoffSuccess(url,method){
       ((method==="cookie")?'The dashboard opened already logged in.'
                           :'The dashboard opened at the login page: log in with the username and password below.');
   }
+  /* The participant-link check runs in Python right after this success and
+     arrives via pywOnLinkCheck; until then one muted "checking" line. */
+  if(t&&!el("linkCheck")){
+    var lc=document.createElement("div");lc.id="linkCheck";lc.className="link-check checking";
+    lc.textContent=UI_TEXT.link_check_running||"Checking the participant link\u2026";
+    t.parentNode.insertBefore(lc,t.nextSibling);
+    if(window._linkCheckPending){var p=window._linkCheckPending;window._linkCheckPending=null;window.pywOnLinkCheck(p);}
+  }
   var act=el("blActions");
   if(act)act.innerHTML='<button class="btn ghost bl-cancel solo" onclick="closeModal()">Close</button>'+
     '<button class="btn accent bl-primary" data-modal-no-enter onclick="openDashboard()">Open dashboard</button>';
 }
+/* The participant-link check result (core.check_participant_link), pushed from
+   the launch worker once the server is up: one line of the status checklist.
+   ok = a tick, failure = a cross + "Not running where expected", the Local lab =
+   a muted dash; hovering shows r.hover (what is wrong, what to try). With the
+   popup closed a failure goes to the notice bar instead (an ok stays silent
+   there). Never blocks anything. */
+function linkCheckHtml(r){
+  var ic=(r.status==="ok")?'<span class="ok-tick" aria-hidden="true">&#10003;</span>':
+    (r.status==="warning")?'<span class="lc-cross" aria-hidden="true">&#10005;</span>':
+    '<span class="lc-dash" aria-hidden="true">&ndash;</span>';
+  var text=(r.status==="local")?escapeHtml(r.title||""):'<strong>'+escapeHtml(r.title||"")+'</strong>';
+  return '<span class="info-wrap tip-host lc-host" tabindex="0">'+ic+'<span class="lc-text">'+text+'</span>'+
+    (r.hover?'<span class="info-tip lc-tip" role="tooltip">'+escapeHtml(r.hover)+'</span>':"")+'</span>';
+}
+window.pywOnLinkCheck=function(r){
+  r=r||{};
+  var box=el("linkCheck");
+  var shown=(r.status==="ok"||r.status==="warning"||r.status==="local");
+  if(!shown){if(box)box.remove();return;}
+  if(!box){
+    /* The success line may not be painted yet (same worker, two pushes): keep it. */
+    if(!el("infoModal").hidden&&el("modalTitle").textContent!=="Session running"){window._linkCheckPending=r;return;}
+    if(r.status==="warning")showNotice((r.title||"")+": "+(r.reason||""),"warn");
+    return;
+  }
+  box.className="link-check "+({ok:"ok",warning:"warn",local:"local"})[r.status];
+  box.innerHTML=linkCheckHtml(r);
+};
 function showHandoffFailure(msg){
   if(el("infoModal").hidden){window.pywStatus("err",msg);return;}
   el("modalTitle").textContent="Launch failed";
@@ -6028,7 +6122,7 @@ function loadFooterVersion(){
     if(r&&r.ok&&r.version)v.textContent=r.label||versionLabel(r.version);
   });
 }
-/* Mirror of core.version_label: the compact sidebar label "v1.7.0" (held equal
+/* Mirror of core.version_label: the compact sidebar label "v1.8.0" (held equal
    under node by tests/test_sidebar_version_label.py). */
 function versionLabel(version){return "v"+String(version);}
 function clearPreviewContent(){
