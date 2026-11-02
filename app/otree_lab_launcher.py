@@ -2813,8 +2813,9 @@ class LauncherApp(object):
         self._git_divider = tk.Frame(holder, bg=COLORS["card_line"], height=1)
         self._git_divider.pack(fill="x", pady=(10, 8))
         # The settings.py block viewer, tucked away: one quiet link once a folder
-        # is chosen, under the update line, above a pull result (2026-11-02, out
-        # of the Settings footer). Same words as the web face's #viewBlockLink.
+        # is chosen, first in this holder, so under the app names and above the
+        # update line and a pull result (2026-11-02, out of the Settings footer).
+        # Same words as the web face's #viewBlockLink.
         self.view_block_link = tk.Label(
             holder, text=core.VIEW_BLOCK_LINK_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
             font=self.fonts.small, cursor="hand2", anchor="w", takefocus=1)
@@ -4398,7 +4399,8 @@ class LauncherApp(object):
         if not (path or "").strip():
             link.pack_forget()
         else:
-            before = self.git_result if self.git_result.winfo_manager() else self._git_divider
+            before = next(w for w in (self.update_box, self.git_result, self._git_divider)
+                          if w.winfo_manager())                     # above the git lines
             indent = 20 if self.app_bullets.grid_info() else 0      # lines up with the app names
             link.pack(anchor="w", padx=(indent, 0), pady=(2, 0), before=before)
 
@@ -4912,10 +4914,7 @@ class LauncherApp(object):
                     command=lambda: self.open_github_login(self._recheck_after_login))
             if self.update_action_button is not None:
                 self.update_action_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-        before = self._git_divider
-        for widget in (self.git_result, self.view_block_link):      # stays above both
-            if widget.winfo_manager():
-                before = widget
+        before = self.git_result if self.git_result.winfo_manager() else self._git_divider
         box.pack(fill="x", pady=(8, 0), before=before)
 
     def open_github_login(self, on_saved=None, retry=False):

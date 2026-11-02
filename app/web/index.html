@@ -471,8 +471,9 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .study-card .statusline .ok-tick{font-size:12.5px;margin-right:5px}
 .study-card .proj-apps{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px;padding-left:17px}
 .study-card .statusline .dot{display:none}
-/* The settings.py block viewer: a quiet link, last of the project's own lines
-   (2026-11-02, out of the Settings footer). Lines up with the app names when they show. */
+/* The settings.py block viewer: a quiet link, last of the project's own lines, above
+   the git lines (2026-11-02, out of the Settings footer). Lines up with the app names
+   when they show. */
 .proj-block-link{margin-top:3px;line-height:1.45}
 .proj-apps:not([hidden]) ~ .proj-block-link{padding-left:17px}
 .proj-block-link .link{font-size:11.5px;color:var(--faint);text-decoration:underline;text-underline-offset:2px}
@@ -1467,7 +1468,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">v1.8.2</div>
+      <div class="af-ver" id="footVersion">v1.8.3</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1544,6 +1545,8 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             <div class="sc-body">
               <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
               <div class="proj-apps" id="projApps" hidden></div>
+              <!-- The settings.py block viewer, tucked away: shown once a folder is chosen. -->
+              <div class="proj-block-link" id="projBlockLink" hidden><button type="button" class="link" id="viewBlockLink" onclick="viewBlock()">View settings.py block</button></div>
               <ul class="ways" id="projWays" hidden></ul>
               <!-- Empty state (S1): Browse + GitHub move in here from the row
                    above (placeProjectActions), with the paste link beside them. -->
@@ -1552,8 +1555,6 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
                    background): nothing / "Experiment up to date" / the amber
                    "changes on GitHub" banner / the local-changes line. -->
               <div class="git-update" id="gitUpdateStatus" hidden></div>
-              <!-- The settings.py block viewer, tucked away: shown once a folder is chosen. -->
-              <div class="proj-block-link" id="projBlockLink" hidden><button type="button" class="link" id="viewBlockLink" onclick="viewBlock()">View settings.py block</button></div>
               <div class="git-result" id="gitPullResult" hidden></div>
             </div>
             <button type="button" class="btn tiny sc-gitpull" id="gitPullBtn" hidden
@@ -6138,7 +6139,7 @@ function loadFooterVersion(){
     if(r&&r.ok&&r.version)v.textContent=r.label||versionLabel(r.version);
   });
 }
-/* Mirror of core.version_label: the compact sidebar label "v1.8.2" (held equal
+/* Mirror of core.version_label: the compact sidebar label "v1.8.3" (held equal
    under node by tests/test_sidebar_version_label.py). */
 function versionLabel(version){return "v"+String(version);}
 function clearPreviewContent(){

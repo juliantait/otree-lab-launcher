@@ -375,8 +375,9 @@ last launched ("Never run" until then).
 study you already launched keeps running.
 
 **The settings.py block.** Once a folder is chosen, **View settings.py block**
-is the small link in the oTree project section. It shows the lab support block,
-to copy it or to add it to the project.
+is the small link in the oTree project section, under the app names and above
+the git lines. It shows the lab support block, to copy it or to add it to the
+project.
 
 **What the one-click shortcut checks first.** It has no window, so it only
 stops for the things that matter:
