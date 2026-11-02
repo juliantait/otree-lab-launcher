@@ -465,7 +465,11 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .proj-actions .alt{font-size:11.5px;color:var(--muted)}
 .study-card.empty{padding:10px 12px 11px}
 .study-card .statusline{margin-top:0;font-size:11.5px;color:var(--muted);line-height:1.4}
-.study-card .statusline.ok{color:var(--ok)}   /* green confirmation, matching the app-name bullets below */
+.study-card .statusline.ok{color:var(--ok)}   /* green confirmation */
+/* Valid project (2026-10-28): tick + bold headline in green, app names muted below. */
+.study-card .statusline.ok b{color:var(--ok);font-weight:700}
+.study-card .statusline .ok-tick{font-size:12.5px;margin-right:5px}
+.study-card .proj-apps{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px;padding-left:17px}
 .study-card .statusline .dot{display:none}
 .study-card .bullets{margin:4px 0 0;padding-left:10px;list-style:none}
 .study-card .bullets li{position:relative;padding-left:14px;font-size:11.5px;color:var(--ok);margin:0;line-height:1.55}
@@ -714,6 +718,37 @@ input::placeholder{color:var(--faint)}
   text-transform:uppercase;padding:6px 0 0;margin:0}
 .db-details-toggle .arw{font-size:10px;color:var(--faint)}
 .db-details-toggle:hover{color:var(--text)}
+/* Advanced (2026-10-30): a slim card that is ONE caption line while collapsed
+   (the same disclosure style), with a muted count of the services that will
+   open. Inside: "Additional services on launch". */
+.card--adv{padding-top:10px;padding-bottom:10px}
+.card--adv .db-details-toggle{padding-top:0}
+.adv-cap{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint)}
+.adv-body{margin-top:10px}
+.svc-head{display:flex;align-items:center;gap:4px;font-size:13px;margin-bottom:6px}
+.svc-group{margin:10px 0 2px;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--faint)}
+.svc-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:4px 0}
+.svc-row .svc-url,.svc-own-row .svc-url{flex-basis:100%;margin-left:23px;font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint);overflow-wrap:anywhere}
+.svc-tag{font-size:11.5px;color:var(--faint)}
+.svc-reset{background:none;border:0;padding:0;font-family:inherit;font-size:11.5px;color:var(--accent);cursor:pointer;text-decoration:underline}
+.svc-none{margin:2px 0 6px;font-size:12.5px;color:var(--muted)}
+.svc-own-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:4px 0}
+.svc-own-row .svc-url{margin-left:23px}
+.svc-add{display:flex;gap:6px;align-items:center;margin-top:8px}
+.svc-add input{min-width:0}
+.svc-add .svc-in-name{flex:0 0 30%}
+.svc-add .svc-in-url{flex:1}
+.svc-msg{font-size:12px;color:var(--warn);margin-top:6px}
+/* Settings: the services per lab */
+.svc-lab{margin:4px 0 12px}
+.svc-lab-name{font-size:12.5px;font-weight:650;color:var(--text-strong);margin-bottom:2px}
+.svc-set-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-soft)}
+.svc-set-row .svc-main{flex:1;min-width:0}
+.svc-set-row .svc-url{display:block;font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint);overflow-wrap:anywhere}
+.svc-set-row .svc-def{font-size:11.5px;color:var(--muted);margin-left:6px}
+.svc-form{margin:8px 0;padding:10px 12px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
+.svc-form .mfield{grid-template-columns:90px 1fr;margin:6px 0}
+.svc-form .cta{margin-top:8px}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -1402,7 +1437,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">version 1.4.12</div>
+      <div class="af-ver" id="footVersion">v1.7.0</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1478,7 +1513,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <div class="study-card" id="projDetect">
             <div class="sc-body">
               <div class="statusline muted" id="projStatus"><span class="dot">&#9675;</span><span id="projStatusMsg">No project folder chosen yet. Click Browse to pick one.</span></div>
-              <ul class="bullets" id="appBullets" hidden></ul>
+              <div class="proj-apps" id="projApps" hidden></div>
               <ul class="ways" id="projWays" hidden></ul>
               <!-- Empty state (S1): Browse + GitHub move in here from the row
                    above (placeProjectActions), with the paste link beside them. -->
@@ -1569,6 +1604,31 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               </div>
               <div class="db-mode-note" id="dbHostWarn" style="display:none"></div>
             </div>
+          </div>
+        </section>
+
+        <!-- Advanced (2026-10-30): collapsed to one caption line. Inside, the
+             additional services that open in the browser once the server is
+             ready: one tick box per lab service (core.config_service_rows says
+             what is ticked and whether that is the lab default or this config's
+             own choice) and the config's own services. -->
+        <section class="card card--adv" id="advCard">
+          <button type="button" class="db-details-toggle" id="advToggle" aria-expanded="false" onclick="toggleAdvanced()"><span class="arw" id="advArw">&#9656;</span><span id="advLabel">Advanced</span><span class="adv-cap" id="advCaption"></span></button>
+          <div class="adv-body" id="advBody" hidden>
+            <div class="svc-head"><b id="svcTitle">Opens in your browser on launch</b><span id="svcTip"></span></div>
+            <!-- ONE list in three groups (Julian, 2026-10-30); every item has its
+                 own tick and opens on its own once the server is ready. -->
+            <div class="svc-row"><label class="chk"><input type="checkbox" id="open_browser" checked onchange="updateDirtyState();refreshServices()"> <span class="svc-name" id="svcAdminName">oTree admin page</span></label></div>
+            <div class="svc-group" id="svcGroupLab">From the lab settings</div>
+            <div id="svcRows"></div>
+            <div class="svc-group" id="svcGroupOwn">Added for this config</div>
+            <div id="svcOwn"></div>
+            <div class="svc-add">
+              <input type="text" class="svc-in-name" id="svcNewName" placeholder="Name" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+              <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+              <button type="button" class="btn tiny" id="svcAddBtn" onclick="addOwnService()">Add your own</button>
+            </div>
+            <div class="svc-msg" id="svcMsg" hidden></div>
           </div>
         </section>
 
@@ -1876,7 +1936,7 @@ var PREVIEW_DATABASES=[
 ];
 var PREVIEW_RESEARCHERS=["A. Kowalski","J. Tait","L. Rossi","M. Researcher","P. Andersson","S. Vermeer"];
 var PREVIEW_PROJECT={name:"dictator_game",level:"ok",
-  message:"Looks like an oTree project with settings.py and 1 app package:",apps:["dictator"]};
+  message:"oTree project with 1 app package",apps:["dictator"],apps_line:"Dictator"};
 var PREVIEW_PATH="C:\\experiments\\dictator_game";
 
 /* ---------------------------- helpers ---------------------------- */
@@ -1976,6 +2036,19 @@ function openLogModal(){
 /* Wording owned by core (get_initial_state().ui_text overrides these; the copies
    here keep the static preview identical -- a test compares them to core). */
 var UI_TEXT={
+  services_card:"Additional services",
+  services_section:"Opens in your browser on launch",
+  opens_group_admin:"oTree admin page",
+  opens_group_lab:"From the lab settings",
+  opens_group_own:"Added for this config",
+  services_advanced:"Advanced",
+  service_include:"Include by default",
+  service_default_tag:"on by default",
+  service_reset:"Use lab default",
+  service_add:"Add service",
+  service_add_own:"Add your own",
+  services_no_lab:"This lab has no additional services. Add them in Settings.",
+  service_delete_confirm:"Remove the service %s? Configs that ticked it simply stop opening it.",
   activity_log_button:"See activity log",
   no_project:"No project folder chosen yet. Click Browse to pick one.",
   no_project_github:"No project folder chosen yet. Click Browse to pick one, or download one from your GitHub organisation.",
@@ -2036,6 +2109,11 @@ function fillStaticTips(){
   var rt=el("resetTip");if(rt)rt.innerHTML=tipBadge("reset_db");
   var sc=el("shortcutTip");if(sc)sc.textContent=tip("one_click_shortcut");
   var w=el("blockWarnBtn");if(w)w.textContent=UI_TEXT.get_ready_label;
+  var st=el("svcTip");if(st)st.innerHTML=tipBadge("services_launch");
+  var sl=el("advLabel");if(sl)sl.textContent=UI_TEXT.services_advanced;
+  var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.services_section;
+  [["svcAdminName","opens_group_admin"],["svcGroupLab","opens_group_lab"],["svcGroupOwn","opens_group_own"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
+  var sa=el("svcAddBtn");if(sa)sa.textContent=UI_TEXT.service_add_own;
 }
 /* A TRAILING "See the activity log." in a message. Mirror of
    core.ACTIVITY_LOG_HINT_PATTERN / core.split_activity_log_hint. */
@@ -2345,16 +2423,16 @@ function applyProject(p){
   projectAddedBy=p.added_by||"";projectAddedTip=p.added_by_tip||"";renderPathChip();
   /* A project was (re)selected: one background update check for it. */
   if(!_noUpdateCheck)startUpdateCheck();
-  var line=el("projStatus"),bul=el("appBullets");
+  var line=el("projStatus"),appsEl=el("projApps");
   var lvl=p.level||"muted";
   var empty=!hasProjectFolder()&&!p.message;
   if(empty)lvl="muted";
   renderProjectStatusMsg(p);
   line.className="statusline "+lvl;
   line.querySelector(".dot").innerHTML=lvl==="ok"?"&#9679;":(lvl==="err"?"&#9632;":(lvl==="warn"?"&#9650;":"&#9675;"));
-  bul.innerHTML="";
-  if(p.apps&&p.apps.length){p.apps.forEach(function(a){var li=document.createElement("li");li.textContent=titlecase(a);bul.appendChild(li);});bul.hidden=false;}
-  else bul.hidden=true;
+  /* A valid project: the app names on their own muted line under the headline. */
+  var appsText=projectOkApps(p);
+  appsEl.textContent=appsText;appsEl.hidden=!appsText;
   updateProjectGitPull();
   syncGitPullResult();
   /* Another project has other label files. */
@@ -2374,9 +2452,20 @@ function splitLead(text){
 function renderProjectStatusMsg(p){
   var m=el("projStatusMsg");if(!m)return;
   p=p||lastProject||{};
+  if(hasProjectFolder()&&projectOkApps(p)){
+    /* Valid project (2026-10-28): green tick + the BOLD green headline (core.project_ok_headline). */
+    m.innerHTML='<span class="ok-tick">&#10003;</span><b>'+escapeHtml(p.message||"")+'</b>';return;
+  }
   if(hasProjectFolder()){m.textContent=p.message||noProjectText();return;}
   var parts=splitLead(noProjectText());
   m.innerHTML="<b>"+escapeHtml(parts[0])+"</b>"+(parts[1]?" "+escapeHtml(parts[1]):"");
+}
+/* The muted app-names line under a valid project's headline: core's
+   apps_line (core.project_ok_apps_line); "" for any other state. */
+function projectOkApps(p){
+  p=p||{};
+  if(p.level!=="ok"||!p.apps||!p.apps.length)return "";
+  return p.apps_line||p.apps.map(titlecase).join(", ");
 }
 /* Whether card 1 is in its EMPTY state: no folder chosen, no problem message. */
 function projectIsEmpty(){return !hasProjectFolder()&&!(lastProject&&lastProject.message);}
@@ -2796,7 +2885,7 @@ function selectLab(id){
     t.classList.toggle("active",t.dataset.lab===selectedLabId);t.classList.remove("faded");});
   markHostPick("");el("backToLabLink").hidden=true;
   el("customFields").hidden=true;el("roomRow").hidden=false;
-  updateSeats();updateDirtyState();
+  updateSeats();updateDirtyState();refreshServices();
 }
 /* The two host buttons are ALWAYS shown, side by side; this only moves the
    selected look ("local", "custom", or "" when a lab tile is the choice). */
@@ -2810,7 +2899,7 @@ function selectCustomHost(){
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
   markHostPick("custom");el("backToLabLink").hidden=false;
   el("customFields").hidden=false;el("roomRow").hidden=true;el("mapRow").hidden=true;
-  updateDirtyState();
+  updateDirtyState();refreshServices();
 }
 /* Local (this computer): a first-class off-lab host on localhost. Its host is
    fixed (no typed field), it shows the normal Room row and a note, and it has no
@@ -2820,7 +2909,7 @@ function selectLocalHost(){
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
   markHostPick("local");el("backToLabLink").hidden=false;
   el("customFields").hidden=true;el("roomRow").hidden=false;el("mapRow").hidden=true;
-  updateDirtyState();
+  updateDirtyState();refreshServices();
 }
 /* This computer's own lab when it has a tile, else the first tile. */
 function homeLabId(){
@@ -3053,6 +3142,11 @@ function applyFields(f){
      exclusions, so a Tk-saved config round-trips unchanged (items 1 & 2). */
   hiddenFields=Object.assign({},f);
   currentSeatExcluded=(f.seat_excluded||[]).slice();
+  /* Additional services: this config's explicit choices + its own services. */
+  currentServiceChoices=Object.assign({},f.service_choices||{});
+  currentExtraServices=(f.extra_services||[]).map(function(x){return {name:x.name,url:x.url,enabled:x.enabled!==false};});
+  /* Group 1 of the list: the oTree admin page = the config's open_browser. */
+  if(el("open_browser"))el("open_browser").checked=(f.open_browser!==false);
   currentProjectPath=f.project_path||"";setPath(currentProjectPath);
   currentSeatFile=f.seat_file||"";setSeatFilePath(currentSeatFile);
   el("admin_user").value=f.admin_username||"admin";
@@ -3073,6 +3167,7 @@ function applyFields(f){
   setRoom(f.room_name||"study");
   refreshDbSummary();
   markFormClean();
+  refreshServices();
 }
 function gatherFields(){
   var lab=selectedLabId;var custom=(lab==="custom");var pseudo=(custom||lab==="local");
@@ -3094,10 +3189,164 @@ function gatherFields(){
     resetdb:el("resetdb").checked,
     room_name:custom?val("custom_room"):el("roomVal").textContent,
     seat_mode:val("seat_mode"),seat_excluded:currentSeatExcluded.slice(),
-    seat_file:currentSeatFile
+    seat_file:currentSeatFile,
+    service_choices:sortedServiceChoices(),
+    extra_services:currentExtraServices.map(function(x){return {name:x.name,url:x.url,enabled:x.enabled!==false};}),
+    open_browser:el("open_browser").checked
   };
   return Object.assign({},hiddenFields,gathered);
 }
+/* ======================================================================
+   Additional services (2026-10-30). Core decides everything (which boxes are
+   ticked, lab default vs your choice, what opens); the page keeps only the
+   config's explicit choices and own services, like the seat exclusions.
+   ====================================================================== */
+var currentServiceChoices={}, currentExtraServices=[], SVC_ROWS=[], advOpen=false;
+/* Key order must not make a clean form look edited (the dirty check compares JSON). */
+function sortedServiceChoices(){
+  var out={};Object.keys(currentServiceChoices).sort().forEach(function(k){out[k]=!!currentServiceChoices[k];});
+  return out;
+}
+function toggleAdvanced(){
+  advOpen=!advOpen;
+  el("advBody").hidden=!advOpen;
+  el("advArw").innerHTML=advOpen?"&#9662;":"&#9656;";
+  el("advToggle").setAttribute("aria-expanded",advOpen?"true":"false");
+}
+function refreshServices(){
+  if(!NATIVE||!API||!API.config_services){renderServices(previewServiceCaption());return;}
+  API.config_services(gatherFields()).then(function(r){
+    if(r&&r.ok){SVC_ROWS=r.rows||[];renderServices(r.caption||"");}
+  });
+}
+/* Static preview only: the count of what would open. */
+function previewServiceCaption(){
+  var n=SVC_ROWS.filter(function(r){return r.checked;}).length+
+    currentExtraServices.filter(function(x){return x.enabled!==false;}).length;
+  var parts=[];if(el("open_browser")&&el("open_browser").checked)parts.push("oTree admin");
+  if(n)parts.push(n===1?"1 service":(n+" services"));
+  return parts.length?parts.join(" + "):"nothing opens";
+}
+function renderServices(caption){
+  var cap=el("advCaption");if(cap)cap.textContent=caption?(" · "+caption):"";
+  var box=el("svcRows");if(!box)return;
+  box.innerHTML=!SVC_ROWS.length?'<p class="svc-none">'+escapeHtml(UI_TEXT.services_no_lab)+'</p>':
+    SVC_ROWS.map(function(r){
+      var id=escapeHtml(r.id);
+      return '<div class="svc-row"><label class="chk"><input type="checkbox" data-svc="'+id+'"'+(r.checked?" checked":"")+
+        ' onchange="onServiceTick(this)"> <span class="svc-name">'+escapeHtml(r.name)+'</span></label>'+
+        '<span class="svc-tag">'+escapeHtml(r.tag)+'</span>'+
+        (r.explicit?'<button type="button" class="svc-reset" onclick="resetServiceChoice('+jsQuote(r.id)+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
+        '<span class="svc-url">'+escapeHtml(r.url)+'</span></div>';
+    }).join("");
+  var own=el("svcOwn");
+  if(own)own.innerHTML=currentExtraServices.map(function(x,i){
+    return '<div class="svc-own-row"><label class="chk"><input type="checkbox" data-i="'+i+'"'+(x.enabled!==false?" checked":"")+
+      ' onchange="onOwnServiceTick(this)"> <span class="svc-name">'+escapeHtml(x.name)+'</span></label>'+
+      '<button type="button" class="btn tiny" onclick="removeOwnService('+i+')">Delete</button>'+
+      '<span class="svc-url">'+escapeHtml(x.url)+'</span></div>';
+  }).join("");
+}
+function onServiceTick(cb){
+  currentServiceChoices[cb.getAttribute("data-svc")]=!!cb.checked;
+  SVC_ROWS.forEach(function(r){if(r.id===cb.getAttribute("data-svc")){r.checked=!!cb.checked;r.explicit=true;}});
+  updateDirtyState();refreshServices();
+}
+function onOwnServiceTick(cb){
+  var x=currentExtraServices[parseInt(cb.getAttribute("data-i"),10)];if(x)x.enabled=!!cb.checked;
+  updateDirtyState();refreshServices();
+}
+function resetServiceChoice(id){
+  delete currentServiceChoices[id];
+  updateDirtyState();refreshServices();
+}
+function serviceMessage(text){var m=el("svcMsg");if(!m)return;m.textContent=text||"";m.hidden=!text;}
+function addOwnService(){
+  var name=(val("svcNewName")||"").trim(),url=(val("svcNewUrl")||"").trim();
+  var take=function(service){
+    currentExtraServices.push({name:service.name,url:service.url,enabled:true});
+    el("svcNewName").value="";el("svcNewUrl").value="";serviceMessage("");
+    updateDirtyState();refreshServices();
+  };
+  if(!NATIVE||!API||!API.validate_service){
+    if(name&&/^https?:\/\/\S+$/i.test(url))take({name:name,url:url});
+    else serviceMessage(name?"Enter a web address that starts with http:// or https://.":"Give the service a name.");
+    return;
+  }
+  API.validate_service(name,url).then(function(r){
+    if(r&&r.ok&&r.service)take(r.service);else serviceMessage((r&&r.message)||"That is not a web address.");
+  });
+}
+function removeOwnService(i){
+  currentExtraServices.splice(i,1);
+  updateDirtyState();refreshServices();
+}
+/* ---- Settings > Additional services: per lab, add / edit / delete ---- */
+var SVC_EDIT=null;   /* {lab, id ("" = new)} while the form is open */
+function lsServicesHtml(){
+  var labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
+  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
+  return labs.map(function(p){
+    var services=p.services||[];
+    var rows=services.map(function(s){
+      if(SVC_EDIT&&SVC_EDIT.lab===p.id&&SVC_EDIT.id===s.id)return svcFormHtml(p.id,s);
+      return '<div class="svc-set-row"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
+        (s.include_by_default?'<span class="svc-def">'+escapeHtml(UI_TEXT.service_default_tag)+'</span>':'')+
+        '<span class="svc-url">'+escapeHtml(s.url)+'</span></div>'+
+        '<button class="btn tiny" onclick="svcEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
+        deleteBtn("svc",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
+    }).join("");
+    var adding=(SVC_EDIT&&SVC_EDIT.lab===p.id&&!SVC_EDIT.id);
+    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
+      (adding?svcFormHtml(p.id,null):'<button class="btn tiny" style="margin-top:6px" onclick="svcEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.service_add)+'</button>')+'</div>';
+  }).join("");
+}
+function svcFormHtml(labId,s){
+  s=s||{name:"",url:"",include_by_default:false};
+  var enter=' onkeydown="if(event.key===\'Enter\'){event.preventDefault();svcSave();}"';
+  return '<div class="svc-form" id="svcForm">'+
+    '<div class="mfield"><label for="svcName">Name</label><input id="svcName" type="text" value="'+escapeHtml(s.name)+'"'+enter+'></div>'+
+    '<div class="mfield"><label for="svcUrl">Web address</label><input id="svcUrl" type="text" spellcheck="false" placeholder="https://..." value="'+escapeHtml(s.url)+'"'+enter+'></div>'+
+    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="svcDefault"'+(s.include_by_default?" checked":"")+'> '+escapeHtml(UI_TEXT.service_include)+'</label>'+
+    '<div class="svc-msg" id="svcFormMsg" hidden></div>'+
+    '<div class="cta"><button class="btn" onclick="svcCancel()">Cancel</button>'+
+    '<button class="btn accent" id="svcSaveBtn" onclick="svcSave()"><b>Save</b></button></div></div>';
+}
+function lsRenderServices(){var b=el("lsSvcList");if(b)b.innerHTML=lsServicesHtml();}
+function svcEdit(labId,id){
+  SVC_EDIT={lab:labId,id:id||""};lsRenderServices();
+  var n=el("svcName");if(n)n.focus();
+}
+function svcCancel(){SVC_EDIT=null;lsRenderServices();}
+function svcApply(r,stay){
+  if(r&&r.presets)LAB_PRESETS=r.presets;
+  if(r&&r.ok){SVC_EDIT=stay?SVC_EDIT:null;
+    var st=el("lsSvcStatus");if(st){st.textContent=r.message||"";}
+    var sum=el("lsSum_services");if(sum&&r.summary!==undefined){sum.textContent=r.summary;sum.title=r.summary;}}
+  lsRenderServices();refreshServices();
+}
+function svcSave(){
+  if(!SVC_EDIT)return;
+  var name=val("svcName"),url=val("svcUrl"),def=!!(el("svcDefault")&&el("svcDefault").checked);
+  var fail=function(m){var e=el("svcFormMsg");if(e){e.textContent=m;e.hidden=false;}};
+  if(!NATIVE||!API||!API.add_lab_service){fail("Saving services works in the app, not the static preview.");return;}
+  var call=SVC_EDIT.id?API.update_lab_service(SVC_EDIT.lab,SVC_EDIT.id,name,url,def)
+                      :API.add_lab_service(SVC_EDIT.lab,name,url,def);
+  call.then(function(r){if(r&&r.ok)svcApply(r);else fail((r&&r.message)||"Could not save the service.");});
+}
+DELETE_ACTIONS.svc=function(key){
+  var at=key.indexOf("|"),lab=key.slice(0,at),id=key.slice(at+1);
+  if(!NATIVE||!API||!API.delete_lab_service){openLabSettings("services");return;}
+  API.delete_lab_service(lab,id).then(function(r){
+    if(r&&r.presets)LAB_PRESETS=r.presets;
+    openLabSettings("services");refreshServices();
+    if(r&&r.ok)window.pywStatus("ok",r.message||"Service removed.");
+    else window.pywStatus("err",(r&&r.message)||"Could not remove the service.");
+  });
+};
+DELETE_WORDING.svc=function(name){return escapeHtml(UI_TEXT.service_delete_confirm).replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
+DELETE_BACK.svc=function(){openLabSettings("services");};
+
 /* ---- unsaved-changes (dirty) tracking for the "Save as new config" button ----
    A light flag: snapshot the whole form whenever a config is loaded or saved,
    then compare on every edit. When they differ the button gets .dirty (bigger +
@@ -4159,7 +4408,7 @@ function saveDefaultDb(id){
    except a section that is not set up yet, which starts open. The summaries come
    from core (Api.settings_summaries); the mirrors below serve the static preview
    and the instant before the answer arrives. */
-var LS_CARDS=["computer","labs","databases","pg","github"];
+var LS_CARDS=["computer","labs","databases","pg","github","services"];
 function lsCard(key,title,tipKey,bodyHtml){
   return '<div class="ls-card ls-coll" id="lsCard_'+key+'">'+
     '<div class="ls-card-head"><h4>'+escapeHtml(title)+tipBadge(tipKey)+'</h4>'+
@@ -4187,10 +4436,16 @@ function lsSummaryMirror(){
   return {this_computer:home,
     labs:(shown.length?shown.join(", "):"None shown")+(hidden?(" ("+hidden+" hidden)"):""),
     databases:dbs,
-    pg_admin:u?(u+"@"+((PG_ADMIN.admin_host||"").trim()||"localhost")+(pt==="5432"?"":(":"+pt))):"Not set"};
+    pg_admin:u?(u+"@"+((PG_ADMIN.admin_host||"").trim()||"localhost")+(pt==="5432"?"":(":"+pt))):"Not set",
+    services:servicesSummaryMirror()};
+}
+/* Mirror of core.services_summary (static preview + the instant before core answers). */
+function servicesSummaryMirror(){
+  var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.services||[]).forEach(function(s){if(names.indexOf(s.name)<0)names.push(s.name);});});
+  return names.length?names.join(", "):"None";
 }
 function lsApplySummaries(r){
-  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"]].forEach(function(p){
+  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"]].forEach(function(p){
     var e=el("lsSum_"+p[0]);if(e&&r[p[1]]!==undefined){e.textContent=r[p[1]];e.title=r[p[1]];}});
 }
 function lsRefreshSummaries(){
@@ -4198,6 +4453,7 @@ function lsRefreshSummaries(){
   if(NATIVE&&API&&API.settings_summaries)API.settings_summaries().then(function(r){if(r&&r.ok)lsApplySummaries(r);});
 }
 function openLabSettings(openCard){
+  SVC_EDIT=null;
   var marker=labMarker;
   var pgComplete=!!((PG_ADMIN.admin_username||"").trim());
   var opts=LAB_PRESETS.map(function(p){return '<option value="'+escapeHtml(p.id)+'"'+(p.id===marker?" selected":"")+'>'+escapeHtml(p.name)+'</option>';}).join("");
@@ -4260,6 +4516,12 @@ function openLabSettings(openCard){
       '<div class="gh-history-link"><a href="#" id="ghHistoryLink" onclick="openCloneHistory();return false;">'+
         escapeHtml(UI_TEXT.clone_history_link.replace("%s",GITHUB_ORG||"GitHub"))+'</a></div>'+
       '<div class="ls-status" id="ghLoginStatus"></div>')+
+    /* Additional services (2026-10-30): per lab, web pages that open in a new
+       browser tab once the server is ready. Add / Edit / Delete, each with
+       "Include by default" (a config that never chose follows it). */
+    lsCard("services",UI_TEXT.services_card,"services",
+      '<div id="lsSvcList">'+lsServicesHtml()+'</div>'+
+      '<div class="ls-status" id="lsSvcStatus"></div>')+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
        has NO Close button (avoids two closes). LEFT is the read-only Launch
@@ -4962,6 +5224,13 @@ function briefingSummaryHtml(b,launched){
      (welcome_note) so both launchers match. Kept on the pre-launch briefing;
      dropped on the running screen to declutter (the link itself is still one hover
      away on the pill). */
+  /* What opens in the browser once the server is ready: exactly the ticked
+     items of the Advanced list (core): the oTree admin page, then services. */
+  if(b.opens_admin||(b.services&&b.services.length)){
+    html+='<div class="bl-services" id="blServices"><p class="bl-linklabel">'+escapeHtml(b.services_title||"Opens in your browser")+'</p>'+
+      (b.opens_admin?'<div class="svc-brief"><b>'+escapeHtml(b.opens_admin_label||"oTree admin page")+'</b></div>':'')+
+      (b.services||[]).map(function(s){return '<div class="svc-brief"><b>'+escapeHtml(s.name)+'</b> <span class="svc-url" style="font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint)">'+escapeHtml(s.url)+'</span></div>';}).join("")+'</div>';
+  }
   /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
   html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
     '<div class="creds-box"><p class="intro">The dashboard should open already logged in. If the browser DOES ask, type or paste:</p>'+
@@ -5756,9 +6025,12 @@ function loadFooterVersion(){
   var v=el("footVersion");if(!v)return;
   if(!NATIVE||!API||!API.app_version)return;   /* keep the static default text */
   API.app_version().then(function(r){
-    if(r&&r.ok&&r.version)v.textContent="version "+r.version;
+    if(r&&r.ok&&r.version)v.textContent=r.label||versionLabel(r.version);
   });
 }
+/* Mirror of core.version_label: the compact sidebar label "v1.7.0" (held equal
+   under node by tests/test_sidebar_version_label.py). */
+function versionLabel(version){return "v"+String(version);}
 function clearPreviewContent(){
   setPath("");applyProject({});el("dbSummary").textContent="";
 }

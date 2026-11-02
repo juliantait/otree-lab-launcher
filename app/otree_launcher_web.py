@@ -248,6 +248,20 @@ def _ui_text():
     """UI wording that core owns, for the page (the JS keeps a fallback copy of
     each so the static preview reads the same)."""
     return {
+        # Additional services (2026-10-30).
+        "services_card": core.SERVICES_CARD_TITLE,
+        "services_section": core.OPENS_ON_LAUNCH_TITLE,
+        "opens_group_admin": core.OPENS_GROUP_ADMIN,
+        "opens_group_lab": core.OPENS_GROUP_LAB,
+        "opens_group_own": core.OPENS_GROUP_OWN,
+        "services_advanced": core.SERVICES_ADVANCED_LABEL,
+        "service_include": core.SERVICE_INCLUDE_LABEL,
+        "service_default_tag": core.SERVICE_DEFAULT_TAG,
+        "service_reset": core.SERVICE_RESET_LABEL,
+        "service_add": core.SERVICE_ADD_LABEL,
+        "service_add_own": core.SERVICE_ADD_OWN_LABEL,
+        "services_no_lab": core.SERVICES_NO_LAB_TEXT,
+        "service_delete_confirm": core.SERVICE_DELETE_CONFIRM,
         "activity_log_button": core.ACTIVITY_LOG_BUTTON_LABEL,
         "no_project": core.NO_PROJECT_TEXT,
         "no_project_github": core.NO_PROJECT_GITHUB_TEXT,
@@ -307,19 +321,21 @@ def project_status(path):
     level, message = core.validate_project(path)
     name = os.path.basename(os.path.normpath(path)) if path else ""
     apps = core.find_app_packages(path) if path and os.path.isdir(path) else []
-    # The confirmation line names only the COUNT ("... and N app packages:"); it
-    # ends with a colon that introduces the app-name bullet list rendered under
-    # it (the UI renders `apps` there). This mirrors the Tk launcher, which also
-    # builds a bracket-free line and lists the apps separately. core.validate_project
-    # keeps the parenthetical for other callers/tests, so we rebuild the line here.
+    # A valid project (2026-10-28): the page shows a green tick + the bold green
+    # headline ("oTree project with N app packages"), and `apps_line` (the app
+    # names, title-cased) on its own muted line below. Core words both; the Tk
+    # face renders the same two lines. core.validate_project keeps the
+    # parenthetical form for the activity log.
+    apps_line = ""
     if level == "ok" and apps:
-        message = "Looks like an oTree project with settings.py and %d app package%s:" % (
-            len(apps), "" if len(apps) == 1 else "s")
+        message = core.project_ok_headline(len(apps))
+        apps_line = core.project_ok_apps_line(apps)
     # Who added this folder through the GitHub dialog (this computer's clone
     # log): "added by Julian" after the folder name, the details in its tip.
     # Empty for a folder picked with Browse or a pasted path.
     added = core.project_added_by(path) if path else {"line": "", "tip": ""}
     return {"level": level, "message": message, "name": name, "apps": apps,
+            "apps_line": apps_line,
             "added_by": added["line"], "added_by_tip": added["tip"],
             # Whether the Git pull button applies to this folder (a git working
             # tree that is not the launcher's own; since 2026-10-01 whatever the
@@ -371,7 +387,9 @@ def _lab_rows(presets):
     """
     return [{"id": p["id"], "name": p["name"], "ip": p["ip"],
              "seats": p["seats"], "display": p["display"],
-             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
+             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
+             # The lab's additional services (Settings -> Additional services).
+             "services": core.normalize_lab_services(p.get(core.SERVICES_KEY))}
             for p in presets if not p.get("deleted")]
 
 
@@ -1305,7 +1323,8 @@ class Api(object):
                 "labs": core.labs_summary(presets),
                 "databases": core.databases_summary(
                     self._db_list(), core.default_database_id(self.store_extra)),
-                "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra))}
+                "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra)),
+                "services": core.services_summary(presets)}
 
     @api_call
     def admin_summary(self, fields=None):
@@ -1367,7 +1386,7 @@ class Api(object):
         """Just the build version, NO network. Feeds the whole-app sidebar footer
         (identity only). The update check is :meth:`update_badge` (in the
         background after start) and :meth:`version_info` (Settings)."""
-        return {"ok": True, "version": core.APP_VERSION}
+        return {"ok": True, "version": core.APP_VERSION, "label": core.version_label()}
 
     @api_call
     def update_badge(self):
@@ -2253,6 +2272,69 @@ class Api(object):
                 "labs": _lab_tiles(presets, config_lab),
                 "configs": [preset_row(p) for p in self.presets]}
 
+    # -- additional services (2026-10-30) -----------------------------------
+
+    def _lab_service_change(self, change):
+        """Run one core lab-service change (``change(presets) -> (ok, message,
+        presets, ...)``) under the store lock and save it into lab_info.json.
+        Returns the page's answer: the refreshed lab rows (with their services)
+        and the Settings card summary."""
+        answer = {}
+
+        def mutate():
+            presets = core.lab_presets_from_store(self.store_extra)
+            result = change(presets)
+            answer["ok"], answer["message"] = bool(result[0]), result[1]
+            if result[0]:
+                self._store_lab_presets(result[2])
+            answer["presets"] = result[2]
+            return result
+        try:
+            self._mutate_store(mutate)
+        except OSError as error:
+            return {"ok": False, "message": "Could not save: %s" % error}
+        presets = core.lab_presets_from_store(self.store_extra)
+        return {"ok": answer.get("ok", False), "message": answer.get("message", ""),
+                "presets": _lab_rows(presets), "summary": core.services_summary(presets)}
+
+    @api_call
+    def add_lab_service(self, lab_id, name, url, include_by_default=False):
+        """Add a service to a lab (Settings -> Additional services)."""
+        return self._lab_service_change(lambda presets: core.add_lab_service(
+            presets, lab_id, name, url, include_by_default=bool(include_by_default)))
+
+    @api_call
+    def update_lab_service(self, lab_id, service_id, name=None, url=None,
+                           include_by_default=None):
+        """Edit a lab service (its id stays, so configs keep their choice)."""
+        return self._lab_service_change(lambda presets: core.update_lab_service(
+            presets, lab_id, service_id, name=name, url=url,
+            include_by_default=include_by_default))
+
+    @api_call
+    def delete_lab_service(self, lab_id, service_id):
+        """Remove a service from a lab."""
+        return self._lab_service_change(lambda presets: core.delete_lab_service(
+            presets, lab_id, service_id))
+
+    @api_call
+    def validate_service(self, name, url):
+        """Check a config's own service before the page adds it to the list."""
+        ok, message, entry = core.validate_service(name, url)
+        return {"ok": ok, "message": message, "service": entry}
+
+    @api_call
+    def config_services(self, fields=None):
+        """The main page's "Additional services on launch" for the on-screen
+        fields: one tick box per lab service (checked + lab default / your
+        choice, all decided by core), the config's own services and the caption
+        count for the collapsed Advanced row."""
+        cfg = fields_to_config(fields or {})
+        presets = core.lab_presets_from_store(self.store_extra)
+        return {"ok": True, "rows": core.config_service_rows(cfg, presets),
+                "extras": cfg[core.EXTRA_SERVICES_KEY],
+                "caption": core.services_caption(cfg, presets)}
+
     def _store_lab_presets(self, presets):
         """Store new lab presets AND re-derive the built-in Lab default's room
         from the machine lab (a lab's default_room may have just changed).
@@ -2462,7 +2544,8 @@ class Api(object):
         # shortcut runs the same one even when the PATH differs at click time.
         shortcut = core.headless_shortcut(
             name, launcher_path, otree_path=core.shortcut_otree_path(),
-            python_path=core.shortcut_python_path())
+            python_path=core.shortcut_python_path(),
+            pass_own_path=True)
         # Saved anyway when oTree is missing; the page says so after the save.
         warning = shortcut.get("warning", "")
         # Browser mode: no native Save dialog -> hand the file back to the page,
@@ -2990,6 +3073,14 @@ class Api(object):
                                     method=result.get("method", "manual"))
                 self._record_session(cfg, config_name, "fail", None)
                 return
+
+            # Additional services: only now that the server is READY, right after
+            # the admin page. A page that cannot open is one log line; it never
+            # fails the launch (core.open_launch_services never raises).
+            core.open_launch_services(
+                cfg, core.lab_presets_from_store(self.store_extra),
+                log=lambda level, text: self._log(
+                    {"ok": "ok", "info": "muted"}.get(level, "warn"), text))
 
             matched = self._mark_run(cfg, config_name)
             self._record_session(cfg, config_name, "ok", time.monotonic() - server_start)

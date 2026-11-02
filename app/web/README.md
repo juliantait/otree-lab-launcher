@@ -51,6 +51,8 @@ extra.
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
 | Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `machine.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
+| Advanced > Opens in your browser on launch | `config_services`, `validate_service` | ONE list in three groups, each item with its own tick: oTree admin page (`open_browser`), the lab's services (core says ticked + lab default / your choice; the page keeps only `service_choices`), the config's own (`extra_services`, each with `enabled`). Saved with the config. After a READY launch each ticked item opens on its own (`core.open_launch_services` never fails the launch); `services_caption` gives the collapsed line ("oTree admin + 2 services") |
+| Settings > Additional services | `add_lab_service`, `update_lab_service`, `delete_lab_service` | per lab, in `lab_info.json` (name, web address, Include by default) |
 | Get ready for the lab | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
 
 The launcher writes into a researcher's own code in exactly **one** place, and

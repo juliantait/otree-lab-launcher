@@ -33,6 +33,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
+import uuid
 import webbrowser
 
 # ---------------------------------------------------------------------------
@@ -78,7 +80,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.6.5"
+APP_VERSION = "1.7.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -536,6 +538,11 @@ def normalize_stored_lab(raw):
         entry["suggested_database"] = {
             "db_name": str(suggested.get("db_name", "")).strip(),
             "db_user": str(suggested.get("db_user", "") or "").strip()}
+    # Additional services: stored only when the lab has some, so a lab_info.json
+    # without them is written back exactly as it was.
+    services = normalize_lab_services(raw.get(SERVICES_KEY))
+    if services:
+        entry[SERVICES_KEY] = services
     return entry
 
 
@@ -884,6 +891,14 @@ DEFAULT_CONFIG = {
     "seat_mode": SEAT_DEFAULT,
     "seat_excluded": [],
     "seat_file": "",
+    # Additional services (2026-10-30): web pages opened in the default browser
+    # once the server is ready. ``service_choices`` holds ONLY the explicit
+    # choices this config made for its lab's services ({service_id: bool}); a
+    # lab service with no choice here follows the lab's include_by_default.
+    # ``extra_services`` are the config's own [{name, url}]. Old configs have
+    # neither key: no choices, no own services (see effective_services).
+    "service_choices": {},
+    "extra_services": [],
 }
 
 # The user-editable settings of a config.  Anything outside this list
@@ -938,6 +953,12 @@ def normalize_config(cfg):
     out = {}
     for key, default in DEFAULT_CONFIG.items():
         value = cfg.get(key, default)
+        if key == SERVICE_CHOICES_KEY:
+            out[key] = normalize_service_choices(value)
+            continue
+        if key == EXTRA_SERVICES_KEY:
+            out[key] = normalize_extra_services(value)
+            continue
         if isinstance(default, bool):
             value = bool(value)
         elif isinstance(default, list):
@@ -1960,11 +1981,31 @@ def validate_project(path, clone_enabled=None):
             "next to it. You can still launch.",
         )
     listed = ", ".join(apps[:4]) + ("..." if len(apps) > 4 else "")
-    return "ok", "Looks like an oTree project: settings.py and %d app package%s (%s)." % (
-        len(apps),
-        "" if len(apps) == 1 else "s",
-        listed,
-    )
+    return "ok", "%s (%s)." % (project_ok_headline(len(apps)), listed)
+
+
+# The project-folder OK state (2026-10-28, Julian): quick to read, not a
+# sentence. Both faces show a green tick + the BOLD green headline, and the app
+# names on their own line BELOW it in muted text. The faces only render these.
+PROJECT_OK_TICK = "\u2713"
+
+
+def project_ok_headline(app_count):
+    """The bold green line for a valid project, e.g. "oTree project with 4 app
+    packages" (singular for one: "... with 1 app package")."""
+    return "oTree project with %d app package%s" % (
+        app_count, "" if app_count == 1 else "s")
+
+
+def app_display_name(name):
+    """A readable, title-cased app name, e.g. 'public_goods' -> 'Public Goods'."""
+    return re.sub(r"[_-]+", " ", name or "").strip().title()
+
+
+def project_ok_apps_line(apps):
+    """The muted line under the headline: every app package, title-cased and
+    comma-separated, e.g. "Dictator, Public Goods, Trust"."""
+    return ", ".join(app_display_name(a) for a in (apps or []))
 
 
 def find_app_packages(path):
@@ -2391,6 +2432,9 @@ def default_preset():
     when this PC has one, else oTree's own SQLite."""
     preset = dict(DEFAULT_CONFIG)
     preset["seat_excluded"] = []
+    # Fresh containers (DEFAULT_CONFIG's own {} / [] must never be shared).
+    preset["service_choices"] = {}
+    preset["extra_services"] = []
     preset["name"] = "Lab default"
     preset["created"] = now_iso()
     preset["last_run"] = None
@@ -2639,6 +2683,7 @@ def stored_labs_from_presets(lab_presets, info=None):
         suggested = p.get("suggested_database") or base.get("suggested_database")
         if suggested:
             entry["suggested_database"] = suggested
+        entry[SERVICES_KEY] = p.get(SERVICES_KEY) or []
         out.append(normalize_stored_lab(entry))
         seen.add(p["id"])
     for lab_id, entry in existing.items():
@@ -5870,15 +5915,22 @@ def split_activity_log_hint(message):
     return head, True
 
 
+def version_label(version=None):
+    """The compact build label the sidebar footer shows: "v" + the version,
+    e.g. "v1.7.0" (no "version" word). ``version`` defaults to APP_VERSION.
+    The web page mirrors this as JS ``versionLabel`` (held equal by a test)."""
+    return "v%s" % (APP_VERSION if version is None else version)
+
+
 def version_footer_lines():
     """The three identity lines for the WHOLE-APP footer (pinned at the bottom of
     the left config sidebar, centred). Identity ONLY -- no update tag; the update
     nudge lives on the Lab Settings page. Shared by both faces so they read
     identically:
 
-        ["oTree Lab Launcher", "version 1.0.0", "by Julian Tait"]
+        ["oTree Lab Launcher", "v1.0.0", "by Julian Tait"]
     """
-    return [APP_NAME, "version %s" % APP_VERSION, "by %s" % APP_AUTHOR]
+    return [APP_NAME, version_label(), "by %s" % APP_AUTHOR]
 
 
 # ---------------------------------------------------------------------------
@@ -6157,7 +6209,7 @@ def shortcut_python_path(executable=None, platform_name=None, venv_dir=None):
 
 
 def headless_shortcut(config_name, launcher_path, platform_name=None,
-                      otree_path=None, python_path=None):
+                      otree_path=None, python_path=None, pass_own_path=False):
     """A one-click shortcut that launches a SAVED config with no UI.
 
     Unlike :func:`export_bat_text` (a frozen snapshot that bakes the DB password
@@ -6173,6 +6225,12 @@ def headless_shortcut(config_name, launcher_path, platform_name=None,
     (:func:`shortcut_python_path`) is the Python to run the launcher with, when
     that file still exists at click time; otherwise ``pythonw`` / ``python3``
     from the PATH, as before. Both left out = the file this function always made.
+
+    ``pass_own_path`` (both faces pass True since 2026-11-02) adds
+    ``--shortcut "<this file>"``: the shortcut's own path (VBScript
+    ``WScript.ScriptFullName`` / the .command's ``$0``), so a failure box can
+    offer "Delete this shortcut" when its config is gone. Older shortcuts have
+    no such argument and their box offers "Open the launcher" only.
 
     Returns ``{"ext", "filename", "content", "otree", "warning"}``:
       - Windows: a ``.vbs`` that runs the launcher under ``pythonw`` with NO
@@ -6207,6 +6265,8 @@ def headless_shortcut(config_name, launcher_path, platform_name=None,
         v_path = launcher_path.replace('"', '""')
         otree_arg = (' & " --otree " & Chr(34) & "%s" & Chr(34)' % otree.replace('"', '""')
                      if otree else "")
+        if pass_own_path:
+            otree_arg += ' & " --shortcut " & Chr(34) & WScript.ScriptFullName & Chr(34)'
         if not python:
             content = "\r\n".join([
                 "' oTree Lab Launcher one-click shortcut.",
@@ -6247,6 +6307,13 @@ def headless_shortcut(config_name, launcher_path, platform_name=None,
     # macOS and Linux: a double-clickable .command that finds python3 itself.
     run_args = "%s --run %s%s" % (shlex.quote(launcher_path), shlex.quote(name),
                                   (" --otree " + shlex.quote(otree)) if otree else "")
+    # This file's own absolute path, worked out before the cd below.
+    own_path = ([
+        "# This shortcut's own path, so a failure box can offer to delete it.",
+        'SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"',
+    ] if pass_own_path else [])
+    if pass_own_path:
+        run_args += ' --shortcut "$SELF"'
     own_python = ([
         "# The Python the launcher ran on when this shortcut was saved, if it is",
         "# still there; otherwise python3 from the PATH.",
@@ -6261,6 +6328,7 @@ def headless_shortcut(config_name, launcher_path, platform_name=None,
         "# The config is read from presets.json at click time, so the DB password",
         "# is NOT stored in this file.",
         "# Generated by %s on %s." % (APP_NAME, stamp),
+    ] + own_path + [
         "cd %s || exit 1" % shlex.quote(launcher_dir),
     ] + own_python + [
         'for PY in python3 python; do',
@@ -6434,6 +6502,7 @@ def default_lab_presets():
             "shortcut_label": raw["shortcut_label"],
             "deleted": raw["deleted"],
             "suggested_database": raw.get("suggested_database"),
+            SERVICES_KEY: raw.get(SERVICES_KEY) or [],
             "builtin": False,
         }))
     return presets
@@ -6544,6 +6613,8 @@ def normalize_lab_preset(preset):
          "db_user": str(suggested.get("db_user", "") or "").strip()}
         if isinstance(suggested, dict) and str(suggested.get("db_name", "") or "").strip()
         else None)
+    # The lab's additional services (web pages opened after a launch).
+    out[SERVICES_KEY] = normalize_lab_services(out.get(SERVICES_KEY))
     return out
 
 
@@ -8060,6 +8131,364 @@ def open_dashboard_authenticated(host, port, room, username, password,
 
 
 # ---------------------------------------------------------------------------
+# Additional services (2026-10-30, Julian's design).
+#
+# A service is a name + a web address (http/https only) that opens in a new tab
+# of the default browser once the oTree server is READY, right after the
+# admin/monitor page. Never a script or a program.
+#
+#   LAB level (lab_info.json, each lab):  "services": [{id, name, url,
+#       include_by_default}]  -- edited in Lab Settings -> Additional services.
+#   CONFIG level (saved_configs.json):    "service_choices": {id: true/false}
+#       holds ONLY the explicit choices; "extra_services": [{name, url}] are the
+#       config's own.
+#
+# What opens = for each service of the config's lab: the config's explicit
+# choice when it made one, else the lab's include_by_default; then the config's
+# own services. So changing a lab's default moves every config that never chose,
+# a deleted lab service simply disappears, and a choice for an id the lab does
+# not have (any more) is ignored. Opening a page can never fail or block a
+# launch: a failure is one line in the activity log.
+#
+# Storage: additive keys only, no schema_version bump. A missing key reads as
+# "no services" / "no choices", every loader already keeps unknown keys, and a
+# lab with no services is written without the key (old files round-trip as
+# they were).
+# ---------------------------------------------------------------------------
+
+SERVICES_KEY = "services"
+SERVICE_CHOICES_KEY = "service_choices"
+EXTRA_SERVICES_KEY = "extra_services"
+SERVICE_URL_SCHEMES = ("http", "https")
+
+# Words both faces use (one place, so they never drift).
+SERVICES_CARD_TITLE = "Additional services"
+SERVICES_SECTION_TITLE = "Opens in your browser on launch"
+SERVICES_ADVANCED_LABEL = "Advanced"
+SERVICE_INCLUDE_LABEL = "Include by default"
+SERVICE_DEFAULT_TAG = "on by default"
+SERVICE_LAB_DEFAULT_TAG = "(lab default)"
+SERVICE_OWN_CHOICE_TAG = "(your choice)"
+SERVICE_RESET_LABEL = "Use lab default"
+SERVICE_ADD_LABEL = "Add service"
+SERVICE_ADD_OWN_LABEL = "Add your own"
+SERVICES_BRIEFING_TITLE = "Opens in your browser"
+SERVICES_NONE_TEXT = "None"
+SERVICES_NO_LAB_TEXT = "This lab has no additional services. Add them in Settings."
+SERVICE_NAME_MISSING = "Give the service a name."
+SERVICE_URL_INVALID = ("Enter a web address that starts with http:// or https:// "
+                       "(for example https://example.org/page).")
+# The Advanced card is ONE list (Julian's design, 2026-10-30) in three groups,
+# each item with its own tick, each opening on its own after a READY launch:
+# the oTree admin page (the config's open_browser field), the lab's services,
+# this config's own services (each with an ``enabled`` tick).
+OPENS_ON_LAUNCH_TITLE = "Opens in your browser on launch"
+OPENS_GROUP_ADMIN = "oTree admin page"
+OPENS_GROUP_LAB = "From the lab settings"
+OPENS_GROUP_OWN = "Added for this config"
+OPENS_ADMIN_SHORT = "oTree admin"
+NOTHING_OPENS_TEXT = "nothing opens"
+SERVICE_DELETE_CONFIRM = ("Remove the service %s? Configs that ticked it simply "
+                          "stop opening it.")
+
+
+def validate_service_url(url):
+    """``(ok, message, cleaned)`` for a service web address.
+
+    Only http:// and https:// with a host are accepted (no file:, no javascript:,
+    no programs). Surrounding spaces are trimmed; spaces inside are refused."""
+    text = str(url or "").strip()
+    if not text or any(ch.isspace() for ch in text):
+        return False, SERVICE_URL_INVALID, ""
+    try:
+        parts = urllib.parse.urlsplit(text)
+        host = parts.hostname
+    except ValueError:
+        return False, SERVICE_URL_INVALID, ""
+    if parts.scheme.lower() not in SERVICE_URL_SCHEMES or not parts.netloc or not host:
+        return False, SERVICE_URL_INVALID, ""
+    return True, "", text
+
+
+def validate_service(name, url):
+    """``(ok, message, {"name", "url"})`` for a service typed by the user."""
+    name = str(name or "").strip()
+    ok, message, cleaned = validate_service_url(url)
+    if not name:
+        return False, SERVICE_NAME_MISSING, None
+    if not ok:
+        return False, message, None
+    return True, "", {"name": name, "url": cleaned}
+
+
+def _derived_service_id(name, url):
+    """A stable id for a hand-written service that has none (same name + url =
+    same id on every computer and every start)."""
+    digest = hashlib.sha1(("%s\n%s" % (name, url)).encode("utf-8")).hexdigest()
+    return "svc-" + digest[:8]
+
+
+def new_service_id(existing_ids=()):
+    """A fresh, unique service id ("svc-" + 8 hex characters)."""
+    taken = set(existing_ids or ())
+    while True:
+        candidate = "svc-" + uuid.uuid4().hex[:8]
+        if candidate not in taken:
+            return candidate
+
+
+def normalize_lab_service(raw):
+    """One lab service ``{id, name, url, include_by_default}``, or None when it
+    has no name or no valid web address. A missing id is derived from the name
+    and address, so it is stable."""
+    if not isinstance(raw, dict):
+        return None
+    ok, _message, entry = validate_service(raw.get("name"), raw.get("url"))
+    if not ok:
+        return None
+    service_id = str(raw.get("id", "") or "").strip() \
+        or _derived_service_id(entry["name"], entry["url"])
+    return {"id": service_id, "name": entry["name"], "url": entry["url"],
+            "include_by_default": bool(raw.get("include_by_default", False))}
+
+
+def normalize_lab_services(raw_list):
+    """A lab's services, cleaned: invalid entries dropped, ids unique (a repeated
+    id keeps its first entry)."""
+    out = []
+    seen = set()
+    for raw in (raw_list if isinstance(raw_list, (list, tuple)) else []):
+        entry = normalize_lab_service(raw)
+        if entry is None or entry["id"] in seen:
+            continue
+        seen.add(entry["id"])
+        out.append(entry)
+    return out
+
+
+def normalize_service_choices(raw):
+    """A config's explicit choices as ``{service_id: bool}`` (anything else -> {})."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k).strip(): bool(v) for k, v in raw.items() if str(k).strip()}
+
+
+def normalize_extra_services(raw):
+    """A config's own services as ``[{name, url, enabled}]``; invalid rows are
+    dropped. ``enabled`` is the entry's tick (off = kept but not opened); an
+    entry saved before the tick existed has none and counts as ticked."""
+    out = []
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        if not isinstance(item, dict):
+            continue
+        ok, _message, entry = validate_service(item.get("name"), item.get("url"))
+        if ok:
+            entry["enabled"] = bool(item.get("enabled", True))
+            out.append(entry)
+    return out
+
+
+def lab_services(lab_presets, lab_id):
+    """The services of lab ``lab_id`` (``[]`` for an unknown lab, localhost or
+    another host)."""
+    preset = find_lab_preset(lab_id, lab_presets) if lab_presets else None
+    if preset is None or preset.get("deleted"):
+        return []
+    return normalize_lab_services(preset.get(SERVICES_KEY))
+
+
+def _lab_target(lab_presets, lab_id):
+    presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
+    for preset in presets:
+        if preset["id"] == str(lab_id) and not preset["deleted"]:
+            return presets, preset
+    return presets, None
+
+
+def add_lab_service(lab_presets, lab_id, name, url, include_by_default=False):
+    """Validate and add a service to a lab. Returns ``(ok, message, presets,
+    service)``; the presets are a new list, ready to be stored."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    ok, message, entry = validate_service(name, url)
+    if not ok:
+        return False, message, presets, None
+    service = {"id": new_service_id(s["id"] for p in presets for s in p[SERVICES_KEY]),
+               "name": entry["name"], "url": entry["url"],
+               "include_by_default": bool(include_by_default)}
+    target[SERVICES_KEY] = target[SERVICES_KEY] + [service]
+    return True, "Added %s to %s." % (service["name"], target["name"]), presets, service
+
+
+def update_lab_service(lab_presets, lab_id, service_id, name=None, url=None,
+                       include_by_default=None):
+    """Edit one service of a lab (its id never changes, so configs keep their
+    choice). ``None`` leaves a field as it is. Returns ``(ok, message, presets,
+    service)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    for index, service in enumerate(target[SERVICES_KEY]):
+        if service["id"] != str(service_id):
+            continue
+        ok, message, entry = validate_service(
+            service["name"] if name is None else name,
+            service["url"] if url is None else url)
+        if not ok:
+            return False, message, presets, None
+        updated = dict(service, name=entry["name"], url=entry["url"])
+        if include_by_default is not None:
+            updated["include_by_default"] = bool(include_by_default)
+        services = list(target[SERVICES_KEY])
+        services[index] = updated
+        target[SERVICES_KEY] = services
+        return True, "Saved %s." % updated["name"], presets, updated
+    return False, "That service is not in this lab any more.", presets, None
+
+
+def delete_lab_service(lab_presets, lab_id, service_id):
+    """Remove one service from a lab. Configs that chose it simply stop opening
+    it (their choice for the unknown id is ignored). Returns ``(ok, message,
+    presets)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets
+    keep = [s for s in target[SERVICES_KEY] if s["id"] != str(service_id)]
+    if len(keep) == len(target[SERVICES_KEY]):
+        return False, "That service is not in this lab any more.", presets
+    gone = [s for s in target[SERVICES_KEY] if s["id"] == str(service_id)][0]
+    target[SERVICES_KEY] = keep
+    return True, "Removed %s from %s." % (gone["name"], target["name"]), presets
+
+
+def config_service_rows(cfg, lab_presets=None):
+    """The tick boxes for the config's lab services, in the lab's order::
+
+        {"id", "name", "url", "default": bool (the lab's include_by_default),
+         "checked": bool (what will happen), "explicit": bool (the config chose),
+         "tag": "(lab default)" | "(your choice)"}
+    """
+    c = normalize_config(cfg or {})
+    choices = c[SERVICE_CHOICES_KEY]
+    rows = []
+    for service in lab_services(_presets_or_default(lab_presets), c["lab"]):
+        explicit = service["id"] in choices
+        checked = choices[service["id"]] if explicit else service["include_by_default"]
+        rows.append({"id": service["id"], "name": service["name"], "url": service["url"],
+                     "default": service["include_by_default"], "checked": bool(checked),
+                     "explicit": explicit,
+                     "tag": SERVICE_OWN_CHOICE_TAG if explicit else SERVICE_LAB_DEFAULT_TAG})
+    return rows
+
+
+def effective_services(cfg, lab_presets=None):
+    """What opens after a launch, in order: the ticked lab services, then the
+    config's own. Each ``{"name", "url", "id", "source": "lab" | "own"}``; the
+    same address is opened once."""
+    c = normalize_config(cfg or {})
+    out = []
+    seen = set()
+    for row in config_service_rows(c, lab_presets):
+        if row["checked"] and row["url"] not in seen:
+            seen.add(row["url"])
+            out.append({"name": row["name"], "url": row["url"], "id": row["id"],
+                        "source": "lab"})
+    for entry in c[EXTRA_SERVICES_KEY]:
+        if entry["enabled"] and entry["url"] not in seen:
+            seen.add(entry["url"])
+            out.append({"name": entry["name"], "url": entry["url"], "id": "",
+                        "source": "own"})
+    return out
+
+
+def services_caption(cfg, lab_presets=None):
+    """The muted line next to the collapsed Advanced caption: what opens in the
+    browser on launch, e.g. "oTree admin + 2 services" ("nothing opens")."""
+    c = normalize_config(cfg or {})
+    parts = [OPENS_ADMIN_SHORT] if c["open_browser"] else []
+    count = len(effective_services(c, lab_presets))
+    if count:
+        parts.append("1 service" if count == 1 else "%d services" % count)
+    return " + ".join(parts) if parts else NOTHING_OPENS_TEXT
+
+
+def services_summary(lab_presets):
+    """The collapsed Lab Settings card: the services by name (each name once,
+    across the labs that are not deleted), or "None"."""
+    names = []
+    for preset in (lab_presets or []):
+        if preset.get("deleted"):
+            continue
+        for service in normalize_lab_services(preset.get(SERVICES_KEY)):
+            if service["name"] not in names:
+                names.append(service["name"])
+    return ", ".join(names) if names else SERVICES_NONE_TEXT
+
+
+def service_line(service):
+    """One line naming a service: "FOG  http://host/fog"."""
+    return "%s  %s" % (service.get("name", ""), service.get("url", ""))
+
+
+def open_additional_services(services, open_url=None, log=None):
+    """Open each service in a new tab of the default browser, in order.
+
+    NEVER raises and never stops part way: a page that cannot be opened is one
+    warning line (``log(level, text)``, level "ok" | "warn") and the next one is
+    tried. Returns ``[{"name", "url", "ok", "error"}]``."""
+    opener = open_url or webbrowser.open_new_tab
+
+    def say(level, text):
+        if log is None:
+            return
+        try:
+            log(level, text)
+        except Exception:
+            pass
+
+    results = []
+    for service in services or []:
+        name = str(service.get("name", "") or "")
+        url = str(service.get("url", "") or "")
+        ok, _message, cleaned = validate_service_url(url)
+        error = ""
+        if not ok:
+            error = "not an http(s) web address"
+        else:
+            try:
+                opened = opener(cleaned)
+                if opened is False:
+                    error = "no browser answered"
+            except Exception as exc:  # noqa: BLE001 - a page must never stop a launch
+                error = "%s: %s" % (type(exc).__name__, exc)
+        if error:
+            say("warn", "Could not open the additional service %s (%s): %s. The launch "
+                        "itself is fine." % (name, url, error))
+        else:
+            say("ok", "Opened the additional service %s: %s" % (name, url))
+        results.append({"name": name, "url": url, "ok": not error, "error": error})
+    return results
+
+
+def open_launch_services(cfg, lab_presets=None, open_url=None, log=None):
+    """After a READY launch: open the config's effective services (if any).
+    The one call all three launch paths (Tk, web, one-click shortcut) make,
+    right after the admin/monitor page (when that is ticked). Each ticked
+    service opens on its own, whatever the admin-page tick says. Never raises."""
+    try:
+        services = effective_services(cfg, lab_presets)
+    except Exception as exc:  # noqa: BLE001
+        if log is not None:
+            try:
+                log("warn", "Could not work out the additional services (%s)." % exc)
+            except Exception:
+                pass
+        return []
+    return open_additional_services(services, open_url=open_url, log=log)
+
+
+# ---------------------------------------------------------------------------
 # Launch briefing (Feature 1 caution flag lives here), the whole host/room
 # decision stays in Python; both launchers only render this dict.
 # ---------------------------------------------------------------------------
@@ -8184,6 +8613,7 @@ def launch_briefing(cfg, lab_presets=None):
     # the manual per-seat link to open on each computer. The shortcut room is the
     # lab's OWN default_room now, not a hardcoded "study".
     has_participant_links = room_has_participant_links(room, lab_room)
+    _services = effective_services(c, resolved_presets)
     # Only a real lab has desktop shortcuts on its PCs. "Other host" has none, so
     # the briefing shows the link; "localhost" has no participant computers at
     # all, so it says so instead of naming a shortcut that does not exist.
@@ -8220,6 +8650,14 @@ def launch_briefing(cfg, lab_presets=None):
         # Guidance for staff about the per-seat link: it already includes
         # welcome_page_ok=1, and this is the link to document / put on the PCs.
         "welcome_note": WELCOME_NOTE,
+        # The additional services that open after the admin page once the
+        # server is ready ([] = none; the popup then shows nothing about them).
+        # Exactly the ticked items of "Opens in your browser on launch": the
+        # oTree admin page (open_browser) and the services that will open.
+        "opens_admin": bool(c["open_browser"]),
+        "opens_admin_label": OPENS_GROUP_ADMIN,
+        "services": [{"name": s["name"], "url": s["url"]} for s in _services],
+        "services_title": SERVICES_BRIEFING_TITLE,
     }
 
 
@@ -9091,6 +9529,182 @@ def headless_otree_problem(env=None, python=None, recorded=""):
         "The 'otree' command was not found on this computer's PATH.", "",
         "Install oTree for that Python (in a terminal), %s:" % then,
         '"%s" -m pip install otree' % pip_python])
+
+
+# ---------------------------------------------------------------------------
+# One-click shortcut failure boxes (2026-11-02). Every failure of a ``--run``
+# shortcut shows the REASON in the box itself, in plain words; the exit code
+# and the log path are only a small "Details" line at the end. A shortcut for
+# a config that is not there any more also says which configs there are and
+# offers to open the launcher (to pick or save a config and make a new
+# shortcut) or to delete the shortcut file.
+# ---------------------------------------------------------------------------
+HEADLESS_FAILURE_TITLE = "oTree Lab Launcher"
+HEADLESS_FAILURE_LEAD = "The one-click shortcut did not start anything."
+HEADLESS_OPEN_LAUNCHER_BUTTON = "Open the launcher"
+HEADLESS_DELETE_SHORTCUT_BUTTON = "Delete this shortcut"
+HEADLESS_CLOSE_BUTTON = "Close"
+# The answers of the missing-config box.
+HEADLESS_CHOICE_OPEN = "open"
+HEADLESS_CHOICE_DELETE = "delete"
+HEADLESS_CHOICE_CLOSE = "close"
+# How many config names the box lists before "and N more".
+HEADLESS_MAX_LISTED_CONFIGS = 12
+# The default launchers at the repo root (what "Open the launcher" starts).
+WIN_START_SCRIPT = "Win_Start oTree Lab Launcher.vbs"
+MAC_START_SCRIPT = "Mac_Start oTree Lab Launcher.command"
+# Every one-click shortcut file the launcher writes carries this line, so the
+# "Delete this shortcut" button only ever removes such a file.
+SHORTCUT_MARKER = "oTree Lab Launcher one-click shortcut."
+
+
+def headless_failure_details(code, log_path=""):
+    """The small last line of a failure box: the exit code and the log file."""
+    line = "Details: exit code %s." % code
+    if log_path:
+        line += " Log: %s" % log_path
+    return line
+
+
+def headless_failure_text(reason, code, log_path="", lead=True):
+    """The text of a one-click failure box: the lead line, the REASON in plain
+    words, then the exit code + log as a small details line. ``reason`` empty =
+    a generic sentence (never only the code). ``lead`` False leaves out the
+    lead line, for a reason that already starts by saying nothing started."""
+    reason = str(reason or "").strip() or (
+        "Something went wrong before the server was ready. The log has the details.")
+    parts = ([HEADLESS_FAILURE_LEAD] if lead else []) + [
+        reason, headless_failure_details(code, log_path)]
+    return "\n\n".join(parts)
+
+
+# How many of resetdb's last lines the failure box quotes.
+HEADLESS_RESETDB_TAIL_LINES = 6
+
+
+def headless_resetdb_failed_reason(code, lines=None):
+    """Why the shortcut stopped after a failed ``otree resetdb``: the code it
+    exited with and the last lines it printed (usually the real error)."""
+    text = ("Resetting the database (otree resetdb) failed with exit code %s, so "
+            "the server was not started." % code)
+    tail = [str(l).rstrip() for l in (lines or []) if str(l or "").strip()]
+    tail = tail[-HEADLESS_RESETDB_TAIL_LINES:]
+    if tail:
+        text += "\n\nThe last lines it printed:\n" + "\n".join(tail)
+    return text
+
+
+def headless_missing_config_reason(wanted, names):
+    """Why a shortcut's config was not found, in plain words, plus the configs
+    that ARE saved on this computer (the built-in Lab default included)."""
+    wanted = str(wanted or "").strip()
+    names = [str(n).strip() for n in (names or []) if str(n or "").strip()]
+    if wanted:
+        lines = ['No saved config named "%s" on this computer. It may have been '
+                 "renamed or deleted after this shortcut was made." % wanted]
+    else:
+        lines = ["This shortcut does not name a config."]
+    if names:
+        lines += ["", "Saved configs here:"]
+        shown = names[:HEADLESS_MAX_LISTED_CONFIGS]
+        lines += ["  - %s" % n for n in shown]
+        if len(names) > len(shown):
+            lines.append("  and %d more" % (len(names) - len(shown)))
+    else:
+        lines += ["", "There are no saved configs on this computer yet."]
+    lines += ["", "To fix it: open the launcher, pick a config (or save one again "
+                  'as "%s") and click Save one-click shortcut to make a new '
+                  "shortcut." % wanted if wanted else
+              "To fix it: open the launcher, pick a config and click Save "
+              "one-click shortcut to make a new shortcut."]
+    return "\n".join(lines)
+
+
+def headless_missing_config_text(wanted, names, code=2, log_path="", can_delete=False,
+                                 windows=False):
+    """The full missing-config box. On Windows the buttons can only be Yes / No
+    / Cancel, so the text says what each does; on the Mac the buttons carry
+    their own names."""
+    body = headless_failure_text(headless_missing_config_reason(wanted, names),
+                                 code, log_path)
+    if not windows:
+        return body
+    if can_delete:
+        legend = ("Yes = %s.  No = %s.  Cancel = %s."
+                  % (HEADLESS_OPEN_LAUNCHER_BUTTON, HEADLESS_DELETE_SHORTCUT_BUTTON,
+                     HEADLESS_CLOSE_BUTTON))
+    else:
+        legend = "Open the launcher now?"
+    return body + "\n\n" + legend
+
+
+def launcher_start_script(platform_name=None, root=None):
+    """The default launcher a one-click failure box opens ("Open the launcher"):
+    the Windows .vbs or the Mac .command at the repo root, or "" when it is not
+    there (another platform, or a moved file)."""
+    platform_name = platform_name or sys.platform
+    root = root or repo_root()
+    if platform_name.startswith("win"):
+        name = WIN_START_SCRIPT
+    elif platform_name == "darwin":
+        name = MAC_START_SCRIPT
+    else:
+        return ""
+    path = os.path.join(root, name)
+    return path if os.path.isfile(path) else ""
+
+
+def open_launcher_command(platform_name=None, root=None, python=None):
+    """How "Open the launcher" starts the launcher: a list for subprocess
+    (Mac: ``open`` the Start .command, so it gets its own Terminal and venv),
+    the .vbs path as a string for Windows (``os.startfile``), else the web
+    launcher on this Python. Never None."""
+    platform_name = platform_name or sys.platform
+    root = root or repo_root()
+    script = launcher_start_script(platform_name, root)
+    if script and platform_name.startswith("win"):
+        return script
+    if script and platform_name == "darwin":
+        return ["open", script]
+    web = os.path.join(root, "app", "otree_launcher_web.py")
+    return [python or sys.executable or "python3", web]
+
+
+def shortcut_file_is_ours(path, config_name=None):
+    """True when ``path`` is a one-click shortcut the launcher wrote (it carries
+    :data:`SHORTCUT_MARKER`) and, when ``config_name`` is given, it runs that
+    config. The guard before "Delete this shortcut" removes anything."""
+    path = str(path or "").strip()
+    if not path or not os.path.isfile(path):
+        return False
+    lower = path.lower()
+    if not (lower.endswith(".vbs") or lower.endswith(".command")):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read(20000)
+    except OSError:
+        return False
+    if SHORTCUT_MARKER not in text or "--run" not in text:
+        return False
+    if config_name is None:
+        return True
+    name = str(config_name or "").strip()
+    return (name in text or name.replace('"', '""') in text
+            or shlex.quote(name) in text)
+
+
+def delete_shortcut_file(path, config_name=None):
+    """Delete a one-click shortcut file (only one :func:`shortcut_file_is_ours`
+    accepts). Returns ``(ok, message)``; never raises."""
+    if not shortcut_file_is_ours(path, config_name):
+        return False, ("The shortcut file was not deleted: %s is not a one-click "
+                       "shortcut for this config." % (path or "(no file)"))
+    try:
+        os.remove(path)
+    except OSError as error:
+        return False, "Could not delete the shortcut %s: %s" % (path, error)
+    return True, "Deleted the shortcut %s." % path
 
 
 def running_server_problem(config):
@@ -10704,6 +11318,17 @@ UI_TIPS = {
     "wizard_no_labs": "No labs yet: add your lab here; with several, the selected one "
                       "is the lab this computer is in. Or copy a lab_info.json from "
                       "another computer of the lab into data/ and restart.",
+    "services": "Web pages that open in a new browser tab once the oTree server is "
+                "ready, right after the admin page (for example a lab tool). Web "
+                "addresses only, never programs. Saved per lab in lab_info.json. "
+                "“Include by default” ticks the service for every config "
+                "that has not made its own choice.",
+    "services_launch": "Everything ticked here opens in a new browser tab once "
+                       "the server is ready, each on its own: the oTree admin page "
+                       "(logged in when Auto login is on), the lab\u2019s services "
+                       "and your own. A lab service you have not changed follows "
+                       "the lab setting; one you ticked or unticked yourself stays "
+                       "your choice. A page that cannot open never stops the launch.",
 }
 
 

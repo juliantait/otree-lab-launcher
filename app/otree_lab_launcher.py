@@ -318,9 +318,7 @@ validate_project = core.validate_project
 find_app_packages = core.find_app_packages
 
 
-def titlecase_app(name):
-    """A readable, title-cased app name, e.g. 'public_goods' -> 'Public Goods'."""
-    return re.sub(r"[_-]+", " ", name).strip().title()
+titlecase_app = core.app_display_name
 
 
 # ---------------------------------------------------------------------------
@@ -574,10 +572,16 @@ def _hlog(msg):
         pass
 
 
+# What the last headless resetdb / server start printed or failed with (the
+# failure box quotes its end). Module-level so the helpers keep their calls.
+_HEADLESS_OUTPUT = []
+
+
 def _headless_resetdb(path, env, otree=None):
     """Run ``otree resetdb`` (answering the y) and stream its output. Returns the
     exit code, or ``None`` if it could not be started. ``otree`` = the full path
-    the shortcut recorded (None = the bare ``otree`` on the PATH)."""
+    the shortcut recorded (None = the bare ``otree`` on the PATH). What it
+    printed (or the start error) also goes to ``_HEADLESS_OUTPUT``."""
     command = resetdb_command(otree)
     _hlog("$ " + " ".join(command) + '     (answering "y" on stdin)')
     kwargs = {}
@@ -590,6 +594,7 @@ def _headless_resetdb(path, env, otree=None):
             universal_newlines=True, bufsize=1, **kwargs)
     except OSError as error:
         _hlog("Could not run otree resetdb: %s" % error)
+        _HEADLESS_OUTPUT.append(str(error))
         return None
     try:
         process.stdin.write("y\n")
@@ -601,6 +606,8 @@ def _headless_resetdb(path, env, otree=None):
         line = line.rstrip()
         if line:
             _hlog(line)
+            _HEADLESS_OUTPUT.append(line)
+            del _HEADLESS_OUTPUT[:-50]
     return process.wait()
 
 
@@ -609,7 +616,8 @@ def _headless_start_server(cfg, path, env, otree=None):
     (via build_server_launch). Returns ``(ok, process)``: ``ok`` is True on a
     successful spawn; ``process`` is the linux-background child (so the caller can
     surface an early exit) or None on the terminal paths / on failure.
-    ``otree`` = the full path the shortcut recorded (None = the PATH's)."""
+    ``otree`` = the full path the shortcut recorded (None = the PATH's).
+    The start error also goes to ``_HEADLESS_OUTPUT``."""
     spec = build_server_launch(cfg, path, env, otree=otree)
     _hlog("Starting the server in a %s." % spec["description"])
     _hlog("$ " + " ".join(spec["cmd"][:2]) + (" ..." if len(spec["cmd"]) > 2 else ""))
@@ -629,6 +637,7 @@ def _headless_start_server(cfg, path, env, otree=None):
             subprocess.Popen(spec["cmd"], **kwargs)
     except OSError as error:
         _hlog("Could not start otree prodserver: %s" % error)
+        _HEADLESS_OUTPUT.append(str(error))
         return False, None
     _hlog("otree prodserver started.")
     return True, process
@@ -738,6 +747,21 @@ def _ask_headless_update_choice(problems, config_name):
 # headless_run's signal to start the whole flow again (after a Git pull).
 _HEADLESS_RESTART = object()
 
+# Why the last headless run failed, for the failure box (2026-11-02): every
+# failing exit sets ``reason`` (plain words), ``code`` and, for a config that
+# is not there, ``kind`` "missing_config" + ``wanted`` + ``names``. Cleared at
+# the start of every run.
+HEADLESS_FAILURE = {}
+
+
+def _headless_fail(code, reason, **info):
+    """Record why the headless run stops with ``code`` and return ``code``."""
+    HEADLESS_FAILURE.clear()
+    HEADLESS_FAILURE.update(info)
+    HEADLESS_FAILURE["code"] = code
+    HEADLESS_FAILURE["reason"] = str(reason or "").strip()
+    return code
+
 
 def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
                  choose=None, puller=None, otree_check=None, otree_path=None):
@@ -773,6 +797,7 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
     ``otree`` on the PATH is used, as for a shortcut saved before the path was
     recorded. With neither, exit 11 names the missing path.
     """
+    HEADLESS_FAILURE.clear()
     pulled = False
     while True:
         code = _headless_run_once(config_name, store_path, ask, problem_finder,
@@ -794,17 +819,19 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
     missing = (otree_check or (lambda: core.headless_otree_problem(recorded=recorded)))()
     if missing:
         _hlog("ERROR: " + missing.replace("\n", " ").replace("  ", " "))
-        return core.HEADLESS_OTREE_MISSING_EXIT
+        return _headless_fail(core.HEADLESS_OTREE_MISSING_EXIT, missing, lead=False)
     # The recorded oTree while it is there, else the bare ``otree`` (PATH).
     otree = core.headless_otree_command(recorded) or None
     # Upgrade an old data folder first (same startup step as the GUI). A data
     # folder written by a NEWER launcher is refused: exit code 8.
     storage = core.prepare_storage()
     if storage.get("newer_schema"):
-        sys.stderr.write("ERROR: %s\n" % (storage.get("message") or
-                                          "data folder written by a newer launcher"))
+        reason = (storage.get("message") or
+                  "The data folder was written by a newer version of the launcher.")
+        sys.stderr.write("ERROR: %s\n" % reason)
         sys.stderr.flush()
-        return 8
+        return _headless_fail(8, reason + " Update the launcher on this computer, "
+                              "then run the shortcut again.")
     store_path = store_path or presets_path()
     presets, store_extra = load_store(store_path)
     core.apply_default_database(store_extra)
@@ -834,7 +861,8 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
             sys.stderr.write("There are no saved configs yet. Open the launcher and "
                              "save one first.\n")
         sys.stderr.flush()
-        return 2
+        return _headless_fail(2, core.headless_missing_config_reason(wanted, names),
+                              kind="missing_config", wanted=wanted, names=names)
 
     # A config saved with the lab's default room follows the lab's CURRENT
     # default room (core.follow_lab_room), so it never needs a room warning.
@@ -858,7 +886,10 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
     path = cfg["project_path"].strip()
     if not path or not os.path.isdir(path):
         _hlog("ERROR: the config's project folder does not exist: %r" % path)
-        return 3
+        return _headless_fail(3, (
+            'The project folder of the config "%s" is not there:\n%s\n\nOpen the '
+            "launcher, choose the project folder again and save the config."
+            % (wanted, path or "(none chosen)")))
     _hlog("Project folder: %s" % path)
     if otree:
         _hlog("oTree: %s (recorded in the shortcut)" % otree)
@@ -875,7 +906,7 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         _hlog("ERROR: %s" % running)
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
-        return 9
+        return _headless_fail(9, core.HEADLESS_SESSION_RUNNING_MESSAGE, lead=False)
 
     # 0b. With no window there is no launch screen to show warnings on, so for
     #     exactly three of them the shortcut STOPS AND ASKS, in one box: a newer
@@ -921,7 +952,7 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         label_file, note = core.prepare_label_file(cfg, wanted, lab_presets)
     except OSError as error:
         _hlog("ERROR: could not write the seat file: %s" % error)
-        return 4
+        return _headless_fail(4, "Could not write the participant seat file: %s" % error)
     _hlog(note)
 
     # 2. Resolve the environment (DATABASE_URL, admin/auth, room + label file).
@@ -934,24 +965,32 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
 
     # 3. Reset the database if the config asks for it.
     if cfg["resetdb"]:
+        del _HEADLESS_OUTPUT[:]
         code = _headless_resetdb(path, env, otree)
+        tail = list(_HEADLESS_OUTPUT)
         if code is None:
-            return 5
+            return _headless_fail(5, "Could not run otree resetdb (resetting the "
+                                     "database): %s" % ("; ".join(tail[-1:]) or
+                                                        "it did not start"))
         if code != 0:
             _hlog("ERROR: otree resetdb exited with code %d; the server was not started."
                   % code)
-            return 5
+            return _headless_fail(5, core.headless_resetdb_failed_reason(code, tail))
         _hlog("otree resetdb finished with exit code 0.")
     else:
         _hlog("Reset database is off, so otree resetdb was skipped.")
 
     # 4. Start the server in its own terminal window (the wanted Launch terminal).
     server_start = time.monotonic()
+    del _HEADLESS_OUTPUT[:]
     ok, server_proc = _headless_start_server(cfg, path, env, otree)
+    start_errors = list(_HEADLESS_OUTPUT)
     if not ok:
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
-        return 6
+        return _headless_fail(6, "Could not start the oTree server (otree "
+                                 "prodserver): %s" % ("; ".join(start_errors[-1:]) or
+                                                      "it did not start"))
 
     # 5. Open the admin dashboard already authenticated (auto-login on by default,
     #    the GUI default), via the SAME core entry point the GUI uses. The open
@@ -990,10 +1029,18 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         # answered. Do NOT stamp last_run; report the honest failure and a non-zero
         # exit so a broken one-click shortcut is obvious. Fail-soft: a page may
         # already be open (manual fallback), so the operator can still retry.
-        _hlog(_headless_startup_failure_message(server_proc))
+        message = _headless_startup_failure_message(server_proc)
+        _hlog(message)
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
-        return 7
+        return _headless_fail(7, message.replace("ERROR: ", "", 1))
+
+    # Additional services: only now that the server is READY, right after the
+    # admin page (same as the GUI). A page that cannot open is one log line and
+    # never changes the exit code.
+    core.open_launch_services(
+        cfg, lab_presets,
+        log=lambda level, text: _hlog(text if level in ("ok", "info") else "WARNING: " + text))
 
     # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
     # but ONLY now that the server is confirmed ready, and NEVER for the built-in
@@ -1041,6 +1088,131 @@ def _cli_otree_path(argv):
     return ""
 
 
+def _cli_shortcut_path(argv):
+    """The path after ``--shortcut`` (the shortcut file itself, passed by
+    shortcuts saved since 2026-11-02), or "" for an older shortcut."""
+    for index, token in enumerate(argv):
+        if token == "--shortcut":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--shortcut="):
+            return token[len("--shortcut="):]
+    return ""
+
+
+def _ask_missing_config_choice(text, can_delete):
+    """The missing-config box. Returns core.HEADLESS_CHOICE_OPEN / _DELETE /
+    _CLOSE. macOS: an alert with named buttons (Open the launcher is the
+    default). Windows: Yes / No / Cancel (or Yes / No without the delete
+    choice); ``text`` already says what each does. Elsewhere: the text goes to
+    stderr and nothing else happens. Never raises."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+            # MB_ICONERROR | MB_SETFOREGROUND, + MB_YESNOCANCEL or MB_YESNO
+            flags = 0x10 | 0x10000 | (0x03 if can_delete else 0x04)
+            answer = ctypes.windll.user32.MessageBoxW(
+                0, str(text), core.HEADLESS_FAILURE_TITLE, flags)
+            if answer == 6:                                   # IDYES
+                return core.HEADLESS_CHOICE_OPEN
+            if answer == 7 and can_delete:                    # IDNO
+                return core.HEADLESS_CHOICE_DELETE
+            return core.HEADLESS_CHOICE_CLOSE
+        if sys.platform == "darwin":
+            buttons = [core.HEADLESS_CLOSE_BUTTON]
+            if can_delete:
+                buttons.append(core.HEADLESS_DELETE_SHORTCUT_BUTTON)
+            buttons.append(core.HEADLESS_OPEN_LAUNCHER_BUTTON)
+            script = ('display alert %s message %s as critical buttons {%s} '
+                      'default button %s cancel button %s'
+                      % (core._applescript_string(core.HEADLESS_FAILURE_TITLE),
+                         core._applescript_string(str(text)),
+                         ", ".join(core._applescript_string(b) for b in buttons),
+                         core._applescript_string(core.HEADLESS_OPEN_LAUNCHER_BUTTON),
+                         core._applescript_string(core.HEADLESS_CLOSE_BUTTON)))
+            result = subprocess.run(["osascript", "-e", script],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            output = result.stdout.decode("utf-8", "replace") \
+                if isinstance(result.stdout, (bytes, bytearray)) else str(result.stdout or "")
+            if result.returncode != 0:
+                return core.HEADLESS_CHOICE_CLOSE
+            if core.HEADLESS_OPEN_LAUNCHER_BUTTON in output:
+                return core.HEADLESS_CHOICE_OPEN
+            if can_delete and core.HEADLESS_DELETE_SHORTCUT_BUTTON in output:
+                return core.HEADLESS_CHOICE_DELETE
+            return core.HEADLESS_CHOICE_CLOSE
+    except Exception:
+        return core.HEADLESS_CHOICE_CLOSE
+    try:
+        sys.stderr.write(str(text) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    return core.HEADLESS_CHOICE_CLOSE
+
+
+def _open_launcher():
+    """Start the launcher (the default Start script at the repo root), for the
+    failure box's "Open the launcher". Returns True when it was started."""
+    command = core.open_launcher_command()
+    try:
+        if isinstance(command, str):
+            os.startfile(command)          # Windows: the Start .vbs
+        else:
+            kwargs = {}
+            if sys.platform.startswith("win"):
+                kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            subprocess.Popen(command, cwd=core.repo_root(), **kwargs)
+        _hlog("Opened the launcher.")
+        return True
+    except Exception as error:  # noqa: BLE001 - say it, never crash the box
+        _hlog("Could not open the launcher: %s" % error)
+        return False
+
+
+def report_headless_failure(code, otree_path="", shortcut_path="", notify=None,
+                            choose=None, opener=None, log_path=None):
+    """Show the failure box for a finished headless run (nothing for 0 and for
+    Cancel). The box says the REASON in plain words (HEADLESS_FAILURE, set by
+    the run); the exit code and the log are one small details line. A missing
+    config gets the box with choices: Open the launcher / Delete this shortcut
+    (only when the shortcut passed its own path and it really is a one-click
+    shortcut for that config) / Close. Returns the choice made ("" for a plain
+    box). Seams: ``notify(text)``, ``choose(text, can_delete)``, ``opener()``."""
+    if code == 0 or code == core.HEADLESS_CANCELLED_EXIT:
+        return ""
+    notify = notify or _notify_headless_failure
+    log_path = _resolve_crash_log_path() if log_path is None else log_path
+    failure = dict(HEADLESS_FAILURE) if HEADLESS_FAILURE.get("code") == code else {}
+    reason = failure.get("reason", "")
+    if code == core.HEADLESS_OTREE_MISSING_EXIT and not reason:
+        reason = core.headless_otree_problem(recorded=otree_path) or (
+            "oTree was not found, so the one-click shortcut did not start anything.")
+        failure["lead"] = False
+    if failure.get("kind") == "missing_config":
+        wanted = failure.get("wanted", "")
+        shortcut_path = os.path.abspath(shortcut_path) if shortcut_path else ""
+        can_delete = core.shortcut_file_is_ours(shortcut_path, wanted)
+        text = core.headless_missing_config_text(
+            wanted, failure.get("names", []), code=code, log_path=log_path,
+            can_delete=can_delete, windows=sys.platform.startswith("win"))
+        choice = (choose or _ask_missing_config_choice)(text, can_delete)
+        if choice == core.HEADLESS_CHOICE_OPEN:
+            if not (opener or _open_launcher)():
+                notify("Could not open the launcher. Start it with %s in the "
+                       "launcher folder." % (core.WIN_START_SCRIPT
+                                             if sys.platform.startswith("win")
+                                             else core.MAC_START_SCRIPT))
+        elif choice == core.HEADLESS_CHOICE_DELETE:
+            ok, message = core.delete_shortcut_file(shortcut_path, wanted)
+            _hlog(message)
+            if not ok:
+                notify(message)
+        return choice
+    notify(core.headless_failure_text(reason, code, log_path,
+                                      lead=failure.get("lead", True)))
+    return ""
+
+
 def _notify_headless_failure(message):
     """Show ONE native message box on a headless one-click failure, so a
     windowless (pythonw) shortcut failure is not silent (fable review item 9).
@@ -1085,26 +1257,13 @@ if __name__ == "__main__":
             raise
         except Exception as exc:  # noqa: BLE001 - report, don't vanish silently
             _log_startup_crash(exc)
-            _notify_headless_failure(
-                "The oTree Lab Launcher one-click shortcut failed to start: %s: %s"
-                % (type(exc).__name__, exc))
+            _notify_headless_failure(core.headless_failure_text(
+                "The launcher hit an unexpected error: %s: %s" % (type(exc).__name__, exc),
+                1, _resolve_crash_log_path()))
             sys.stderr.write("Headless run failed: %s: %s\n" % (type(exc).__name__, exc))
             sys.exit(1)
-        if _code == 9:
-            # A session already answers on the launch port: say exactly that.
-            _notify_headless_failure(core.HEADLESS_SESSION_RUNNING_MESSAGE)
-        elif _code == core.HEADLESS_OTREE_MISSING_EXIT:
-            # The otree command the launch runs is missing: say which Python ran.
-            _notify_headless_failure(core.headless_otree_problem(recorded=_otree_path) or
-                                     "oTree was not found, so the one-click "
-                                     "shortcut did not start anything.")
-        elif _code == core.HEADLESS_CANCELLED_EXIT:
-            pass      # the user chose Cancel in the question box: nothing to report
-        elif _code != 0:
-            _notify_headless_failure(
-                "The oTree Lab Launcher one-click shortcut could not launch "
-                "(exit code %s). See the log for details:\n%s"
-                % (_code, _resolve_crash_log_path()))
+        report_headless_failure(_code, otree_path=_otree_path,
+                                shortcut_path=_cli_shortcut_path(sys.argv[1:]))
         sys.exit(_code)
 
 
@@ -1291,8 +1450,10 @@ class Card(tk.Frame):
 class StatusLine(tk.Frame):
     """A small coloured strip used for the project check and inline errors."""
 
-    def __init__(self, master, font, **kwargs):
+    def __init__(self, master, font, bold_font=None, **kwargs):
         tk.Frame.__init__(self, master, bg=COLORS["card"], **kwargs)
+        self.font = font
+        self.bold_font = bold_font or font
         self.dot = tk.Label(self, text="", bg=COLORS["card"], fg=COLORS["muted"], font=font)
         self.dot.pack(side="left", padx=(0, 6), anchor="n")
         self.label = tk.Label(
@@ -1310,7 +1471,10 @@ class StatusLine(tk.Frame):
         if callable(self.on_show_log):
             self.on_show_log()
 
-    def set(self, level, message, quiet=False):
+    def set(self, level, message, quiet=False, headline=False):
+        """``headline`` (an OK state only): a green tick + the message in BOLD
+        green, e.g. the valid-project line (core.project_ok_headline)."""
+        self.label.configure(font=self.font)
         hint = False
         if self.on_show_log is not None:
             message, hint = core.split_activity_log_hint(message)
@@ -1331,6 +1495,11 @@ class StatusLine(tk.Frame):
         if quiet and level == "ok":
             self.dot.configure(fg=color, text="✓" if message else "")
             self.label.configure(fg=COLORS["faint"], text=message)
+            return
+        if headline and level == "ok":
+            self.dot.configure(fg=color, text=glyph_or_fallback(core.PROJECT_OK_TICK, "*")
+                               if message else "")
+            self.label.configure(fg=color, text=message, font=self.bold_font)
             return
         self.dot.configure(fg=color, text=glyph if message else "")
         self.label.configure(fg=color, text=message)
@@ -2032,7 +2201,9 @@ class LauncherApp(object):
                 self.var[key] = tk.BooleanVar(self.root, value=default)
             elif isinstance(default, int):
                 self.var[key] = tk.IntVar(self.root, value=default)
-            elif isinstance(default, list):
+            elif isinstance(default, (list, dict)):
+                # Lists and dicts (seat exclusions, additional services) live as
+                # JSON text in a StringVar, so a change traces like any field.
                 self.var[key] = tk.StringVar(self.root, value=json.dumps(default))
             else:
                 self.var[key] = tk.StringVar(self.root, value=default)
@@ -2459,6 +2630,7 @@ class LauncherApp(object):
         # + room-layout map).
         self._card_project(left)
         self._card_database(left)
+        self._card_advanced(left)
         self._card_lab(right)
 
     def _label(self, parent, text):
@@ -2514,7 +2686,7 @@ class LauncherApp(object):
         # Git pull button at its right (inside the status area, as on the web
         # face; it used to sit in the Browse row, where it squeezed the path).
         # It pulls the selected STUDY folder, never the launcher's own folder.
-        self.project_status = StatusLine(body, self.fonts.small)
+        self.project_status = StatusLine(body, self.fonts.small, bold_font=self.fonts.small_bold)
         self.project_status.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         self.git_update_btn = ttk.Button(
             body, text=core.GIT_PULL_BUTTON_LABEL, style="Slim.TButton",
@@ -2522,8 +2694,8 @@ class LauncherApp(object):
         self.git_update_btn.grid(row=1, column=1, sticky="ne", padx=(8, 0), pady=(8, 0))
         self._apply_github_sync_buttons()
 
-        # ...and, when the folder is a real oTree project, the app packages as a
-        # title-cased bullet list beneath it.
+        # ...and, when the folder is a real oTree project, the app names on their
+        # own muted line beneath it (core.project_ok_apps_line).
         self.app_bullets = tk.Frame(body, bg=COLORS["card"])
         self.app_bullets.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(20, 0))
         self.app_bullets.grid_remove()
@@ -2670,19 +2842,251 @@ class LauncherApp(object):
         widget.bind("<Leave>", lambda _e: widget.configure(fg=COLORS["muted"]), add="+")
 
     def _set_app_bullets(self, apps):
-        """Show the project's app packages as a title-cased bullet list."""
+        """Show the project's app names on ONE muted line under the headline
+        (title-cased, comma-separated: core.project_ok_apps_line); it wraps."""
         for child in list(self.app_bullets.winfo_children()):
             child.destroy()
+        self.app_names_label = None
         if not apps:
             self.app_bullets.grid_remove()
             return
-        for app_name in apps:
-            tk.Label(self.app_bullets, text="•  " + titlecase_app(app_name),
-                     bg=COLORS["card"], fg=COLORS["text"], font=self.fonts.small,
-                     anchor="w", justify="left").pack(fill="x")
+        self.app_names_label = tk.Label(
+            self.app_bullets, text=core.project_ok_apps_line(apps),
+            bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small,
+            anchor="w", justify="left", wraplength=340)
+        self.app_names_label.pack(fill="x")
         self.app_bullets.grid()
+        self._wrap_project_status()
 
     # (2) Database ---------------------------------------------------------
+
+    # -- Advanced: additional services on launch (2026-10-30) ----------------
+
+    def _card_advanced(self, parent):
+        """A slim card that is ONE caption line while collapsed ("▸  ADVANCED"
+        plus a faint count of the services that will open; the same disclosure
+        style as DETAILS). Inside: "Additional services on launch", one tick box
+        per service of the config's lab (core.config_service_rows decides what
+        is ticked and whether that is the lab default or this config's own
+        choice, with "Use lab default" to drop the choice), then the config's
+        own services and a Name + web address row to add one."""
+        fonts = self.fonts
+        card = tk.Frame(parent, bg=COLORS["card"], highlightbackground=COLORS["card_line"],
+                        highlightcolor=COLORS["card_line"], highlightthickness=1, bd=0)
+        card.grid(row=2, column=0, sticky="ew", pady=(0, PAD - 3))
+        self.advanced_card = card
+        head = tk.Frame(card, bg=COLORS["card"])
+        head.pack(fill="x", padx=PAD, pady=(PAD - 3, PAD - 3))
+        self.advanced_shown = tk.BooleanVar(self.root, value=False)
+        self.advanced_toggle = tk.Label(
+            head, text="▸  " + core.SERVICES_ADVANCED_LABEL.upper(), bg=COLORS["card"],
+            fg=COLORS["muted"], font=fonts.small_bold, anchor="w", cursor="hand2")
+        self.advanced_toggle.pack(side="left")
+        self.advanced_toggle.bind("<Button-1>", self._toggle_advanced)
+        self.advanced_caption = tk.Label(head, text="", bg=COLORS["card"], fg=COLORS["faint"],
+                                         font=fonts.small, anchor="w")
+        self.advanced_caption.pack(side="left", padx=(8, 0))
+
+        body = self.advanced_body = tk.Frame(card, bg=COLORS["card"])
+        title = tk.Frame(body, bg=COLORS["card"])
+        title.pack(fill="x")
+        tk.Label(title, text=core.OPENS_ON_LAUNCH_TITLE, bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").pack(side="left")
+        info_tip(title, core.ui_tip("services_launch"), font=fonts.small).pack(side="left")
+
+        # ONE list in three groups (Julian, 2026-10-30); every item has its own
+        # tick and opens on its own once the server is ready.
+        def group(text):
+            tk.Label(body, text=text.upper(), bg=COLORS["card"], fg=COLORS["faint"],
+                     font=fonts.small_bold, anchor="w").pack(fill="x", pady=(8, 0))
+        # 1. The oTree admin page IS the config's open_browser field: one tick
+        # box at the top of the list, no group heading (Julian).
+        self.open_browser_check = tk.Checkbutton(
+            body, text=core.OPENS_GROUP_ADMIN, variable=self.var["open_browser"],
+            bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["card"],
+            activeforeground=COLORS["text"], selectcolor=COLORS["accent"], font=fonts.body,
+            anchor="w", bd=0, highlightthickness=0, padx=0, cursor="hand2")
+        self.open_browser_check.pack(fill="x", pady=(2, 0))
+        group(core.OPENS_GROUP_LAB)
+        self.services_rows_frame = tk.Frame(body, bg=COLORS["card"])
+        self.services_rows_frame.pack(fill="x", pady=(2, 0))
+        group(core.OPENS_GROUP_OWN)
+        self.services_own_frame = tk.Frame(body, bg=COLORS["card"])
+        self.services_own_frame.pack(fill="x")
+        add = tk.Frame(body, bg=COLORS["card"])
+        add.pack(fill="x", pady=(6, 0))
+        add.columnconfigure(1, weight=1)
+        self.service_new_name = tk.StringVar(self.root, value="")
+        self.service_new_url = tk.StringVar(self.root, value="")
+        name_entry = ttk.Entry(add, textvariable=self.service_new_name, width=14)
+        name_entry.grid(row=0, column=0, sticky="w")
+        url_entry = ttk.Entry(add, textvariable=self.service_new_url)
+        url_entry.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+        for entry in (name_entry, url_entry):
+            entry.bind("<Return>", lambda _e: self._add_own_service())
+        self.service_add_button = ttk.Button(add, text=core.SERVICE_ADD_OWN_LABEL,
+                                             command=self._add_own_service)
+        self.service_add_button.grid(row=0, column=2, sticky="e")
+        tk.Label(add, text="Name", bg=COLORS["card"], fg=COLORS["faint"],
+                 font=fonts.small).grid(row=1, column=0, sticky="w")
+        tk.Label(add, text="Web address (http:// or https://)", bg=COLORS["card"],
+                 fg=COLORS["faint"], font=fonts.small).grid(row=1, column=1, sticky="w",
+                                                           padx=(6, 0))
+        self.services_msg = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["warn"],
+                                     font=fonts.small, anchor="w", justify="left",
+                                     wraplength=420)
+        self.services_msg.pack(fill="x")
+        self.service_checks = {}
+        self.service_tags = {}
+        self.service_reset_links = {}
+        self.own_service_rows = []
+        self.own_service_checks = []
+        self._services_signature = None
+
+    def _toggle_advanced(self, _event=None):
+        self.advanced_shown.set(not self.advanced_shown.get())
+        if self.advanced_shown.get():
+            self.advanced_body.pack(fill="x", padx=PAD, pady=(0, PAD - 2))
+            self.advanced_toggle.configure(text="▾  " + core.SERVICES_ADVANCED_LABEL.upper())
+        else:
+            self.advanced_body.pack_forget()
+            self.advanced_toggle.configure(text="▸  " + core.SERVICES_ADVANCED_LABEL.upper())
+
+    def _service_choices(self):
+        try:
+            value = json.loads(self.var["service_choices"].get() or "{}")
+        except (ValueError, tk.TclError):
+            value = {}
+        return core.normalize_service_choices(value)
+
+    def _extra_services(self):
+        try:
+            value = json.loads(self.var["extra_services"].get() or "[]")
+        except (ValueError, tk.TclError):
+            value = []
+        return core.normalize_extra_services(value)
+
+    def _set_services_later(self, key, value):
+        """Store a services field once the click that asked for it is over: the
+        change repaints the rows, which destroys the very widget that was
+        clicked, so it must not happen inside that widget's own callback."""
+        def apply():
+            try:
+                self.var[key].set(value)
+            except tk.TclError:
+                pass
+        try:
+            self.root.after_idle(apply)
+        except (tk.TclError, RuntimeError):
+            apply()
+
+    def _on_service_tick(self, service_id, var):
+        choices = self._service_choices()
+        choices[service_id] = bool(var.get())
+        self._set_services_later("service_choices", json.dumps(choices, sort_keys=True))
+
+    def _reset_service_choice(self, service_id):
+        choices = self._service_choices()
+        choices.pop(service_id, None)
+        self._set_services_later("service_choices", json.dumps(choices, sort_keys=True))
+
+    def _add_own_service(self):
+        ok, message, entry = core.validate_service(self.service_new_name.get(),
+                                                   self.service_new_url.get())
+        if not ok:
+            self.services_msg.configure(text=message)
+            return
+        self.services_msg.configure(text="")
+        extras = self._extra_services() + [entry]
+        self.service_new_name.set("")
+        self.service_new_url.set("")
+        self.var["extra_services"].set(json.dumps(extras))
+
+    def _on_own_service_tick(self, index, var):
+        extras = self._extra_services()
+        if 0 <= index < len(extras):
+            extras[index]["enabled"] = bool(var.get())
+            self._set_services_later("extra_services", json.dumps(extras))
+
+    def _remove_own_service(self, index):
+        extras = self._extra_services()
+        if 0 <= index < len(extras):
+            del extras[index]
+            self._set_services_later("extra_services", json.dumps(extras))
+
+    def refresh_services_view(self):
+        """Repaint the additional services from core for the on-screen config.
+        Rebuilt only when something it shows changed (it runs on every edit)."""
+        if not hasattr(self, "services_rows_frame"):
+            return
+        try:
+            cfg = self.form_values()
+        except tk.TclError:
+            return
+        rows = core.config_service_rows(cfg, self.lab_presets)
+        extras = cfg[core.EXTRA_SERVICES_KEY]
+        caption = core.services_caption(cfg, self.lab_presets)
+        self.advanced_caption.configure(text=("·  " + caption) if caption else "")
+        signature = json.dumps([rows, extras], sort_keys=True)
+        if signature == self._services_signature:
+            return
+        self._services_signature = signature
+        fonts = self.fonts
+        for frame in (self.services_rows_frame, self.services_own_frame):
+            for child in list(frame.winfo_children()):
+                child.destroy()
+        self.service_checks, self.service_tags, self.service_reset_links = {}, {}, {}
+        self.own_service_rows = []
+        self.own_service_checks = []
+        if not rows:
+            tk.Label(self.services_rows_frame, text=core.SERVICES_NO_LAB_TEXT,
+                     bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
+                     anchor="w").pack(fill="x")
+        for row in rows:
+            line = tk.Frame(self.services_rows_frame, bg=COLORS["card"])
+            line.pack(fill="x", pady=(2, 0))
+            var = tk.BooleanVar(self.root, value=row["checked"])
+            check = tk.Checkbutton(
+                line, text=row["name"], variable=var, bg=COLORS["card"], fg=COLORS["text"],
+                activebackground=COLORS["card"], activeforeground=COLORS["text"],
+                selectcolor=COLORS["accent"], font=fonts.body, anchor="w", bd=0,
+                highlightthickness=0, padx=0, cursor="hand2",
+                command=lambda sid=row["id"], v=var: self._on_service_tick(sid, v))
+            check.pack(side="left")
+            tag = tk.Label(line, text=row["tag"], bg=COLORS["card"], fg=COLORS["faint"],
+                           font=fonts.small)
+            tag.pack(side="left", padx=(6, 0))
+            self.service_checks[row["id"]] = (check, var)
+            self.service_tags[row["id"]] = tag
+            if row["explicit"]:
+                reset = tk.Label(line, text=core.SERVICE_RESET_LABEL, bg=COLORS["card"],
+                                 fg=COLORS["accent"], font=fonts.small, cursor="hand2")
+                reset.pack(side="left", padx=(8, 0))
+                reset.bind("<Button-1>",
+                           lambda _e, sid=row["id"]: self._reset_service_choice(sid))
+                self.service_reset_links[row["id"]] = reset
+            tk.Label(self.services_rows_frame, text=row["url"], bg=COLORS["card"],
+                     fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
+                fill="x", padx=(24, 0))
+        for index, entry in enumerate(extras):
+            line = tk.Frame(self.services_own_frame, bg=COLORS["card"])
+            line.pack(fill="x", pady=(4, 0))
+            var = tk.BooleanVar(self.root, value=entry["enabled"])
+            check = tk.Checkbutton(
+                line, text=entry["name"], variable=var, bg=COLORS["card"], fg=COLORS["text"],
+                activebackground=COLORS["card"], activeforeground=COLORS["text"],
+                selectcolor=COLORS["accent"], font=fonts.body, anchor="w", bd=0,
+                highlightthickness=0, padx=0, cursor="hand2",
+                command=lambda i=index, v=var: self._on_own_service_tick(i, v))
+            check.pack(side="left")
+            self.own_service_checks.append((check, var))
+            ttk.Button(line, text="Delete", style="Slim.TButton",
+                       command=lambda i=index: self._remove_own_service(i)).pack(
+                side="left", padx=(8, 0))
+            tk.Label(self.services_own_frame, text=entry["url"], bg=COLORS["card"],
+                     fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
+                fill="x", padx=(24, 0))
+            self.own_service_rows.append(line)
 
     def _card_database(self, parent):
         card = Card(parent, "2.  Database")
@@ -3614,11 +4018,11 @@ class LauncherApp(object):
                 raw = self.var[key].get()
             except tk.TclError:
                 raw = DEFAULT_CONFIG[key]
-            if isinstance(DEFAULT_CONFIG[key], list):
+            if isinstance(DEFAULT_CONFIG[key], (list, dict)):
                 try:
                     raw = json.loads(raw) if isinstance(raw, str) else raw
                 except ValueError:
-                    raw = []
+                    raw = type(DEFAULT_CONFIG[key])()
             values[key] = raw
         return normalize_config(values)
 
@@ -3630,7 +4034,8 @@ class LauncherApp(object):
             values = normalize_config(core.follow_lab_room(cfg, self.lab_presets))
             for key in FIELD_KEYS:
                 value = values[key]
-                self.var[key].set(json.dumps(value) if isinstance(value, list) else value)
+                self.var[key].set(json.dumps(value, sort_keys=True)
+                                  if isinstance(value, (list, dict)) else value)
             # Rebuild the lab selector to OFFER this config's OWN lab -- even when
             # it is hidden (display=False) -- so opening a config saved on a
             # now-hidden lab neither drops nor silently reassigns its lab (BUG B).
@@ -3859,16 +4264,17 @@ class LauncherApp(object):
         self._refresh_db_summary()
         self._refresh_admin_summary(cfg)
         self._refresh_run_summary(cfg)
+        # Additional services (Advanced): follows the lab and the choices.
+        self.refresh_services_view()
 
-        # Project validation: a one-line summary, plus the app packages as a
-        # title-cased bullet list when the folder really is an oTree project.
+        # Project validation: a valid project shows a green tick + the bold green
+        # headline, and the app names on their own muted line below (core words
+        # both); any other state is core's one-line message, unchanged.
         level, message = validate_project(cfg["project_path"],
                                           clone_enabled=self._clone_enabled())
         if level == "ok":
             apps = find_app_packages(cfg["project_path"])
-            self.project_status.set("ok",
-                "Looks like an oTree project with settings.py and %d app package%s:"
-                % (len(apps), "" if len(apps) == 1 else "s"))
+            self.project_status.set("ok", core.project_ok_headline(len(apps)), headline=True)
             self._set_app_bullets(apps)
         else:
             self.project_status.set(level, message)
@@ -4073,6 +4479,9 @@ class LauncherApp(object):
             if button is not None and button.winfo_manager():
                 room -= button.winfo_reqwidth() + 12
             self.project_status.set_wraplength(room)
+            names = getattr(self, "app_names_label", None)
+            if names is not None:
+                names.configure(wraplength=max(room - 20, 160))
         except (tk.TclError, AttributeError, ValueError):
             pass
 
@@ -5075,7 +5484,8 @@ class LauncherApp(object):
         # shortcut runs the same one even when the PATH differs at click time.
         shortcut = core.headless_shortcut(
             name, os.path.abspath(__file__), otree_path=core.shortcut_otree_path(),
-            python_path=core.shortcut_python_path())
+            python_path=core.shortcut_python_path(),
+            pass_own_path=True)
         # Default suggested filename: the "Launch_"-prefixed name from core
         # (e.g. MyStudy -> Launch_MyStudy.vbs), matching the web app. Only the
         # SUGGESTION changes -- the user can still rename it, and the shortcut's
@@ -5136,6 +5546,8 @@ class LauncherApp(object):
         newly shown lab appears (and a hidden one disappears) in the tiles, with
         the single-lab forced default honored."""
         self.lab_presets = core.lab_presets_from_store(self.store_extra)
+        # A lab's services may have changed (Settings -> Additional services).
+        self._services_signature = None
         # A lab's default_room may have just changed; re-derive the built-in Lab
         # default's room from the machine lab live (marker unset -> no-op).
         apply_lab_marker(self.presets, lab_presets=self.lab_presets)
@@ -5890,6 +6302,14 @@ class LauncherApp(object):
             self._on_main(lambda: self.inline_status.set("error", msg))
             self._record_session(cfg, config_name, "fail", None)
             return False, msg
+
+        # Additional services: only now that the server is READY, right after the
+        # admin page. A page that cannot open is one log line; it never fails the
+        # launch (core.open_launch_services never raises).
+        core.open_launch_services(
+            cfg, self.lab_presets,
+            log=lambda level, text: self.log(
+                text, {"ok": "ok", "info": "muted"}.get(level, "warn")))
 
         # Only a real, server-ready success stamps the run and claims "Launched".
         ready_seconds = time.monotonic() - server_start
@@ -7701,6 +8121,29 @@ class LaunchBriefingDialog(object):
         # per-seat link it describes: it is reference, not something to read on
         # every launch.)
 
+        # Additional services: what else opens once the server is ready (core).
+        # Exactly the ticked items of "Opens in your browser on launch": the
+        # oTree admin page (open_browser), then the services (core decides).
+        self.services_box = None
+        services = briefing.get("services") or []
+        if briefing.get("opens_admin") or services:
+            box = self.services_box = tk.Frame(summary, bg=COLORS["card"])
+            box.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
+            sr += 1
+            tk.Label(box, text=briefing.get("services_title", ""), bg=COLORS["card"],
+                     fg=COLORS["muted"], font=fonts.small, anchor="w").pack(fill="x")
+            if briefing.get("opens_admin"):
+                tk.Label(box, text=briefing.get("opens_admin_label", ""), bg=COLORS["card"],
+                         fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x")
+            for service in services:
+                line = tk.Frame(box, bg=COLORS["card"])
+                line.pack(fill="x")
+                tk.Label(line, text=service.get("name", ""), bg=COLORS["card"],
+                         fg=COLORS["text"], font=fonts.bold, anchor="w").pack(side="left")
+                tk.Label(line, text=service.get("url", ""), bg=COLORS["card"],
+                         fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
+                    side="left", padx=(8, 0))
+
         # Dashboard login: collapsed by default, so the username/password are not
         # on screen until asked for (the password stays masked behind Show).
         if admin_username or admin_password:
@@ -9392,6 +9835,71 @@ class LabPresetEditDialog(object):
         _modal_close(self.top)
 
 
+class ServiceEditDialog(object):
+    """Add or edit one additional service of a lab: Name, Web address and
+    "Include by default". Validation and the write go through core; the caller
+    passes on_save(name, url, include_by_default) -> (ok, message)."""
+
+    def __init__(self, parent, fonts, title, service, on_save):
+        self.on_save = on_save
+        top = self.top = tk.Toplevel(parent)
+        top.title(title)
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.resizable(False, False)
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=20, pady=18)
+        body.columnconfigure(0, weight=1)
+        service = service or {}
+        self.name = tk.StringVar(top, value=service.get("name", ""))
+        self.url = tk.StringVar(top, value=service.get("url", ""))
+        self.include = tk.BooleanVar(top, value=bool(service.get("include_by_default")))
+        tk.Label(body, text="Name", bg=COLORS["card"], fg=COLORS["muted"], font=fonts.body,
+                 anchor="w").grid(row=0, column=0, sticky="w")
+        name_entry = ttk.Entry(body, textvariable=self.name, width=46)
+        name_entry.grid(row=1, column=0, sticky="ew", pady=(2, 8))
+        tk.Label(body, text="Web address (http:// or https://)", bg=COLORS["card"],
+                 fg=COLORS["muted"], font=fonts.body, anchor="w").grid(row=2, column=0,
+                                                                      sticky="w")
+        url_entry = ttk.Entry(body, textvariable=self.url, width=46)
+        url_entry.grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Checkbutton(body, text=core.SERVICE_INCLUDE_LABEL,
+                        variable=self.include).grid(row=4, column=0, sticky="w")
+        self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["error"],
+                               font=fonts.small, anchor="w", justify="left", wraplength=380)
+        self.status.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.grid(row=6, column=0, sticky="ew", pady=(12, 0))
+        buttons.columnconfigure(0, weight=1)
+        ttk.Button(buttons, text="Cancel", command=self.close).grid(row=0, column=0, sticky="w")
+        self.save_button = tk.Button(
+            buttons, text="Save", command=self.save, font=fonts.bold,
+            bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
+            activeforeground="#ffffff", relief="flat", padx=14, pady=5, cursor="hand2")
+        self.save_button.grid(row=0, column=1, sticky="e")
+        for entry in (name_entry, url_entry):
+            entry.bind("<Return>", lambda _e: self.save())
+        top.bind("<Escape>", lambda _e: self.close())
+        _center_on(parent, top)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+        name_entry.focus_set()
+
+    def save(self):
+        ok, message = self.on_save(self.name.get(), self.url.get(), bool(self.include.get()))
+        if not ok:
+            self.status.configure(text=message)
+            return False
+        self.close()
+        return True
+
+    def close(self):
+        _modal_close(self.top)
+
+
 class LaunchHistoryDialog(object):
     """A read-only viewer for the launch history log (fable review F).
 
@@ -9593,8 +10101,10 @@ class LabSettingsDialog(object):
         self._build_admin_card(outer, row=3)         # Postgres admin
         # -- GitHub: one summary line + Edit, like the sections above --
         self._build_github_sync_card(outer, row=4)
+        # -- Additional services: per lab, web pages opened after a launch --
+        self._build_services_card(outer, row=5)
         # -- Footer: Launch history, View settings.py block, version / update --
-        self._build_footer(outer, row=5)
+        self._build_footer(outer, row=6)
 
         self._reload_tree()
         self._refresh_summaries()
@@ -9644,8 +10154,127 @@ class LabSettingsDialog(object):
             admin = core.pg_admin_from_store(extra)
             self.cards["admin"].set_summary(core.pg_admin_summary(admin),
                                             warn=not admin.get("admin_username"))
+            if "services" in self.cards:
+                self.cards["services"].set_summary(core.services_summary(presets))
         except (tk.TclError, KeyError):
             pass
+
+    # -- Additional services (2026-10-30) ------------------------------------
+
+    def _build_services_card(self, outer, row):
+        """Additional services, collapsed to the service names. Inside: each
+        lab with its services (name, "on by default", web address) and Edit /
+        Delete per service, then "Add service" for that lab. A service is a web
+        page opened in a new browser tab once the server is ready."""
+        card = self._card(outer, row, "services", core.SERVICES_CARD_TITLE, "services")
+        body = card.body
+        self.services_frame = tk.Frame(body, bg=COLORS["card"])
+        self.services_frame.grid(row=0, column=0, sticky="ew")
+        self.services_frame.columnconfigure(0, weight=1)
+        self.services_status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                                        font=self.fonts.small, anchor="w", justify="left",
+                                        wraplength=600)
+        self.services_status.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.service_buttons = {}
+        self._reload_services()
+
+    def _reload_services(self):
+        frame = getattr(self, "services_frame", None)
+        if frame is None:
+            return
+        try:
+            for child in list(frame.winfo_children()):
+                child.destroy()
+        except tk.TclError:
+            return
+        fonts = self.fonts
+        self.service_buttons = {}
+        labs = [p for p in self._lab_presets() if not p.get("deleted")]
+        for lab in labs:
+            group = tk.Frame(frame, bg=COLORS["card"])
+            group.pack(fill="x", pady=(0, 10))
+            tk.Label(group, text=lab["name"], bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold, anchor="w").pack(fill="x")
+            for service in core.normalize_lab_services(lab.get(core.SERVICES_KEY)):
+                line = tk.Frame(group, bg=COLORS["card"])
+                line.pack(fill="x", pady=(2, 0))
+                text = tk.Frame(line, bg=COLORS["card"])
+                text.pack(side="left", fill="x", expand=True)
+                head = tk.Frame(text, bg=COLORS["card"])
+                head.pack(fill="x")
+                tk.Label(head, text=service["name"], bg=COLORS["card"], fg=COLORS["text"],
+                         font=fonts.body, anchor="w").pack(side="left")
+                if service["include_by_default"]:
+                    tk.Label(head, text=core.SERVICE_DEFAULT_TAG, bg=COLORS["card"],
+                             fg=COLORS["muted"], font=fonts.small).pack(side="left",
+                                                                        padx=(6, 0))
+                tk.Label(text, text=service["url"], bg=COLORS["card"], fg=COLORS["faint"],
+                         font=fonts.mono_small, anchor="w").pack(fill="x")
+                delete = ttk.Button(line, text="Delete", style="Slim.TButton",
+                                    command=lambda l=lab["id"], sid=service["id"]:
+                                    self._delete_service(l, sid))
+                delete.pack(side="right")
+                edit = ttk.Button(line, text="Edit", style="Slim.TButton",
+                                  command=lambda l=lab["id"], sid=service["id"]:
+                                  self._edit_service(l, sid))
+                edit.pack(side="right", padx=(0, 4))
+                self.service_buttons[(lab["id"], service["id"])] = (edit, delete)
+            add = ttk.Button(group, text=core.SERVICE_ADD_LABEL, style="Slim.TButton",
+                             command=lambda l=lab["id"]: self._edit_service(l, None))
+            add.pack(anchor="w", pady=(4, 0))
+            self.service_buttons[(lab["id"], None)] = (add, None)
+
+    def _save_service_change(self, result):
+        """Store the presets of a core service change that worked, then repaint
+        this card, its summary and the main page."""
+        ok, message, new_list = result[0], result[1], result[2]
+        if ok:
+            self._save_presets(new_list)
+            self._reload_services()
+            self.services_status.configure(text=message, fg=COLORS["ok"])
+        return ok, message
+
+    def _edit_service(self, lab_id, service_id):
+        lab = core.find_lab_preset(lab_id, self._lab_presets())
+        if lab is None:
+            return None
+        service = None
+        if service_id:
+            for item in core.lab_services(self._lab_presets(), lab_id):
+                if item["id"] == service_id:
+                    service = item
+        if service_id and service is None:
+            return None
+
+        def on_save(name, url, include_by_default):
+            if service is None:
+                result = core.add_lab_service(self._lab_presets(), lab_id, name, url,
+                                              include_by_default=include_by_default)
+            else:
+                result = core.update_lab_service(self._lab_presets(), lab_id, service_id,
+                                                 name=name, url=url,
+                                                 include_by_default=include_by_default)
+            return self._save_service_change(result)
+        title = ("Edit service" if service else core.SERVICE_ADD_LABEL) + " (%s)" % lab["name"]
+        self.service_dialog = ServiceEditDialog(self.top, self.fonts, title, service, on_save)
+        return self.service_dialog
+
+    def _delete_service(self, lab_id, service_id, confirm=None):
+        service = None
+        for item in core.lab_services(self._lab_presets(), lab_id):
+            if item["id"] == service_id:
+                service = item
+        if service is None:
+            return False
+        ask = confirm or (lambda text: messagebox.askyesno(core.SERVICES_CARD_TITLE, text,
+                                                            parent=self.top))
+        if not ask(core.SERVICE_DELETE_CONFIRM % service["name"]):
+            return False
+        ok, message, new_list = core.delete_lab_service(self._lab_presets(), lab_id, service_id)
+        self._save_service_change((ok, message, new_list))
+        if not ok:
+            self.services_status.configure(text=message, fg=COLORS["warn"])
+        return ok
 
     # -- Postgres admin (collapsed: user@host) ------------------------------
 

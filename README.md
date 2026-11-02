@@ -12,6 +12,7 @@ To clone and update studies from your lab's GitHub organisation, see [docs/githu
 - **One button to launch.** Pick your project, hit **Launch**, and the server starts ready for participants.
 - **Saved configs.** Save a study's setup and relaunch it quickly in follow-up sessions.
 - **Select your database.** Postgres, wired for you: the launcher builds the `DATABASE_URL` and hands it to oTree.
+- **Additional services.** A lab can list web pages (for example a lab tool) that open in the browser once the server is ready; each config can tick them on or off.
 
 ![The oTree Lab Launcher main page](docs/screenshots/main_page.png)
 

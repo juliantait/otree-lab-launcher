@@ -279,6 +279,15 @@ The launch confirmation screen warns about this whenever the chosen room is not
 that study in one click in later sessions, so common studies are always a
 double-click away.
 
+**Additional services.** A lab can list web pages that open in a new browser
+tab right after the oTree admin page, once the server is ready (for example
+the lab's FOG page). **Settings > Additional services > Edit**, then **Add
+service** under the lab: a name, a web address (`http://` or `https://` only,
+never a program) and **Include by default**. A ticked default opens for every
+config that has not made its own choice, so changing it later moves all of
+them at once. Saved per lab in `lab_info.json`, so copy that file to the
+other computers of the lab as usual.
+
 **Updating the launcher.** When a new version exists, **a small dot appears on
 the gear** (the launcher asks GitHub at most once a day). In Settings, at the
 bottom, **Update** runs `git pull` on the launcher folder and then asks you to
@@ -406,6 +415,20 @@ stops for the things that matter:
   your own with nothing newer online never get a box.
 - Everything else is silent.
 
+**When the shortcut cannot start.** Every failure box says **why, in plain
+words** (the exit code and the log file are only a small "Details" line at the
+end). The shortcut runs a config **by its name**, so if that config was
+**renamed or deleted** the box says "No saved config named ..." and lists the
+configs that are saved on this computer. Its buttons: **Open the launcher**
+(pick a config, or save one again under the old name, and click **Save
+one-click shortcut** to make a new shortcut), **Delete this shortcut** and
+**Close**. On Windows the buttons read *Yes* / *No* / *Cancel* and the text
+says which is which. Shortcuts saved before version 1.7.0 do not offer
+*Delete this shortcut*; save them again to get it. Other failures (the project
+folder is gone, resetting the database failed, the server did not start or
+never answered) name the problem the same way; a failed database reset quotes
+the last lines oTree printed.
+
 **A config saved with the lab's default room follows the lab.** If the lab later
 changes its default room, such a config simply uses the new one (in the window
 and from the shortcut) and never warns about the room. A config saved with a
@@ -432,6 +455,24 @@ the GitHub section above) found one, the screen adds the amber reminder **"A
 newer version of this study is available on GitHub. Git pull before launch."**
 with a **Git pull** button. It warns and never blocks: pull there, or launch as
 it is.
+
+*What opens in your browser:* the screen lists it under **Opens in your
+browser**. Once the server is ready, each ticked item opens in its own tab. To
+change that for your study, open **Advanced** (under Database). It is one list,
+**Opens in your browser on launch**, in three groups, and each item has its
+own tick box:
+
+- **oTree admin page**: the admin/monitor page (logged in when Auto login is
+  on). Ticked by default.
+- **From the lab settings**: your lab's services. A box you never touched says
+  *(lab default)* and follows the lab; one you changed says *(your choice)*,
+  with **Use lab default** to undo it.
+- **Added for this config**: your own pages. **Add your own** (a name and a
+  web address); untick one to skip it without deleting it, or **Delete** it.
+
+The collapsed Advanced line counts what will open, for example *oTree admin +
+2 services*. These choices are part of the config: save it to keep them. A
+page that cannot open never stops the launch; the activity log says so.
 
 *If a session is already running:* the screen shows the must-fix **"Port 8000 is
 in use: a session is already running on it."** and **Launch stays off**. Stop

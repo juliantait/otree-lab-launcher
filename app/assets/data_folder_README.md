@@ -9,9 +9,9 @@ example lab settings, the example room maps) live in `app/assets/`.
 
 | File | Scope | Holds |
 |------|-------|-------|
-| `lab_info.json` | **the lab** (copy it to every computer of the lab) | the labs (name, host, seats, map, default room, participant-shortcut label, suggested database name), the room maps, the default oTree admin login for new configs, the GitHub Organisation Sync switch + organisation, "Databases on this computer only" |
+| `lab_info.json` | **the lab** (copy it to every computer of the lab) | the labs (name, host, seats, map, default room, participant-shortcut label, suggested database name), the room maps, the default oTree admin login for new configs, the GitHub Organisation Sync switch + organisation, "Databases on this computer only", each lab's additional services (web pages opened after a launch, with "Include by default") |
 | `machine.json` | **this computer only** (never copy it) | which lab this computer is, which labs it shows, the light/dark theme, the Postgres superuser login, this computer's databases (with their passwords; a database that uses the Postgres superuser login stores only `uses_admin_login: true`, never a copy of that login) and its default database; the folder GitHub studies were last saved into, and, per GitHub token, who added it, when and its expiry date (never the token) |
-| `saved_configs.json` | **this computer only** | your saved launch configs (each points at one of this computer's databases by id and keeps its own oTree admin login) and the researcher list |
+| `saved_configs.json` | **this computer only** | your saved launch configs (each points at one of this computer's databases by id and keeps its own oTree admin login; only the additional services it ticked or unticked itself, plus its own ones) and the researcher list |
 
 ## Written by the launcher
 
