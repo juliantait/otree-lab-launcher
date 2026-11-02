@@ -370,8 +370,13 @@ differs from what is saved, and **Save as new config...** turns pink. Each
 config in the list on the left shows its folder, who saved it and when it was
 last launched ("Never run" until then).
 
-**Quitting.** **Quit launcher** is at the bottom of Settings (the gear). It
-only closes the launcher: a study you already launched keeps running.
+**Quitting.** **Quit** is at the bottom of Settings (the gear), next to
+**History**, which opens the launch history. Quit only closes the launcher: a
+study you already launched keeps running.
+
+**The settings.py block.** Once a folder is chosen, **View settings.py block**
+is the small link in the oTree project section. It shows the lab support block,
+to copy it or to add it to the project.
 
 **What the one-click shortcut checks first.** It has no window, so it only
 stops for the things that matter:

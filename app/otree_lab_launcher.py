@@ -2812,6 +2812,15 @@ class LauncherApp(object):
         self._git_result_path = ""
         self._git_divider = tk.Frame(holder, bg=COLORS["card_line"], height=1)
         self._git_divider.pack(fill="x", pady=(10, 8))
+        # The settings.py block viewer, tucked away: one quiet link once a folder
+        # is chosen, under the update line, above a pull result (2026-11-02, out
+        # of the Settings footer). Same words as the web face's #viewBlockLink.
+        self.view_block_link = tk.Label(
+            holder, text=core.VIEW_BLOCK_LINK_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
+            font=self.fonts.small, cursor="hand2", anchor="w", takefocus=1)
+        self.view_block_link.bind("<Button-1>", lambda _e: self.show_block())
+        self.view_block_link.bind("<Return>", lambda _e: self.show_block())
+        self.view_block_link.bind("<space>", lambda _e: self.show_block())
 
         # The admin row is ONE summary line (UX simplification, #9):
         #
@@ -4380,7 +4389,18 @@ class LauncherApp(object):
             self._set_app_bullets([])
         self._sync_git_result(cfg["project_path"])
         self._sync_update_check(cfg["project_path"])
+        self._sync_view_block_link(cfg["project_path"])
         self.refresh_seats(cfg)
+
+    def _sync_view_block_link(self, path):
+        """The quiet block-viewer link shows once a folder is chosen."""
+        link = self.view_block_link
+        if not (path or "").strip():
+            link.pack_forget()
+        else:
+            before = self.git_result if self.git_result.winfo_manager() else self._git_divider
+            indent = 20 if self.app_bullets.grid_info() else 0      # lines up with the app names
+            link.pack(anchor="w", padx=(indent, 0), pady=(2, 0), before=before)
 
     def refresh_seats(self, cfg=None):
         cfg = cfg or self.form_values()
@@ -4892,7 +4912,10 @@ class LauncherApp(object):
                     command=lambda: self.open_github_login(self._recheck_after_login))
             if self.update_action_button is not None:
                 self.update_action_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
-        before = self.git_result if self.git_result.winfo_manager() else self._git_divider
+        before = self._git_divider
+        for widget in (self.git_result, self.view_block_link):      # stays above both
+            if widget.winfo_manager():
+                before = widget
         box.pack(fill="x", pady=(8, 0), before=before)
 
     def open_github_login(self, on_saved=None, retry=False):
@@ -10311,7 +10334,7 @@ class LabSettingsDialog(object):
     summary line (core.pg_admin_summary / databases_summary / labs_summary) with
     Edit; only the section being edited is open. Order (same as the web face):
     This computer, Labs, Databases, Postgres admin, GitHub Organisation Sync,
-    then the footer (Launch history, View settings.py block, version) and Close.
+    then the version / update lines; History, Quit and Close stay in view below.
     Every change is saved through the app's store (core splits it over the
     files); preset add/edit/delete and show/hide all go through core so the
     guards (no clobber, keep a visible lab) are the single source of truth."""
@@ -10332,12 +10355,16 @@ class LabSettingsDialog(object):
         bottom = tk.Frame(top, bg=COLORS["window"])
         bottom.pack(side="bottom", fill="x", padx=16, pady=(6, 12))
         ttk.Button(bottom, text="Close", command=self._close).pack(side="right")
-        # Quit launcher (S5, 2026-10-08): at the bottom of Settings, left of
-        # Close. The main window has no Quit button (it never had one in Tk;
-        # the web face moved its own here too). Hover says what it does.
+        # History and Quit, side by side (2026-11-02), left of Close, always in
+        # view. The main window has no Quit button (it never had one in Tk; the
+        # web face moved its own here too). Each has a one-line tooltip.
+        self.history_button = ttk.Button(bottom, text=core.LAUNCH_HISTORY_BUTTON_LABEL,
+                                         command=self._open_history)
+        self.history_button.pack(side="left")
+        Tooltip(self.history_button, lambda: core.LAUNCH_HISTORY_LABEL).attach(self.history_button)
         self.quit_button = ttk.Button(bottom, text=core.QUIT_LAUNCHER_LABEL,
                                       command=self._quit_launcher)
-        self.quit_button.pack(side="left")
+        self.quit_button.pack(side="left", padx=(8, 0))
         Tooltip(self.quit_button, lambda: core.QUIT_LAUNCHER_NOTE).attach(self.quit_button)
 
         # Scrollable so an opened section can never push the rest off a short screen.
@@ -10356,7 +10383,7 @@ class LabSettingsDialog(object):
         self._build_github_sync_card(outer, row=4)
         # -- Additional services: per lab, web pages opened after a launch --
         self._build_services_card(outer, row=5)
-        # -- Footer: Launch history, View settings.py block, version / update --
+        # -- Footer: version / update (History + Quit are in the bottom bar) ---
         self._build_footer(outer, row=6)
 
         self._reload_tree()
@@ -10737,36 +10764,19 @@ class LabSettingsDialog(object):
 
         run_in_background(self.top, lookup, done)
 
-    # -- footer: Launch history link + version / update (reviews F + I) --------
+    # -- footer: version / update (review I) ------------------------------------
 
     def _build_footer(self, outer, row):
-        # Lab Settings keeps the read-only Launch history link (review F) and, at
-        # the very bottom, the version + the update controls (review I). The
-        # once-a-day check runs HERE on Settings open (and once in the background
+        # The version + the update controls (review I). The once-a-day check runs HERE on Settings open (and once in the background
         # after start, for the dot on the gear); "Check for updates" forces it.
         # A git install gets a one-click Update (core.git_pull, as on the web
         # face); a downloaded copy gets the link to GitHub.
         card = tk.Frame(outer, bg=COLORS["window"])
         card.grid(row=row, column=0, sticky="ew", pady=(14, 8))
         card.columnconfigure(0, weight=1)
-        links = tk.Frame(card, bg=COLORS["window"])
-        links.grid(row=0, column=0, sticky="w")
-        history = tk.Label(links, text="Launch history", bg=COLORS["window"],
-                           fg=COLORS["accent"], font=self.fonts.small, cursor="hand2",
-                           anchor="w")
-        history.pack(side="left")
-        history.bind("<Button-1>", lambda _e: LaunchHistoryDialog(self.top, self.fonts))
-        # The block viewer is a tool, not part of any one section: it sits here
-        # next to Launch history.
-        self.view_block_link = tk.Label(
-            links, text="View settings.py block…", bg=COLORS["window"],
-            fg=COLORS["accent"], font=self.fonts.small, cursor="hand2", anchor="w")
-        self.view_block_link.pack(side="left", padx=(18, 0))
-        self.view_block_link.bind("<Button-1>", lambda _e: self._view_block())
-
         # The version always shows, with the "Check for updates" link after it.
         version_row = tk.Frame(card, bg=COLORS["window"])
-        version_row.grid(row=1, column=0, sticky="w", pady=(12, 0))
+        version_row.grid(row=0, column=0, sticky="w")
         tk.Label(version_row, text="%s version %s" % (APP_NAME, core.APP_VERSION),
                  bg=COLORS["window"], fg=COLORS["faint"], font=self.fonts.small,
                  anchor="w").pack(side="left")
@@ -10782,7 +10792,7 @@ class LabSettingsDialog(object):
         # The "new version available" note + the way to get it appear only when a
         # newer release has been recorded. Hidden until the check says so.
         self._update_box = tk.Frame(card, bg=COLORS["window"])
-        self._update_box.grid(row=2, column=0, sticky="ew")
+        self._update_box.grid(row=1, column=0, sticky="ew")
         self._update_box.grid_remove()
         self._update_box.columnconfigure(0, weight=1)
         self._update_note = tk.Label(self._update_box, text=core.UPDATE_LABEL,
@@ -11155,8 +11165,8 @@ class LabSettingsDialog(object):
         except (tk.TclError, AttributeError):
             pass
 
-    def _view_block(self):
-        self.app.show_block()
+    def _open_history(self):
+        LaunchHistoryDialog(self.top, self.fonts)
 
     # -- labs ---------------------------------------------------------------
 

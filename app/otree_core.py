@@ -80,7 +80,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -11999,9 +11999,14 @@ def project_path_display(path, limit=PROJECT_PARENT_MAX):
 # the header names the config (no "Config:" prefix) with a muted "saved by"
 # subline and an unsaved marker; Quit launcher moved from the launch bar into
 # Lab Settings; the empty project state leads with one bold sentence.
-QUIT_LAUNCHER_LABEL = "Quit launcher"
-QUIT_LAUNCHER_NOTE = ("Shuts down the launcher. A study you already launched keeps "
-                      "running; the launcher never stops it.")
+# Settings footer (2026-11-02): only History and Quit, side by side. The note is a
+# short native-style tooltip now, not an info panel. The settings.py block viewer
+# moved to the oTree project section, as a quiet link.
+QUIT_LAUNCHER_LABEL = "Quit"
+QUIT_LAUNCHER_NOTE = "Closes the launcher. A launched study keeps running."
+LAUNCH_HISTORY_LABEL = "Launch history"
+LAUNCH_HISTORY_BUTTON_LABEL = "History"
+VIEW_BLOCK_LINK_LABEL = "View settings.py block"
 UNSAVED_CHANGES_TEXT = "Unsaved changes"
 UNSAVED_SETTINGS_TITLE = "Unsaved settings"
 

@@ -304,6 +304,9 @@ def _ui_text():
         # Main page pass 2: the header subline words and the Quit action.
         "quit_launcher": core.QUIT_LAUNCHER_LABEL,
         "quit_launcher_note": core.QUIT_LAUNCHER_NOTE,
+        "launch_history": core.LAUNCH_HISTORY_LABEL,
+        "launch_history_button": core.LAUNCH_HISTORY_BUTTON_LABEL,
+        "view_block_link": core.VIEW_BLOCK_LINK_LABEL,
         "unsaved_changes": core.UNSAVED_CHANGES_TEXT,
         "unsaved_settings": core.UNSAVED_SETTINGS_TITLE,
     }
