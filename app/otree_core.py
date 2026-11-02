@@ -80,7 +80,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -8678,7 +8678,8 @@ def launch_briefing(cfg, lab_presets=None):
 # said so. This check runs once the server is up (both faces + the one-click
 # shortcut) and, instantly, before launch (the address part only):
 #
-#   1. Address check: is the link's host one of THIS computer's addresses? An
+#   1. Address check: is the selected lab's address (or the Other host) THIS PC?
+#      The messages say it in those terms and name the lab. An
 #      address is "this computer's" when a socket can be bound to it (exact on
 #      every OS, no dependency, no firewall prompt: it never listens); the list
 #      of this computer's addresses (for the message) comes from
@@ -8705,10 +8706,17 @@ LINK_CHECK_SKIPPED = "skipped"  # the check itself broke: the faces show nothing
 # The checklist lines of the launch popup, both faces.
 LINK_CHECK_RUNNING_TEXT = "Checking the participant link…"
 LINK_CHECK_OK_TITLE = "Participant link works"
-LINK_CHECK_FAIL_TITLE = "Not running where expected"
+LINK_CHECK_NOT_THIS_PC_TITLE = "Selected lab is not this PC"
+LINK_CHECK_HOST_NOT_THIS_PC_TITLE = "Server address is not this PC"    # Other host: no lab
+LINK_CHECK_NOT_ANSWERING_TITLE = "Server not answering"
+LINK_CHECK_LOOPBACK_TITLE = "Address only works on this PC"
+LINK_CHECK_NO_ADDRESS_TITLE = "No server address"
+LINK_CHECK_NAME_NOT_FOUND_TITLE = "Address name not found"
 LINK_CHECK_LOCAL_TITLE = "Local only: other PCs cannot join"
+# Stands in for the lab's name when the config's lab is not in the lab settings.
+LINK_CHECK_UNKNOWN_LAB = "the selected lab"
 LINK_CHECK_TRY_LABEL = "What to try:"
-LINK_CHECK_ADDRESSES_LABEL = "This computer's addresses:"
+LINK_CHECK_ADDRESSES_LABEL = "This PC's addresses:"
 LINK_CHECK_TRIED_LABEL = "Participant link:"
 HEADLESS_LINK_WARNING_LEAD = ("The oTree server IS running, but the participant PCs "
                               "probably cannot reach it.")
@@ -8860,21 +8868,16 @@ def _resolve_ipv4(host, timeout=_HOST_LOOKUP_TIMEOUT):
     return _bounded_call(work, timeout)
 
 
-def _addresses_phrase(addresses):
-    if not addresses:
-        return ""
-    if len(addresses) == 1:
-        return "this computer's address is %s" % addresses[0]
-    return "this computer's addresses are %s" % ", ".join(addresses)
-
-
 def participant_link_info(cfg, lab_presets=None):
     """The participant link of a config: ``{host, port, room, link, base,
-    check_url, local_only, lab, custom}`` (``link`` = the room link without a
-    seat, ``base`` = http://host:port, ``check_url`` = the side-effect-free URL
-    the poll asks)."""
+    check_url, local_only, lab, lab_name, custom}`` (``link`` = the room link
+    without a seat, ``base`` = http://host:port, ``check_url`` = the
+    side-effect-free URL the poll asks, ``lab_name`` = the selected lab's name in
+    the lab settings, "" when it has none there)."""
     c = normalize_config(cfg)
     briefing = launch_briefing(c, lab_presets)
+    preset = find_lab_preset(c["lab"], _presets_or_default(lab_presets))
+    lab_name = str((preset or {}).get("name") or "").strip()
     host = str(briefing.get("host") or "").strip()
     port = str(briefing.get("port") or "8000").strip()
     room = briefing.get("room") or ""
@@ -8884,31 +8887,68 @@ def participant_link_info(cfg, lab_presets=None):
             "link": "%s/room/%s" % (base, room) if host else "",
             "base": base if host else "", "check_url": (base + "/") if host else "",
             "local_only": bool(briefing.get("local_only")),
-            "lab": c["lab"], "custom": c["lab"] == LAB_CUSTOM}
+            "lab": c["lab"], "lab_name": lab_name, "custom": c["lab"] == LAB_CUSTOM}
 
 
-def _link_fix_sentence(info, own=None, verb="change"):
-    """Where to change the address, in the words of the screen it is on. ``own``
-    = this computer's addresses, named as the value to use."""
+def _lab_words(info):
+    """The selected lab's name for a sentence, or the fallback when unknown."""
+    return info.get("lab_name") or LINK_CHECK_UNKNOWN_LAB
+
+
+def _link_fix_sentence(info, own=None, verb="change", lead="In Settings > Labs, "):
+    """Where to change the address, in the words of the screen it is on: the
+    Settings card "Labs", its field "IP address or host" (both faces), or the
+    Other host address. ``own`` = this PC's addresses, named as the value to use.
+    The pre-launch warning drops the ", then launch again"."""
     own = list(own or [])
-    target = ""
     if len(own) == 1:
-        target = " to %s" % own[0]
+        target = own[0]
     elif own:
-        target = " to the one the participant PCs can reach (%s)" % ", ".join(own)
-    if info.get("custom"):
-        sentence = "%s the Other host address of this config%s and launch again." % (
-            verb.capitalize(), target)
+        target = "the one the participant PCs can reach"
     else:
-        sentence = ('In Lab Settings, %s the lab\'s server address ("IP address or '
-                    'host")%s and launch again.' % (verb, target))
-    return sentence
+        target = "this PC's address"
+    if info.get("custom"):
+        return "%s the Other host address to %s, then launch again." % (verb.capitalize(), target)
+    return '%s%s %s\'s "IP address or host" to %s, then launch again.' % (
+        lead, verb, _lab_words(info), target)
 
 
-# The second half of the advice when the address is wrong for THIS computer.
-_LINK_WRONG_LAB_SENTENCE = ("If this is the wrong lab for this computer, pick the right "
-                            "lab instead. Shortcuts on the participant PCs that use the "
-                            "old address need the new one too.")
+def _not_this_pc_text(info, used, own):
+    """(problem, action) when the selected lab's address is not this PC."""
+    if own:
+        this_pc = "This PC is %s" % ", ".join(own)
+    else:
+        this_pc = "This PC does not have that address"
+    reach = "participant PCs will not reach this server."
+    if info.get("custom"):
+        if own:
+            problem = "You chose %s as the server address, but this PC is %s, so %s" % (
+                used, ", ".join(own), reach)
+        else:
+            problem = ("You chose %s as the server address, but this PC does not have that "
+                       "address, so %s" % (used, reach))
+        return problem, _link_fix_sentence(info, own)
+    name = info.get("lab_name")
+    if name:
+        where = "You selected %s, which your lab settings put at %s." % (name, used)
+        server = "the %s server" % name
+    else:
+        where = "%s's address is %s." % (LINK_CHECK_UNKNOWN_LAB.capitalize(), used)
+        server = "%s's server" % LINK_CHECK_UNKNOWN_LAB
+    problem = "%s %s, so %s" % (where, this_pc, reach)
+    action = ("If this PC is %s: %s If this PC is a different lab: select that lab instead. "
+              "Shortcuts on the participant PCs that use the old address need the new one "
+              "too." % (server, _link_fix_sentence(info, own, lead="in Settings > Labs, ")))
+    return problem, action
+
+
+def _lab_address_phrase(info, host):
+    """How a sentence opens when it is about the configured address ``host``."""
+    if info.get("custom"):
+        return "You chose %s as the server address" % host
+    if info.get("lab_name"):
+        return "%s's address in your lab settings is %s" % (info["lab_name"], host)
+    return "%s's address is %s" % (LINK_CHECK_UNKNOWN_LAB.capitalize(), host)
 
 
 def _link_hover_text(status, info, problem, action, addresses):
@@ -8937,15 +8977,16 @@ def _link_hover_text(status, info, problem, action, addresses):
 
 
 def _link_result(status, info, problem="", action="", addresses=None, checked=False,
-                 reachable=None, address_ok=None):
-    title = {LINK_CHECK_OK: LINK_CHECK_OK_TITLE, LINK_CHECK_WARNING: LINK_CHECK_FAIL_TITLE,
-             LINK_CHECK_LOCAL: LINK_CHECK_LOCAL_TITLE}.get(status, "")
+                 reachable=None, address_ok=None, title=""):
+    title = title or {LINK_CHECK_OK: LINK_CHECK_OK_TITLE,
+                      LINK_CHECK_LOCAL: LINK_CHECK_LOCAL_TITLE}.get(status, "")
     return {"status": status, "ok": status == LINK_CHECK_OK,
             "warning": status == LINK_CHECK_WARNING,
             "title": title, "problem": problem, "action": action,
             "reason": " ".join(p for p in (problem, action) if p),
             "hover": _link_hover_text(status, info, problem, action, addresses),
             "host": info.get("host", ""), "port": info.get("port", ""),
+            "lab_name": info.get("lab_name", ""), "custom": bool(info.get("custom")),
             "link": info.get("link", ""), "url": info.get("check_url", ""),
             "addresses": list(addresses or []), "address_ok": address_ok,
             "checked": bool(checked), "reachable": reachable}
@@ -8998,16 +9039,22 @@ def _check_address(info, addresses, binder, resolver):
 
     host = info.get("host", "")
     if not host:
-        return _link_result(LINK_CHECK_WARNING, info,
-                            problem="The participant link has no server address.",
+        if info.get("custom"):
+            problem = "You chose Other host but entered no address."
+        elif info.get("lab_name"):
+            problem = "%s has no address in your lab settings." % info["lab_name"]
+        else:
+            problem = "%s has no address." % LINK_CHECK_UNKNOWN_LAB.capitalize()
+        return _link_result(LINK_CHECK_WARNING, info, problem=problem,
                             action=_link_fix_sentence(info, mine(), verb="set"),
-                            addresses=mine(), address_ok=False)
+                            addresses=mine(), address_ok=False,
+                            title=LINK_CHECK_NO_ADDRESS_TITLE)
     if _is_loopback_host(host):
         return _link_result(
             LINK_CHECK_WARNING, info,
-            problem=("The participant link uses %s, which only works on this computer. "
-                     "Participant PCs cannot use it." % host),
-            action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False)
+            problem="%s, which only works on this PC." % _lab_address_phrase(info, host),
+            action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False,
+            title=LINK_CHECK_LOOPBACK_TITLE)
     if _is_ipv4(host):
         candidates = [host]
     else:
@@ -9015,23 +9062,20 @@ def _check_address(info, addresses, binder, resolver):
         if not candidates:
             return _link_result(
                 LINK_CHECK_WARNING, info,
-                problem=("The participant link uses %s, but this computer could not "
-                         "look that name up. Participant PCs may not reach it." % host),
-                action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False)
+                problem=("%s, but this PC could not look that name up. Participant PCs may "
+                         "not reach this server." % _lab_address_phrase(info, host)),
+                action=_link_fix_sentence(info, mine()), addresses=mine(), address_ok=False,
+                title=LINK_CHECK_NAME_NOT_FOUND_TITLE)
     if any(is_local(ip) for ip in candidates if not _is_loopback_host(ip)):
         return _link_result(LINK_CHECK_OK, info, address_ok=True,
                             addresses=known["list"] or [])
     own = mine()
     used = host if _is_ipv4(host) else "%s (%s)" % (host, ", ".join(candidates))
-    if own:
-        problem = ("The participant link uses %s, but %s. Participant PCs will not "
-                   "reach this server." % (used, _addresses_phrase(own)))
-    else:
-        problem = ("The participant link uses %s, but that is not an address of this "
-                   "computer. Participant PCs will not reach this server." % used)
-    action = "%s %s" % (_link_fix_sentence(info, own), _LINK_WRONG_LAB_SENTENCE)
+    problem, action = _not_this_pc_text(info, used, own)
     return _link_result(LINK_CHECK_WARNING, info, problem=problem, action=action,
-                        addresses=own, address_ok=False)
+                        addresses=own, address_ok=False,
+                        title=(LINK_CHECK_HOST_NOT_THIS_PC_TITLE if info.get("custom")
+                               else LINK_CHECK_NOT_THIS_PC_TITLE))
 
 
 def _no_proxy_opener():
@@ -9097,23 +9141,29 @@ def _poll_failure_kind(error):
 
 
 def _poll_failure_text(info, kind, timeout):
-    """(problem, action) when the address is right but nothing answered."""
+    """(problem, action) when the address IS this PC but nothing answered."""
     base = info.get("base") or info.get("check_url")
     port = info.get("port") or "8000"
+    host = info.get("host") or base
+    if info.get("custom"):
+        address = "The server address %s" % host
+    else:
+        address = "%s's address %s" % (info.get("lab_name")
+                                       or LINK_CHECK_UNKNOWN_LAB.capitalize(), host)
     window = ("Look at the server window: if it shows an error or has closed, fix that "
               "and launch again. If it is still starting, wait a moment and open the "
               "link yourself.")
-    firewall = ("Then check that the firewall on this computer allows incoming "
+    firewall = ("Then check that the firewall on this PC allows incoming "
                 "connections on port %s." % port)
     if kind == "refused":
-        problem = ("The address is right, but nothing is listening on port %s at %s: "
-                   "the connection was refused." % (port, base))
+        problem = ("%s is this PC, but nothing is listening on port %s: the connection "
+                   "was refused." % (address, port))
     elif kind == "timeout":
-        problem = ("The address is right, but %s did not answer within %g s."
-                   % (base, float(timeout)))
+        problem = "%s is this PC, but %s did not answer within %g s." % (
+            address, base, float(timeout))
     else:
         detail = kind[len("error: "):] if kind.startswith("error: ") else kind
-        problem = "The address is right, but %s did not answer (%s)." % (base, detail)
+        problem = "%s is this PC, but %s did not answer (%s)." % (address, base, detail)
     return problem, "%s %s" % (window, firewall)
 
 
@@ -9150,14 +9200,16 @@ def check_participant_link(cfg, lab_presets=None, addresses=None, binder=None,
                                         deadline=deadline, opener=opener, sleep=sleep)
     except Exception as error:  # noqa: BLE001
         info = {"host": result["host"], "port": result["port"], "link": result["link"],
-                "check_url": result["url"], "base": result["url"].rstrip("/")}
+                "check_url": result["url"], "base": result["url"].rstrip("/"),
+                "lab_name": result["lab_name"], "custom": result["custom"]}
         ok, kind = False, "error: %s" % error
     if ok:
         return _link_result(LINK_CHECK_OK, info, addresses=own, checked=True,
                             reachable=True, address_ok=True)
     problem, action = _poll_failure_text(info, kind, timeout)
     return _link_result(LINK_CHECK_WARNING, info, problem=problem, action=action,
-                        addresses=own, checked=True, reachable=False, address_ok=True)
+                        addresses=own, checked=True, reachable=False, address_ok=True,
+                        title=LINK_CHECK_NOT_ANSWERING_TITLE)
 
 
 def link_check_log_line(result):
@@ -9167,7 +9219,7 @@ def link_check_log_line(result):
     if status == LINK_CHECK_OK:
         return "ok", "%s: %s" % (LINK_CHECK_OK_TITLE, result.get("link", ""))
     if status == LINK_CHECK_WARNING:
-        return "warn", "%s: %s" % (LINK_CHECK_FAIL_TITLE, result.get("reason", ""))
+        return "warn", "%s: %s" % (result.get("title", ""), result.get("reason", ""))
     return None, ""
 
 
@@ -9183,20 +9235,21 @@ def participant_address_issue(cfg, lab_presets=None, **seams):
     if result.get("status") != LINK_CHECK_WARNING:
         return None
     return {"level": "warn", "title": result["problem"],
-            "hint": result["action"].replace(" and launch again", ""), "fix": "", "fix_label": "", "info": "", "kind": "participant_link"}
+            "hint": result["action"].replace(", then launch again", ""), "fix": "", "fix_label": "", "info": "", "kind": "participant_link"}
 
 
 def headless_link_warning_text(result, log_path=""):
     """The native box of a one-click launch whose link check failed: the
     server IS running, participant PCs probably cannot reach it, why, what to
-    try, the link tried and this computer's addresses."""
+    try, the link tried and this PC's addresses (unless already named above)."""
     parts = [HEADLESS_LINK_WARNING_LEAD, result.get("problem", "")]
     if result.get("action"):
         parts.append("%s %s" % (LINK_CHECK_TRY_LABEL, result["action"]))
     details = []
     if result.get("link") or result.get("url"):
         details.append("%s %s" % (LINK_CHECK_TRIED_LABEL, result.get("link") or result.get("url")))
-    if result.get("addresses"):
+    told = "%s %s" % (result.get("problem", ""), result.get("action", ""))
+    if result.get("addresses") and not all(ip in told for ip in result["addresses"]):
         details.append("%s %s" % (LINK_CHECK_ADDRESSES_LABEL, ", ".join(result["addresses"])))
     if log_path:
         details.append("Log: %s" % log_path)

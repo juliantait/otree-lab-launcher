@@ -480,13 +480,15 @@ in use: a session is already running on it."** and **Launch stays off**. Stop
 the running session first (close its server window), then click **Re-check**.
 The launcher never resets the database of a session that is still running.
 
-*Participant link check:* once the server is up, the launcher checks the link
-the participant PCs will use: is its address one of this computer's addresses,
-and does the server answer on it? The status list then shows **Participant link
-works**, or a cross with **Not running where expected**. Hover over that line to
-see what is wrong and what to try. The usual cause is a lab PC whose address
-changed: change the lab's server address in Lab Settings. The server keeps running
-either way. A one-click shortcut stays silent when the link works and shows a box
+*Participant link check:* once the server is up, the launcher checks the lab you
+selected: is the address your lab settings give for it this PC, and does the
+server answer on it? The status list then shows **Participant link works**, or a
+cross with what went wrong: **Selected lab is not this PC** or **Server not
+answering** (or, for an unusable address, **Address only works on this PC**, **No
+server address** or **Address name not found**). Hover over that line to see the
+details and what to try. The usual cause is a lab PC whose address changed: in
+Settings > Labs, change that lab's "IP address or host". If this PC is a different
+lab, select that lab instead. The server keeps running either way. A one-click shortcut stays silent when the link works and shows a box
 when it does not. The check runs from this computer, so it cannot see a firewall
 that blocks other PCs: if they still cannot join, allow the port through the
 firewall. If the address is already wrong before you launch, the "Before you

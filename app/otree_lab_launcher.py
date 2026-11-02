@@ -6296,7 +6296,7 @@ class LauncherApp(object):
         if not shown and result.get("status") == core.LINK_CHECK_WARNING:
             try:
                 self.inline_status.set("warn", "%s: %s" % (
-                    core.LINK_CHECK_FAIL_TITLE, result.get("reason", "")))
+                    result.get("title", ""), result.get("reason", "")))
             except tk.TclError:
                 pass
 
@@ -8316,17 +8316,18 @@ class LaunchBriefingDialog(object):
         tk.Frame(summary, bg=COLORS["card"], height=6).grid(row=sr, column=0)
 
     def _opens_row(self, box, name, url):
-        """One browser page of the popup: its name + Copy link. The address stays
-        off the screen; it is only on the button (``button.copy_url``)."""
+        """One browser page of the popup: its name, Copy link right after it, left
+        aligned. The address stays off the screen; it is only on the button
+        (``button.copy_url``). A fixed width, so "Copied" changes nothing around it."""
         line = tk.Frame(box, bg=COLORS["card"])
         line.pack(fill="x", pady=(0, 3))
         tk.Label(line, text=name, bg=COLORS["card"], fg=COLORS["text"],
                  font=self.fonts.body, anchor="w").pack(side="left")
         if url:
-            button = ttk.Button(line, text="Copy link", style="Slim.TButton")
+            button = ttk.Button(line, text="Copy link", style="Slim.TButton", width=9)
             button.configure(command=lambda: self._copy_opens_link(button, url))
             button.copy_url = url
-            button.pack(side="right")
+            button.pack(side="left", padx=(8, 0))
             self.opens_copy_buttons.append(button)
 
     def _copy_opens_link(self, button, url):
@@ -9014,7 +9015,7 @@ class LaunchBriefingDialog(object):
     def set_link_check(self, result):
         """Show the participant-link check (core.check_participant_link) as one
         more checklist line under the success line: ok = a tick, failure = a
-        cross + "Not running where expected", the Local lab = a muted dash.
+        cross + the result's own title (e.g. "Selected lab is not this PC"), the Local lab = a muted dash.
         Hovering the line or its (i) shows ``hover``: what is wrong, what to
         try. Returns True when shown here (False: the popup is gone, so the
         caller decides)."""
