@@ -255,6 +255,15 @@ def _ui_text():
         "opens_group_lab": core.OPENS_GROUP_LAB,
         "opens_group_own": core.OPENS_GROUP_OWN,
         "services_advanced": core.SERVICES_ADVANCED_LABEL,
+        "port_pill": core.LAUNCH_PORT_PILL,
+        "port_tag_lab": core.LAUNCH_PORT_TAG_LAB,
+        "port_tag_default": core.LAUNCH_PORT_TAG_DEFAULT,
+        "port_tag_own": core.LAUNCH_PORT_TAG_OWN,
+        "port_reset": core.LAUNCH_PORT_RESET,
+        "port_hint": core.LAUNCH_PORT_HINT,
+        "port_invalid": core.LAUNCH_PORT_INVALID_MESSAGE,
+        "lab_port_label": core.LAB_PORT_LABEL,
+        "lab_port_hint": core.LAB_PORT_HINT,
         "service_include": core.SERVICE_INCLUDE_LABEL,
         "service_default_tag": core.SERVICE_DEFAULT_TAG,
         "service_reset": core.SERVICE_RESET_LABEL,
@@ -318,6 +327,8 @@ def fields_to_config(fields):
     for key in core.FIELD_KEYS:
         if key in fields and fields[key] is not None:
             cfg[key] = fields[key]
+    if fields.get(core.PORT_OVERRIDE_KEY) is not None:
+        cfg[core.PORT_OVERRIDE_KEY] = fields[core.PORT_OVERRIDE_KEY]
     return core.normalize_config(cfg)
 
 
@@ -393,6 +404,7 @@ def _lab_rows(presets):
     return [{"id": p["id"], "name": p["name"], "ip": p["ip"],
              "seats": p["seats"], "display": p["display"],
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
+             "default_port": p["default_port"],
              # The lab's additional services (Settings -> Additional services).
              "services": core.normalize_lab_services(p.get(core.SERVICES_KEY))}
             for p in presets if not p.get("deleted")]
@@ -406,7 +418,7 @@ def _lab_tiles(presets, config_lab=None):
     tile for it (core.lab_options_for_config). With no ``config_lab`` this is
     exactly the displayed labs, unchanged."""
     return [{"id": p["id"], "name": p["name"], "host": p["ip"],
-             "seats": p["seats"], "map": p["map"],
+             "seats": p["seats"], "map": p["map"], "default_port": p["default_port"],
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
             for p in core.lab_options_for_config(presets, config_lab)]
 
@@ -787,7 +799,7 @@ class Api(object):
         # default room (core.follow_lab_room): the screen shows what will launch.
         preset = core.follow_lab_room(preset, core.lab_presets_from_store(self.store_extra))
         cfg = core.normalize_config(preset)
-        return {key: cfg[key] for key in core.FIELD_KEYS}
+        return {key: cfg[key] for key in core.FIELD_KEYS + (core.PORT_OVERRIDE_KEY,)}
 
     def _lab_room_for(self, cfg=None):
         """This config's (or this machine's) lab default room, for the settings
@@ -886,7 +898,7 @@ class Api(object):
         # through the existing core helpers (no new logic).
         lab_presets = [
             {"id": p["id"], "name": p["name"], "ip": p["ip"],
-             "seats": p["seats"], "display": p["display"],
+             "seats": p["seats"], "display": p["display"], "default_port": p["default_port"],
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
             for p in all_presets
         ]
@@ -1110,6 +1122,9 @@ class Api(object):
         if not core.unique_name(name, self.presets):
             return {"ok": False, "message": "A config called %r already exists." % name}
         author = (author or "").strip() or self._default_author()
+        port_problem = core.launch_port_problem((fields or {}).get("port"))
+        if port_problem:
+            return {"ok": False, "message": port_problem}
         preset = core.preset_from_fields(
             name, fields_to_config(fields), author=author,
             lab_presets=core.lab_presets_from_store(self.store_extra))
@@ -1593,13 +1608,7 @@ class Api(object):
         any oTree/experiment process. Returns core's result (not_repo / current /
         updated / error, plus the changed files, latest commit and plain-language
         failure reason) for the page to render in the study status card."""
-        # A background update check (a git fetch) may still be running in this
-        # folder: let it finish first, so the pull never collides with it on
-        # git's own lock files.
-        with self._update_lock:
-            pending = self._update_pending.get(self._update_key(project_path))
-        if pending is not None:
-            pending.wait(core.GIT_UPDATE_CHECK_TIMEOUT + 2)
+        self._wait_for_update_check(project_path)
         result = core.git_update_study(project_path or "")
         # A successful pull settles the automatic update check too: the banner
         # turns into "Experiment up to date" and the pre-launch warning goes.
@@ -1610,6 +1619,15 @@ class Api(object):
         return result
 
     # -- automatic update check (once per selected project) ------------------
+    def _wait_for_update_check(self, project_path):
+        """A background update check (a git fetch) may still be running in this
+        folder: let it finish first, so nothing collides with it on git's own lock
+        files."""
+        with self._update_lock:
+            pending = self._update_pending.get(self._update_key(project_path))
+        if pending is not None:
+            pending.wait(core.GIT_UPDATE_CHECK_TIMEOUT + 2)
+
     def _update_key(self, project_path):
         return os.path.normcase(os.path.abspath(str(project_path or "").strip() or "."))
 
@@ -1788,29 +1806,55 @@ class Api(object):
         return core.open_folder(path)
 
     @api_call
-    def fresh_copy(self, project_path=""):
-        """"Get a fresh copy": clone the study's repository again into a NEW
-        folder next to the old one, in the BACKGROUND, and push
-        pywOnFreshCopyDone (with the project + settings summaries so the page
-        selects the new folder). The old folder is never changed."""
+    def fresh_copy(self, project_path="", port=""):
+        """"Get a fresh copy" (core.git_fresh_copy), in the BACKGROUND: the study is
+        cloned again, the new copy takes this folder's name and the old folder
+        remains as a backup, RETIRED_<name>_<date>. Pushes pywOnFreshCopyDone with
+        the project + settings summaries, so the page re-reads the (same) path.
+        ``port`` is the port on the form: a server there refuses it."""
         path = str(project_path or "").strip()
         plan = core.fresh_copy_plan(path)
         if not plan["ok"]:
             return {"ok": False, "message": plan["message"]}
-        self._spawn(lambda: self._do_fresh_copy(path), "git-fresh-copy")
+        running = core.study_server_problem(plan["top"], port)
+        if running:
+            return {"ok": False, "status": "server_running", "message": running}
+        self._spawn(lambda: self._do_fresh_copy(path, port), "git-fresh-copy")
         return {"ok": True, "pending": True, "target": plan["target"]}
 
-    def _do_fresh_copy(self, path):
-        with self._update_lock:
-            pending = self._update_pending.get(self._update_key(path))
-        if pending is not None:
-            pending.wait(core.GIT_UPDATE_CHECK_TIMEOUT + 2)
-        result = core.git_fresh_copy(path)
+    def _do_fresh_copy(self, path, port=""):
+        self._wait_for_update_check(path)
+        result = core.git_fresh_copy(path, port=port)
         if result.get("ok") and result.get("path"):
             new = result["path"]
+            # The same path now holds another copy: the old answer is about the
+            # folder that just retired.
+            with self._update_lock:
+                self._update_status.pop(self._update_key(new), None)
             result["project"] = project_status(new)
             result["settings"] = core.inspect_settings(new, self._lab_room_for())
         self._callback("pywOnFreshCopyDone", result)
+
+    @api_call
+    def update_local_diff(self, project_path="", files=None):
+        """"Show what's different": a read-only diff of the files in the way of an
+        update (core.update_local_diff)."""
+        return core.update_local_diff(str(project_path or "").strip(), files)
+
+    @api_call
+    def discard_and_update(self, project_path="", files=None, port="", confirmed=False):
+        """"Discard my edits to these files and update", after the page's confirm
+        naming the files (core.git_discard_and_update decides and refuses; same
+        result shape as git_update_study)."""
+        path = str(project_path or "").strip()
+        self._wait_for_update_check(path)
+        result = core.git_discard_and_update(path, files or [], confirmed=confirmed is True,
+                                             port=port)
+        after = core.update_status_after_pull(result)
+        if after is not None:
+            self._remember_update_status(path, after)
+            result = dict(result, update_status=after)
+        return result
 
     def _pick_folder_for_clone(self, repo=""):
         """Return the chosen destination PARENT folder path (or "" on cancel), using
@@ -2231,7 +2275,7 @@ class Api(object):
 
     @api_call
     def add_lab(self, name, ip, seats, cols=0, default_room=None,
-                shortcut_label=None, config_lab=None):
+                shortcut_label=None, config_lab=None, default_port=None):
         """Add a lab preset from the Lab Settings page (web parity with Tk).
 
         Wraps core.add_lab_preset (validate → append), persists to the store, and
@@ -2241,7 +2285,8 @@ class Api(object):
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets, preset = core.add_lab_preset(
             presets, name, ip, seats, display=True, cols=cols or 0,
-            default_room=default_room, shortcut_label=shortcut_label)
+            default_room=default_room, shortcut_label=shortcut_label,
+            default_port=default_port)
         if not ok:
             return {"ok": False, "message": message}
         try:
@@ -2256,7 +2301,8 @@ class Api(object):
 
     @api_call
     def update_lab(self, lab_id, name=None, ip=None, seats=None, cols=None,
-                   default_room=None, shortcut_label=None, config_lab=None):
+                   default_room=None, shortcut_label=None, config_lab=None,
+                   default_port=None):
         """Edit an existing lab preset from the Lab Settings page (web/Tk parity).
 
         A changed ``default_room`` also re-derives the built-in Lab default's room
@@ -2265,7 +2311,8 @@ class Api(object):
         presets = core.lab_presets_from_store(self.store_extra)
         ok, message, presets, preset = core.update_lab_preset(
             presets, lab_id, name=name, ip=ip, seats=seats, cols=cols,
-            default_room=default_room, shortcut_label=shortcut_label)
+            default_room=default_room, shortcut_label=shortcut_label,
+            default_port=default_port)
         if not ok:
             return {"ok": False, "message": message}
         try:
@@ -2327,6 +2374,12 @@ class Api(object):
         """Check a config's own service before the page adds it to the list."""
         ok, message, entry = core.validate_service(name, url)
         return {"ok": ok, "message": message, "service": entry}
+
+    @api_call
+    def validate_launch_port(self, value):
+        """Check the launch port box while it is typed in."""
+        message = core.launch_port_problem(value)
+        return {"ok": not message, "message": message}
 
     @api_call
     def config_services(self, fields=None):
@@ -2395,7 +2448,8 @@ class Api(object):
         if not preset.get("seats"):
             return {"ok": False,
                     "message": "This lab has no seats, so there is nothing to make shortcuts for."}
-        port = core.DEFAULT_CONFIG["port"]
+        # The shortcuts open this lab's default port.
+        port = preset.get("default_port") or core.DEFAULT_CONFIG["port"]
         # Browser mode: pop a native folder dialog on the server machine and write
         # the bundle synchronously (every /api call runs on its own HTTP thread).
         if getattr(self, "browser_mode", False):
@@ -2981,7 +3035,7 @@ class Api(object):
             # The last guard, BEFORE anything is written or reset: a session
             # already answering on this port means this launch cannot work, and
             # a resetdb now would wipe the database under that running session.
-            running = core.running_server_problem(cfg)
+            running = core.launch_port_refusal(cfg) or core.running_server_problem(cfg)
             if running:
                 self._status("err", running)
                 self._launch_result(False, running)
@@ -3196,9 +3250,8 @@ class Api(object):
         Linux background path), surfaces its exit code.
         """
         base = ("The oTree server did not become ready — it may have crashed on "
-                "startup (a missing project, a database error, or the port already "
-                "in use). Nothing was marked as launched. Check the server terminal "
-                "window for the real error.")
+                "startup (%s). Nothing was marked as launched. Check the server terminal "
+                "window for the real error." % core.SERVER_START_FAILED_CAUSES)
         try:
             if server_proc is not None:
                 code = server_proc.poll()

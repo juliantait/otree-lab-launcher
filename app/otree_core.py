@@ -35,6 +35,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+import warnings
 import webbrowser
 
 # ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.9.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -297,26 +298,34 @@ def _release_file_lock(handle, posix):
         pass
 
 
+def _parse_launch_port(raw):
+    """The port in ``raw`` as an int in 1..65535, else None. Digits only: Python's
+    int() also takes "4_4_3", "+443" and non-ASCII digits."""
+    text = "" if raw is None else str(raw).strip()
+    if not (text.isascii() and text.isdigit()):
+        return None
+    port = int(text)
+    return port if 1 <= port <= 65535 else None
+
+
+def launch_port_problem(raw):
+    """"" when ``raw`` is usable as a launch port (an empty box means the default),
+    else the plain message both faces show."""
+    text = "" if raw is None else str(raw).strip()
+    if not text or _parse_launch_port(text) is not None:
+        return ""
+    return LAUNCH_PORT_INVALID_MESSAGE % text
+
+
 def launch_port(cfg):
     """The validated launch port for this config as an int in 1..65535, or None.
 
     ONE source of truth for the port, so the ``otree prodserver`` command, the
-    port preflight, and the opened URLs all agree. A blank, non-numeric, or
-    out-of-range value returns None, meaning "let oTree use its default 8000"
-    (the out-of-range case is what the port preflight turns into a clean
-    validation failure rather than letting an OverflowError escape from
-    ``socket.bind``).
+    port preflight, and the opened URLs all agree. A config with no port, or a
+    blank one, has the default (see normalize_config). An invalid value returns
+    None; every launch path refuses that first (:func:`launch_port_refusal`).
     """
-    raw = str(normalize_config(cfg)["port"]).strip()
-    if not raw:
-        return None
-    try:
-        port = int(raw)
-    except (TypeError, ValueError):
-        return None
-    if 1 <= port <= 65535:
-        return port
-    return None
+    return _parse_launch_port(normalize_config(cfg)["port"])
 
 
 # ---------------------------------------------------------------------------
@@ -394,8 +403,8 @@ def write_json_atomic(path, data, prefix=".data-"):
 # Settings write here, and a lab manager copies this one file to every PC of the
 # lab. Schema 1:
 #   {schema_version, labs: [{id, name, host, seats, geometry, cols, map,
-#    default_room, shortcut_label, deleted, suggested_database: {db_name,
-#    db_user}}], maps: {name: map}, default_admin: {username, password},
+#    default_room, default_port, shortcut_label, deleted, suggested_database:
+#    {db_name, db_user}}], maps: {name: map}, default_admin: {username, password},
 #    github_sync_enabled, github_org, databases_localhost_only}
 # No database passwords and nothing machine-specific live here.
 # ---------------------------------------------------------------------------
@@ -543,6 +552,10 @@ def normalize_stored_lab(raw):
     services = normalize_lab_services(raw.get(SERVICES_KEY))
     if services:
         entry[SERVICES_KEY] = services
+    # The same for the default port: only when it is not the usual one.
+    port = _parse_launch_port(raw.get("default_port"))
+    if port is not None and str(port) != DEFAULT_CONFIG["port"]:
+        entry["default_port"] = str(port)
     return entry
 
 
@@ -673,6 +686,9 @@ def validate_wizard_labs(labs):
         if not ok:
             label = name.strip() or "(unnamed lab)"
             return False, "%s: %s" % (label, message)
+        port_problem = launch_port_problem(raw.get("default_port"))
+        if port_problem:
+            return False, "%s: %s" % (name.strip(), port_problem)
         lab_id = str(raw.get("id") or "").strip() or _slugify_lab_id(name)
         if lab_id in seen:
             return False, ("Two labs resolve to the same id (%s). Give them "
@@ -685,7 +701,7 @@ def build_lab_info(labs, database=None, admin=None, default_lab=None, maps=None)
     """Assemble a schema-1 lab_info dict from wizard inputs.
 
     ``labs`` is a list of {"id"?, "name", "host", "seats": [...], "map": <name or
-    "">, "default_room"?, "shortcut_label"?, "suggested_database"?}. A blank id is
+    "">, "default_room"?, "default_port"?, "shortcut_label"?, "suggested_database"?}. A blank id is
     slugified from the name. ``admin`` is the default oTree admin login
     ({username, password}). ``database`` is optional: only its name and user are
     used, as the ``suggested_database`` of ``default_lab`` (or the first lab) when
@@ -876,6 +892,9 @@ DEFAULT_CONFIG = {
     "auth_level": "STUDY",
     "lab": DEFAULT_LAB_ID,
     "custom_host": "",
+    # The launch port's last fallback. Stays 8000: lab reset scripts and participant
+    # shortcuts out there expect it. What a launch really uses: this config's own
+    # choice, else its lab's default_port, else this (normalize_config).
     "port": "8000",
     "page": "/rooms",
     "resetdb": True,
@@ -900,6 +919,34 @@ DEFAULT_CONFIG = {
     "service_choices": {},
     "extra_services": [],
 }
+
+# The launch port option, both faces. General on purpose: app/ and docs/ ship
+# publicly, so one lab's firewall rule does not belong here.
+LAUNCH_PORT_PILL = "Port: %s"
+LAUNCH_PORT_TAG_LAB = "(lab default)"
+LAUNCH_PORT_TAG_DEFAULT = "(default)"
+LAUNCH_PORT_TAG_OWN = "(this config)"
+LAUNCH_PORT_RESET = "Use the default"
+LAB_PORT_LABEL = "Default port"
+# The Port panel and the setup wizard show LAUNCH_PORT_HINT; the lab editor adds the
+# line about shortcuts, which has no meaning on first setup.
+LAUNCH_PORT_HINT = ("Participant computers must be able to reach this port. Check your "
+                    "lab's firewall: other ports than the default may need your IT department.")
+LAB_PORT_HINT = (LAUNCH_PORT_HINT + " Shortcuts already on the participant computers keep "
+                 "their old port: export them again after a change.")
+LAUNCH_PORT_INVALID_MESSAGE = ("The port must be a whole number from 1 to 65535, "
+                               "not \"%s\".")
+LAUNCH_PORT_NOTE = ("This session runs on port %s, not this lab's default %s. Shortcuts and "
+                    "links made for port %s will not reach it, so open the link below on "
+                    "each participant computer, one per seat.")
+
+# In a normalized config and a saved one: True = the port is this config's own
+# choice (the pen), False = it follows the lab. A config saved before this key
+# existed always stored "8000", whether anyone chose it or not, and 8000 was the
+# only thing the launcher could fill in, so there: "8000" or blank = never chose
+# (follows the lab), any other value = chosen. Not in DEFAULT_CONFIG/FIELD_KEYS:
+# it must stay ABSENT from a default-filled dict for that rule to work.
+PORT_OVERRIDE_KEY = "port_override"
 
 # The user-editable settings of a config.  Anything outside this list
 # (name, created, last_run, plus keys written by a future version) is
@@ -982,6 +1029,7 @@ def normalize_config(cfg):
     # silently rewritten here.
     if not str(out["lab"]).strip():
         out["lab"] = DEFAULT_CONFIG["lab"]
+    _resolve_config_port(out, cfg.get(PORT_OVERRIDE_KEY))
     if out["auth_level"] not in AUTH_LEVELS:
         out["auth_level"] = "none"
     if out["wait_seconds"] < 0:
@@ -992,6 +1040,48 @@ def normalize_config(cfg):
     if not out["room_name"].strip():
         out["room_name"] = DEFAULT_ROOM_NAME
     return out
+
+
+def _resolve_config_port(out, override):
+    """Fill a normalized config's port + PORT_OVERRIDE_KEY, in place: its own choice,
+    else its lab's CURRENT default port (against the live lab list, like the database
+    above), else 8000. So ``out["port"]`` is always what a launch really uses, on
+    every path. An invalid own choice stays as typed: it is refused, never swapped."""
+    raw = out["port"].strip()
+    if override is None:
+        override = raw != DEFAULT_CONFIG["port"]
+    if override and raw:
+        port = _parse_launch_port(raw)
+        out["port"] = str(port) if port is not None else raw
+        out[PORT_OVERRIDE_KEY] = True
+    else:
+        out["port"] = lab_default_port(out["lab"])
+        out[PORT_OVERRIDE_KEY] = False
+
+
+def lab_default_port(lab_id, lab_presets=None):
+    """A lab's default launch port as a string; 8000 for a lab without one, for the
+    two pseudo-hosts and for an unknown lab."""
+    for lab in (lab_presets if lab_presets else lab_info_labs(LAB_INFO or {})):
+        if str(lab.get("id", "")) == str(lab_id):
+            port = _parse_launch_port(lab.get("default_port"))
+            if port is not None:
+                return str(port)
+            break
+    return DEFAULT_CONFIG["port"]
+
+
+def port_pill(cfg):
+    """(pill text, tag) for the main screen: the port a launch will really use and
+    where it comes from."""
+    c = normalize_config(cfg)
+    if c[PORT_OVERRIDE_KEY]:
+        tag = LAUNCH_PORT_TAG_OWN
+    elif c["lab"] in (LAB_CUSTOM, LAB_LOCAL):
+        tag = LAUNCH_PORT_TAG_DEFAULT
+    else:
+        tag = LAUNCH_PORT_TAG_LAB
+    return LAUNCH_PORT_PILL % c["port"], tag
 
 
 def _resolve_config_database(out):
@@ -1931,6 +2021,99 @@ def refresh_block(project_path):
     return backup, path
 
 
+# Every block body the launcher has ever shipped (sha256 of the normalised text,
+# :func:`lab_block_fingerprint`). This is what tells an OUTDATED block, which is
+# the launcher's own text and may be replaced, from a HAND-EDITED one, which is
+# the researcher's and may not. When LAB_BLOCK changes, ADD its fingerprint here
+# and never remove one: copies in the field stay recognised
+# (test_current_block_is_listed fails until then). A block older than the repo's
+# history (before 2026-09-16) is not listed, so it counts as hand-edited: the
+# update then shows the options instead of touching it, the safe way to be wrong.
+LAB_BLOCK_KNOWN_VERSIONS = frozenset({
+    "f759ca8d2eb0c36c8397b61e1527b320b1ee60e91bd84f545877cffadc117888",   # 2026-09-16
+    "59d20525c3f9508dc4f0422d439cb67f09907a7e942763e96034ac09f34be848",   # 2026-09-17
+    "2c457f9add83e46a477c3048e1588701e6fd860fb3db7e877f8e823ec5b15f41",   # 2026-09-21
+})
+
+
+def lab_block_fingerprint(text):
+    """sha256 of a block's text, ignoring line endings and trailing whitespace
+    (the same comparison ``inspect_settings`` uses for "stale")."""
+    return hashlib.sha256(_normalize_block_text(text).encode(
+        "utf-8", "surrogateescape")).hexdigest()
+
+
+def _normalize_newlines(text):
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _split_lab_block(text):
+    """``(before, block, after)`` of a settings.py whose line endings are already
+    "\\n", or None unless it holds exactly ONE complete block (one start marker,
+    one end marker, in that order)."""
+    lines = text.split("\n")
+    starts = [i for i, line in enumerate(lines) if BLOCK_MARKER in line]
+    ends = [i for i, line in enumerate(lines) if BLOCK_END_MARKER in line]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0]:
+        return None
+    return ("\n".join(lines[:starts[0]]), "\n".join(lines[starts[0]:ends[0] + 1]),
+            "\n".join(lines[ends[0] + 1:]))
+
+
+def _settings_compile_problem(project_path):
+    """"" when settings.py compiles, else the plain reason. Compiled, never run."""
+    path = settings_path_for(project_path)
+    try:
+        with open(path, "rb") as handle:
+            source = handle.read()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            compile(source, path, "exec", dont_inherit=True)
+    except SyntaxError as error:
+        return "settings.py does not compile (line %s: %s)." % (error.lineno, error.msg)
+    except (OSError, ValueError) as error:
+        return "settings.py could not be read (%s)." % error
+    return ""
+
+
+def carry_lab_block(project_path):
+    """Make sure a study that HAD the lab block has the current one, after its
+    settings.py was replaced by a committed version (an update, a discard, a fresh
+    copy). Uses the existing machinery: appends when there is none, refreshes one
+    that is outdated or cut off, and adds nothing when the file already has the
+    current block. Then verifies: the file compiles and the block is live.
+
+    The ``.bak`` those functions make is removed here: it holds just the committed
+    version, which git has. Returns "" when all is well, else one plain sentence
+    (the pull or clone already happened, and the pre-launch check catches a missing
+    block anyway, so this reports and never raises)."""
+    try:
+        state = inspect_settings(project_path)
+        if not state["readable"]:
+            return "The newer version has no settings.py, so lab support was not added."
+        made = None
+        if not state["has_block"]:
+            made = append_block(project_path)[0]
+        elif state["needs_refresh"]:
+            made = refresh_block(project_path)[0]
+        if made:
+            try:
+                os.remove(made)
+            except OSError:
+                pass
+    except BlockAlreadyPresent:
+        pass
+    except (OSError, ValueError) as error:
+        return ("Lab support could not be added (%s). Click %s before launching."
+                % (error, GET_READY_LABEL))
+    problem = _settings_compile_problem(project_path)
+    if problem:
+        return "%s Lab support needs it: fix the file or ask the study owner." % problem
+    if not project_has_live_lab_block(project_path):
+        return inspect_settings(project_path)["message"]
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Project folder validation
 # ---------------------------------------------------------------------------
@@ -2678,8 +2861,8 @@ def stored_labs_from_presets(lab_presets, info=None):
                 maps[map_name] = p["map"]
         entry = {"id": p["id"], "name": p["name"], "host": p["ip"], "seats": p["seats"],
                  "geometry": p["geometry"], "cols": p["cols"], "map": map_name,
-                 "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
-                 "deleted": p["deleted"]}
+                 "default_room": p["default_room"], "default_port": p.get("default_port"),
+                 "shortcut_label": p["shortcut_label"], "deleted": p["deleted"]}
         suggested = p.get("suggested_database") or base.get("suggested_database")
         if suggested:
             entry["suggested_database"] = suggested
@@ -2987,6 +3170,7 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
         "config": str(config_name or "").strip(),
         "author": author,
         "project": c["project_path"],
+        "port": str(c["port"]).strip(),
         "lab": c["lab"],
         "room": c["room_name"],
         "database": _session_database_label(c),
@@ -3990,9 +4174,7 @@ def classify_git_error(output):
     if ("divergent branches" in low or "not possible to fast-forward" in low
             or "need to specify how to reconcile" in low):
         return {"code": "diverged", "files": [],
-                "reason": ("This folder has changes of its own that are not in the "
-                           "online copy, so it cannot simply be updated. Nothing "
-                           "was changed.")}
+                "reason": GIT_LOCAL_CHANGES_TEXT + " Nothing was changed."}
     if ("no tracking information" in low or "no such ref was fetched" in low
             or "couldn't find remote ref" in low):
         return {"code": "no_upstream", "files": [],
@@ -4163,12 +4345,17 @@ def git_update_study(folder):
                           ``files`` lists each changed file (added / modified /
                           deleted, +/- lines), ``commit`` holds the date and
                           subject of the latest pulled commit and ``detail`` says
-                          it in one line.
+                          it in one line. When the only thing in the way was the
+                          lab block (:func:`lab_block_only_change`), ``message``
+                          is "Updated, lab support kept.", the count moves to
+                          ``detail`` and ``lab_block`` is True.
       * ``"not_repo"`` -> the folder is not a git repo (nothing run).
       * ``"error"``    -> the pull failed; ``reason`` is the plain-language cause
                           (classify_git_error), ``conflict_files`` names the files
                           when git lists them, and ``output`` keeps git's raw text
-                          for a collapsed detail block.
+                          for a collapsed detail block. ``options`` holds what the
+                          faces offer when the folder cannot be moved forward
+                          (:func:`update_options`); the folder is as it was.
 
     The outcome is decided by comparing HEAD before and after the pull, not by
     parsing git's wording. NEVER runs in the launcher's own folder
@@ -4180,7 +4367,8 @@ def git_update_study(folder):
               "reason": "", "reason_code": "", "output": "", "files": [],
               "file_count": 0, "commit_count": 0, "commit": {},
               "conflict_files": [], "old_head": "", "new_head": "", "note": "",
-              "login_action": False, "fresh_copy": False}
+              "login_action": False, "fresh_copy": False, "options": [],
+              "lab_block": False, "backups": []}
 
     def failed(code, reason, output=""):
         result.update(reason_code=code, reason=reason, output=output.strip(),
@@ -4197,23 +4385,14 @@ def git_update_study(folder):
                       message="Git pull failed: this folder is not a git repo.")
         return result
     old = _git_text(folder, "rev-parse", "HEAD") or ""
+    lab_block = None
     try:
-        # FAST-FORWARD ONLY: the launcher only ever moves a folder forward to
-        # what is online. It never merges (a plain pull could leave conflict
-        # markers in the study code, or make a merge commit) and never asks for
-        # a login (the GitHub login dialog is the one place for that).
-        code, output = _run_git(["-C", folder, "pull", "--ff-only"], timeout=120,
-                                no_prompt=True)
-        if code != 0:
-            # GitHub refused the token the folder's URL names (deleted, or an
-            # older clone with none): try this computer's other tokens for this
-            # one pull. Nothing in the folder's settings changes.
-            retry, again = _retry_with_other_tokens(
-                _upstream_remote(folder)[2], lambda extra: _run_git(
-                    extra + ["-C", folder, "pull", "--ff-only"], timeout=120,
-                    no_prompt=True), output)
-            if retry is not None:
-                code, output = retry, again
+        code, output = _pull_ff_only(folder)
+        if code != 0 and classify_git_error(output)["code"] == "local_changes":
+            # The one thing the launcher itself put in the way: its own block.
+            change = lab_block_only_change(folder)
+            if change is not None:
+                code, output, lab_block = _pull_around_lab_block(folder, change, output)
     except FileNotFoundError:
         return failed("no_git", "git is not installed on this computer.")
     except subprocess.TimeoutExpired:
@@ -4233,7 +4412,184 @@ def git_update_study(folder):
                                   and _remote_is_github(folder))
         result["fresh_copy"] = why["code"] in ("local_changes", "untracked",
                                                "diverged", "conflict")
+        if why["code"] in ("local_changes", "untracked"):
+            files = _pull_overlap(folder) or why["files"]
+            result["options"] = update_options("edited", files)
+        elif why["code"] in ("diverged", "conflict"):
+            result["options"] = update_options("own_commits")
         return result
+    _describe_pull(result, folder, old)
+    if lab_block is not None:
+        problem = carry_lab_block(folder)
+        counted = result["message"]
+        result.update(lab_block=True, backups=[lab_block])
+        result["message"] = ("Updated, but lab support needs a look." if problem
+                             else GIT_LAB_BLOCK_KEPT_TEXT)
+        result["detail"] = " ".join(
+            bit for bit in (problem, counted, result["detail"]) if bit)
+    return result
+
+
+def _pull_ff_only(folder):
+    """``git pull --ff-only`` in ``folder``: ``(returncode, output)``; raises what
+    subprocess raises.
+
+    FAST-FORWARD ONLY: the launcher only ever moves a folder forward to what is
+    online. It never merges (a plain pull could leave conflict markers in the
+    study code, or make a merge commit) and never asks for a login (the GitHub
+    login dialog is the one place for that)."""
+    code, output = _run_git(["-C", folder, "pull", "--ff-only"], timeout=120,
+                            no_prompt=True)
+    if code != 0:
+        # GitHub refused the token the folder's URL names (deleted, or an older
+        # clone with none): try this computer's other tokens for this one pull.
+        # Nothing in the folder's settings changes.
+        retry, again = _retry_with_other_tokens(
+            _upstream_remote(folder)[2], lambda extra: _run_git(
+                extra + ["-C", folder, "pull", "--ff-only"], timeout=120,
+                no_prompt=True), output)
+        if retry is not None:
+            code, output = retry, again
+    return code, output
+
+
+def _git_bytes(folder, *args, timeout=30):
+    """The exact bytes a read-only ``git -C <folder> <args>`` prints, or None when
+    it fails (never raises). :func:`_run_git` decodes, which a byte comparison
+    cannot use."""
+    try:
+        done = _timed_run(subprocess.run, ["git", "-C", folder] + list(args),
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=timeout,
+                          creationflags=_no_window_flags())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _repo_relative(folder, path):
+    """``(top, rel)`` of ``path`` in the repository of ``folder``, with "/" as in
+    git's own output, or ``("", "")`` when git cannot say or it lies outside."""
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10)
+    if not top:
+        return "", ""
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(top))
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return "", ""
+    return top, rel.replace(os.sep, "/")
+
+
+def lab_block_only_change(folder, overlap=None):
+    """Is the launcher's own lab block the ONLY thing in the way of an update?
+
+    True only when ALL of this holds; anything unsure is None (not this case):
+
+      * the sole file overlapping the update is this study's settings.py, and the
+        folder has no commits of its own,
+      * that edit is not staged (a failed pull could not put a staged state back),
+      * the file holds exactly one complete block, whose text is a version the
+        launcher shipped (LAB_BLOCK_KNOWN_VERSIONS): a hand-edited block is the
+        researcher's,
+      * outside the block the file equals the committed settings.py, ignoring line
+        endings (CRLF, autocrlf) and blank lines at the very end. A block that is
+        also committed is left out of both sides.
+
+    Returns ``{"settings", "top", "rel"}``, or None. Reads only; never raises."""
+    try:
+        settings = settings_path_for(folder)
+        top, rel = _repo_relative(folder, settings)
+        if not rel:
+            return None
+        if overlap is None:
+            overlap = _pull_overlap(folder)
+        if list(overlap or []) != [rel]:
+            return None
+        if (_git_text(folder, "rev-list", "--count", "@{u}..HEAD", timeout=10) or "") != "0":
+            return None
+        code, status = _run_git(["--literal-pathspecs", "-C", top, "status", "--porcelain",
+                                 "--untracked-files=no", "--", rel], timeout=10)
+        if code != 0 or status[:2] != " M":
+            return None
+        committed = _git_bytes(top, "show", "HEAD:" + rel)
+        if committed is None:
+            return None
+        with open(settings, "rb") as handle:
+            local = handle.read()
+        parts = _split_lab_block(_normalize_newlines(local.decode("utf-8", "surrogateescape")))
+        if parts is None or lab_block_fingerprint(parts[1]) not in LAB_BLOCK_KNOWN_VERSIONS:
+            return None
+        theirs = _normalize_newlines(committed.decode("utf-8", "surrogateescape"))
+        if BLOCK_MARKER in theirs or BLOCK_END_MARKER in theirs:
+            split = _split_lab_block(theirs)
+            if split is None:
+                return None
+            theirs = split[0] + split[2]
+        if (parts[0] + parts[2]).rstrip("\n") != theirs.rstrip("\n"):
+            return None
+        return {"settings": settings, "top": top, "rel": rel}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _timestamped_backup(path):
+    """Copy ``path`` to a UNIQUE ``<path>.<timestamp>.bak`` (as append_block does)
+    and return the backup's path."""
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup = path + "." + stamp + ".bak"
+    while os.path.lexists(backup):
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = path + "." + stamp + ".bak"
+    shutil.copy2(path, backup, follow_symlinks=False)
+    return backup
+
+
+def _restore_backup(backup, path):
+    """Put a file back from its backup, byte for byte, and remove the backup, so
+    the folder is exactly as before. False when that failed (the backup stays)."""
+    temp = backup + ".restoring"
+    try:
+        shutil.copy2(backup, temp, follow_symlinks=False)
+        os.replace(temp, path)
+        os.remove(backup)
+        return True
+    except OSError:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        return False
+
+
+def _pull_around_lab_block(folder, change, first_output):
+    """The block-only update: back up settings.py, put the committed file back,
+    pull. Returns ``(code, output, backup)``, with ``backup`` None and the file
+    restored byte for byte when the pull did not work (an exception restores too,
+    and goes on up to git_update_study's normal failure handling).
+
+    The caller re-adds the block once the pull worked. A crash in between leaves
+    the committed file with no block, and the pre-launch check catches a missing
+    block (test_crash_after_the_restore_is_caught_before_launch)."""
+    settings = change["settings"]
+    backup = _timestamped_backup(settings)
+    try:
+        code, output = _run_git(["--literal-pathspecs", "-C", change["top"], "checkout",
+                                 "HEAD", "--", change["rel"]], timeout=30)
+        if code == 0:
+            code, output = _pull_ff_only(folder)
+    except Exception:
+        _restore_backup(backup, settings)
+        raise
+    if code != 0:
+        if not _restore_backup(backup, settings):
+            output = ("%s\nThe previous settings.py could not be put back: it is saved "
+                      "as %s" % (output, backup))
+        return code, output or first_output, None
+    return 0, output, backup
+
+
+def _describe_pull(result, folder, old):
+    """Fill a successful pull's result: "Nothing new", or what moved. The outcome
+    comes from comparing HEAD before and after, not from git's wording."""
     new = _git_text(folder, "rev-parse", "HEAD") or ""
     result.update(ok=True, old_head=old, new_head=new)
     if new == old:
@@ -4297,8 +4653,9 @@ UPDATE_STATE_NO_ACCESS = "no_access"          # the login was rejected: one grey
 # and docs (the check still runs for any git repository with an upstream).
 GIT_UPDATE_AVAILABLE_TEXT = "A newer version of this study is available on GitHub."
 GIT_UP_TO_DATE_TEXT = "Experiment up to date"
-GIT_LOCAL_CHANGES_TEXT = ("This folder has changes of its own that are not in the "
-                          "online copy, so it cannot be updated here.")
+GIT_LOCAL_CHANGES_TEXT = ("This folder has its own commits, so sort it out with Git "
+                          "or get a fresh copy.")
+GIT_LAB_BLOCK_KEPT_TEXT = "Updated, lab support kept."
 GIT_PRELAUNCH_UPDATE_WARNING = ("A newer version of this study is available on GitHub. "
                                 "Git pull before launch.")
 GIT_NO_ACCESS_TEXT = "Could not check for a newer version: the login was not accepted."
@@ -4307,6 +4664,22 @@ GIT_NO_ACCESS_TEXT = "Could not check for a newer version: the login was not acc
 GIT_UPDATE_ACTION_LABEL = "Git pull"
 GIT_PULL_BUTTON_LABEL = "Git pull"
 GIT_FRESH_COPY_LABEL = "Get a fresh copy"
+GIT_FRESH_COPY_RECOMMENDED_LABEL = GIT_FRESH_COPY_LABEL + " (recommended)"
+GIT_SHOW_DIFF_LABEL = "Show what's different"
+GIT_KEEP_AND_LAUNCH_LABEL = "Keep this version and launch"
+GIT_DISCARD_LABEL = "Discard my edits to these files and update"
+GIT_DISCARD_TITLE = "Discard your edits?"
+GIT_DIFF_TITLE = "What's different"
+GIT_FRESH_COPY_DONE_TEXT = "Fresh copy ready."
+GIT_FRESH_COPY_BACKUP_TEXT = (
+    "The old folder remains as a backup: %s. Its gitignored and untracked files "
+    "(e.g. a seat list) stayed in it.")
+GIT_FRESH_COPY_LOCKED_TEXT = "Could not get a fresh copy: the folder is in use. Nothing was changed."
+GIT_FRESH_COPY_LOCKED_HINT = (
+    "Close whatever has it open (a server or console window, an Explorer or Finder "
+    "window, an editor), then try again.")
+STUDY_SERVER_RUNNING_TEXT = ("A session of this study is still running on port %s. "
+                             "Stop it first, then try again.")
 # The one-click shortcut's line for the same state.
 HEADLESS_UPDATE_PROBLEM = ("A newer version of this study is available on GitHub "
                            "(not downloaded yet).")
@@ -4413,8 +4786,16 @@ def _pull_overlap(folder):
 
     Two kinds: a tracked file edited here that also changed online, and a new
     file online whose name already exists here as an untracked file. Local edits
-    to OTHER files do not stop a pull, so they are not listed: this is what lets
-    "Get ready for the lab" (which edits settings.py) keep updates working."""
+    to OTHER files do not stop a pull, so they are not listed. settings.py carrying
+    only the lab block IS listed when settings.py changed online; that one case is
+    sorted out by :func:`lab_block_only_change`."""
+    found = _pull_overlap_entries(folder)
+    return None if found is None else [item["path"] for item in found]
+
+
+def _pull_overlap_entries(folder):
+    """:func:`_pull_overlap` with the detail a discard needs: a list of ``{"path"
+    (as the update names it), "local" (the names here to back up and put back)}``."""
     changed = _tracked_changes(folder)
     if changed is None:
         return None
@@ -4426,10 +4807,11 @@ def _pull_overlap(folder):
     overlap = []
     for entry in incoming:
         names = [entry["path"]] + ([entry["old_path"]] if entry.get("old_path") else [])
-        if any(name in dirty for name in names):
-            overlap.append(entry["path"])
+        local = [name for name in names if name in dirty]
+        if local:
+            overlap.append({"path": entry["path"], "local": local})
         elif entry["change"] == "added" and os.path.lexists(os.path.join(top, entry["path"])):
-            overlap.append(entry["path"])
+            overlap.append({"path": entry["path"], "local": [entry["path"]]})
     return overlap
 
 
@@ -4459,14 +4841,17 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
                                work: ``message`` is the banner question and
                                ``action`` is "git_pull" (the existing Git pull).
                                Local edits to files the newer version does not
-                               touch do NOT stop this (e.g. the lab block that
-                               "Get ready for the lab" appended).
+                               touch do NOT stop this, and neither does the lab
+                               block "Get ready for the lab" appended, even when
+                               settings.py changed online (``reason`` "lab_block":
+                               :func:`lab_block_only_change`).
       * ``"local_changes"`` -> newer commits online, but this folder cannot be
                                moved forward: a file edited here also changed
                                online (``reason`` "edited", ``files`` names
                                them), or the folder has commits of its own
                                (``reason`` "own_commits"). ``action`` is
-                               "fresh_copy": :func:`git_fresh_copy`.
+                               "fresh_copy": :func:`git_fresh_copy`; ``options``
+                               is the full list to offer (:func:`update_options`).
       * ``"no_access"``     -> the remote rejected this computer's login (an
                                expired token, for example). One quiet line;
                                ``action`` is "github_login" for github.com.
@@ -4484,7 +4869,7 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     folder = str(folder or "").strip()
     out = {"state": UPDATE_STATE_NONE, "is_repo": False, "message": "", "action": "",
            "action_label": "", "behind": 0, "ahead": 0, "dirty": False, "checked": "",
-           "checked_at": 0.0, "files": [], "reason": "", "unchecked": ""}
+           "checked_at": 0.0, "files": [], "reason": "", "unchecked": "", "options": []}
     if not folder or not os.path.isdir(folder):
         return out
     try:
@@ -4557,15 +4942,21 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     if ahead > 0:
         out.update(state=UPDATE_STATE_LOCAL_CHANGES, message=GIT_LOCAL_CHANGES_TEXT,
                    reason="own_commits", action="fresh_copy",
-                   action_label=GIT_FRESH_COPY_LABEL)
+                   action_label=GIT_FRESH_COPY_LABEL,
+                   options=update_options("own_commits"))
         return out
     overlap = _pull_overlap(folder)
     if overlap is None and dirty:
         overlap = _tracked_changes(folder) or ["this folder"]   # could not tell: stay careful
-    if overlap:
+    if overlap and lab_block_only_change(folder, overlap) is not None:
+        out.update(state=UPDATE_STATE_BEHIND, message=GIT_UPDATE_AVAILABLE_TEXT,
+                   action="git_pull", action_label=GIT_UPDATE_ACTION_LABEL,
+                   reason="lab_block")
+    elif overlap:
         out.update(state=UPDATE_STATE_LOCAL_CHANGES, files=list(overlap),
                    message=_local_changes_message(overlap), reason="edited",
-                   action="fresh_copy", action_label=GIT_FRESH_COPY_LABEL)
+                   action="fresh_copy", action_label=GIT_FRESH_COPY_LABEL,
+                   options=update_options("edited", overlap))
     else:
         out.update(state=UPDATE_STATE_BEHIND, message=GIT_UPDATE_AVAILABLE_TEXT,
                    action="git_pull", action_label=GIT_UPDATE_ACTION_LABEL)
@@ -4611,23 +5002,323 @@ def prelaunch_update_warning(status):
 
 
 # ---------------------------------------------------------------------------
-# "Get a fresh copy" (2026-10-01). When a study folder cannot be moved forward
-# (a file edited here also changed online, or the folder has commits of its
-# own), the launcher does NOT commit, push, merge, stash or discard anything in
-# it. The one thing it offers is what the guide tells a lab to do by hand: clone
-# the same repository again into a NEW folder next to the old one, and select
-# that. The old folder is left exactly as it is.
+# When a study folder cannot simply be moved forward (2026-10-01, reworked
+# 2026-11-03). The launcher never commits, pushes, merges or stashes in it. It
+# names the files and offers (update_options, shared by both faces):
+#
+#   * Show what's different: a read-only diff (update_local_diff).
+#   * Get a fresh copy, recommended: the study is cloned again; the NEW copy takes
+#     the original folder name, so saved configs and shortcuts keep working, and
+#     the old folder becomes the backup RETIRED_<name>_<date> (git_fresh_copy). The
+#     old folder remains as a backup; its gitignored and untracked files stay in it.
+#   * Keep this version and launch: the warning never blocks.
+#   * Discard my edits to these files and update: only on an explicit, confirmed
+#     click, with a timestamped .bak per file, refused while a server is running
+#     (git_discard_and_update).
+#
+# A folder with commits of its own gets only the fresh copy.
 # ---------------------------------------------------------------------------
 
+def update_options(reason, files=()):
+    """What to offer when a folder cannot be moved forward, as a list of ``{"id",
+    "label", "recommended"}``, in the order to show them. ``reason`` is "edited"
+    (``files`` names them) or "own_commits". The discard option carries ``files``
+    and ``title`` / ``confirm``, the confirmation text naming the files."""
+    if reason != "edited":
+        return [{"id": "fresh_copy", "label": GIT_FRESH_COPY_LABEL, "recommended": True}]
+    files = list(files)
+    return [
+        {"id": "show_diff", "label": GIT_SHOW_DIFF_LABEL, "recommended": False},
+        {"id": "fresh_copy", "label": GIT_FRESH_COPY_RECOMMENDED_LABEL, "recommended": True},
+        {"id": "keep", "label": GIT_KEEP_AND_LAUNCH_LABEL, "recommended": False},
+        {"id": "discard", "label": GIT_DISCARD_LABEL, "recommended": False,
+         "files": files, "title": GIT_DISCARD_TITLE, "confirm": study_discard_confirm(files)},
+    ]
+
+
+def study_discard_confirm(files):
+    """The confirmation for "Discard my edits to these files and update": it names
+    every file, and says a copy of each is kept."""
+    return ("Discard your edits to %s and update to the newer version? A copy of each "
+            "file is kept next to it, with a date and .bak at the end of its name. Other "
+            "files are not touched." % ", ".join(files))
+
+
+UPDATE_DIFF_MAX_CHARS = 200000
+
+
+def update_local_diff(folder, files=None):
+    """The read-only "Show what's different": this computer's edits to the files in
+    the way, and what changed online in those same files. Returns ``{"ok", "files",
+    "text", "title", "message"}``. Changes nothing, not even git's index; line-ending
+    differences are left out. Never raises."""
+    folder = str(folder or "").strip()
+    out = {"ok": False, "files": [], "text": "", "title": GIT_DIFF_TITLE, "message": ""}
+    try:
+        top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) if folder else ""
+        if not top:
+            out["message"] = "This folder is not a git repository."
+            return out
+        entries = _pull_overlap_entries(folder)
+        if files is None:
+            files = [item["path"] for item in entries or []]
+        files = [str(name) for name in files]
+        if not files:
+            out["message"] = "No local edits are in the way of the update."
+            return out
+        local = sorted({name for item in entries or [] if item["path"] in files
+                        for name in item["local"]}) or files
+        base = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.quotepath=off",
+                "-C", top, "diff", "--no-color", "--no-ext-diff", "--no-textconv",
+                "--ignore-cr-at-eol"]
+        code, mine = _run_git(base + ["HEAD", "--"] + local, timeout=30)
+        tracked = _git_bytes(top, "--literal-pathspecs", "ls-tree", "-r", "--name-only",
+                             "HEAD", "--", *local) or b""
+        tracked = set(tracked.decode("utf-8", "replace").splitlines())
+        lines = ["=== Your edits on this computer ===", ""]
+        if code == 0 and mine.strip():
+            lines.append(mine.rstrip())
+        for name in local:
+            if name not in tracked:
+                lines.append("%s exists only on this computer; the newer version adds a "
+                             "file with the same name." % name)
+        code, theirs = _run_git(base + ["HEAD", "@{u}", "--"] + files, timeout=30)
+        lines += ["", "=== What changed online ===", ""]
+        lines.append(theirs.rstrip() if code == 0 and theirs.strip() else "(nothing to show)")
+        text = "\n".join(lines)
+        if len(text) > UPDATE_DIFF_MAX_CHARS:
+            text = text[:UPDATE_DIFF_MAX_CHARS] + "\n\n(cut off here: too long to show)"
+        out.update(ok=True, files=files, text=text)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        out["message"] = "Could not compare the files (%s)." % error
+    return out
+
+
+def _same_or_inside(path, folder):
+    def norm(value):
+        return os.path.normcase(os.path.realpath(value))
+    path, folder = norm(path), norm(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def study_server_problem(folder, port=None):
+    """"" unless a server of this study (``folder`` or anything inside it) looks to
+    be running, else the plain reason.
+
+    The launcher does not own a running server (a launch hands it to its own
+    console), so this asks: does something answer on a port this study uses? The
+    ports come from this PC's launch history, the saved configs for this folder and
+    ``port`` (the port on the form). A port whose latest launch was ANOTHER study
+    does not count. Fail-soft: unknown reads as not running; on Windows the rename
+    of a folder a server sits in fails on its own anyway."""
+    try:
+        latest, ports = {}, []
+        for entry in read_sessions(limit=200):
+            used = str(entry.get("port") or DEFAULT_CONFIG["port"]).strip()
+            project = str(entry.get("project") or "")
+            latest.setdefault(used, project)
+            if project and _same_or_inside(project, folder):
+                ports.append(used)
+        try:
+            for preset in load_store()[0]:
+                fields = preset.get("fields") if isinstance(preset.get("fields"), dict) else preset
+                project = str(fields.get("project_path") or "")
+                if project and _same_or_inside(project, folder):
+                    ports.append(normalize_config(fields)["port"])
+        except Exception:
+            pass
+        if str(port or "").strip():
+            ports.append(str(port).strip())
+        for used in dict.fromkeys(ports):
+            project = latest.get(used)
+            if project and not _same_or_inside(project, folder):
+                continue
+            if running_server_problem({"port": used}):
+                return STUDY_SERVER_RUNNING_TEXT % used
+    except Exception:
+        return ""
+    return ""
+
+
+def git_discard_and_update(folder, files=(), confirmed=False, port=None):
+    """"Discard my edits to these files and update": the ONE place the launcher
+    discards in a study folder, and only for a click that was confirmed.
+
+    Refuses (``reason_code``) without ``confirmed`` ("not_confirmed"), while a server
+    of this study runs ("server_running"), with commits of its own ("own_commits"),
+    and when ``files`` is no longer exactly what is in the way ("changed"), so what
+    was confirmed is what happens. Otherwise: a timestamped ``.bak`` per file, the
+    committed version back, ``git pull --ff-only``. A pull that fails puts every file
+    back byte for byte and removes the backups. A study that had the lab block keeps
+    it: the block is the launcher's, not one of the edits.
+
+    Returns the shape of :func:`git_update_study`, with ``backups``. Never raises."""
+    folder = str(folder or "").strip()
+    wanted = sorted(str(name) for name in files or ())
+    result = {"ok": False, "status": "error", "message": "", "detail": "", "reason": "",
+              "reason_code": "", "output": "", "files": [], "file_count": 0,
+              "commit_count": 0, "commit": {}, "conflict_files": [], "old_head": "",
+              "new_head": "", "note": "", "login_action": False, "fresh_copy": False,
+              "options": [], "lab_block": False, "backups": []}
+
+    def refused(code, reason, output=""):
+        result.update(reason_code=code, reason=reason, output=(output or "").strip(),
+                      message="Not updated: " + reason)
+        return result
+
+    if not confirmed:
+        return refused("not_confirmed", "this needs a confirmed click.")
+    if not folder or not is_git_repo(folder) or _is_launcher_folder(folder):
+        return refused("not_repo", "this is not a study's git folder.")
+    top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) or ""
+    problem = study_server_problem(top or folder, port)
+    if problem:
+        return refused("server_running", problem)
+    ahead = _git_text(folder, "rev-list", "--count", "@{u}..HEAD", timeout=10)
+    if ahead != "0":
+        result["options"] = update_options("own_commits")
+        return refused("own_commits", GIT_LOCAL_CHANGES_TEXT)
+    entries = _pull_overlap_entries(folder)
+    if entries is None or not top or sorted(item["path"] for item in entries) != wanted \
+            or not wanted:
+        return refused("changed", "the files in the way have changed. Nothing was "
+                                  "discarded: look again, then choose.")
+    old = _git_text(folder, "rev-parse", "HEAD") or ""
+    # The block only needs carrying when settings.py is one of the files put back.
+    names = [name for item in entries for name in item["local"]]
+    settings_rel = _repo_relative(folder, settings_path_for(folder))[1]
+    had_block = settings_rel in names and bool(inspect_settings(folder).get("has_block"))
+    undo = []                          # (backup or None, full path), to put back
+
+    def put_back():
+        lost = []
+        for backup, path in undo:
+            if backup is None:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            elif not _restore_backup(backup, path):
+                lost.append(backup)
+        return lost
+
+    try:
+        for name in dict.fromkeys(names):
+            path = os.path.join(top, *name.split("/"))
+            if os.path.lexists(path):
+                undo.append((_timestamped_backup(path), path))
+            else:
+                undo.append((None, path))
+            in_head = _git_bytes(top, "--literal-pathspecs", "ls-tree", "--name-only",
+                                 "HEAD", "--", name)
+            if in_head and in_head.strip():
+                code, output = _run_git(["--literal-pathspecs", "-C", top, "checkout", "HEAD",
+                                         "--", name], timeout=30)
+                if code != 0:
+                    raise OSError(output.strip() or "git checkout failed")
+            else:
+                _run_git(["--literal-pathspecs", "-C", top, "reset", "-q", "--", name],
+                         timeout=30)
+                if os.path.lexists(path):
+                    os.remove(path)
+        code, output = _pull_ff_only(folder)
+    except FileNotFoundError:
+        put_back()
+        return refused("no_git", "git is not installed on this computer.")
+    except subprocess.TimeoutExpired:
+        put_back()
+        return refused("timeout", "git pull took too long and was stopped. Your edits "
+                                  "were put back.")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        lost = put_back()
+        return refused("error", "Could not discard and update (%s).%s" % (
+            error, (" Copies are in: " + ", ".join(lost)) if lost else " Your edits were put back."))
+    if code != 0:
+        lost = put_back()
+        why = classify_git_error(output)
+        reason = why["reason"]
+        if lost:
+            reason += " Some files could not be put back; copies are in: " + ", ".join(lost)
+        refused(why["code"], reason, output)
+        result["message"] = "Git pull failed: " + reason
+        result["login_action"] = why["code"] in ("auth", "not_found") and _remote_is_github(folder)
+        return result
+    result["output"] = output.strip()
+    _describe_pull(result, folder, old)
+    kept = [backup for backup, _path in undo if backup]
+    result["backups"] = kept
+    bits = []
+    if kept:
+        bits.append("A copy of your edits is kept: %s." % ", ".join(
+            os.path.relpath(backup, top).replace(os.sep, "/") for backup in kept))
+    if had_block:
+        problem = carry_lab_block(folder)
+        result["lab_block"] = not problem
+        bits.append(problem or "Lab support kept.")
+    counted = result["message"]
+    result["message"] = "Updated, your edits were discarded."
+    result["detail"] = " ".join(bits + [counted, result["detail"]]).strip()
+    return result
+
+
+FOLDER_RENAME_RETRIES = 3      # a virus scanner or indexer lets go after a moment
+FOLDER_RENAME_PAUSE = 0.5
+
+
+def _rename_folder(source, target):
+    """os.rename, repeated a few times when the folder is locked for a moment.
+    Raises OSError when it stays locked."""
+    for attempt in range(FOLDER_RENAME_RETRIES + 1):
+        try:
+            os.rename(source, target)
+            return
+        except PermissionError:
+            if attempt >= FOLDER_RENAME_RETRIES:
+                raise
+            time.sleep(FOLDER_RENAME_PAUSE)
+
+
+def _remove_tree(path):
+    """Remove a temporary clone, including git's read-only files on Windows.
+    Never raises."""
+    def retry_writable(function, name, _info):
+        try:
+            os.chmod(name, stat.S_IWRITE)
+            function(name)
+        except OSError:
+            pass
+    try:
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=retry_writable)
+        else:
+            shutil.rmtree(path, onerror=retry_writable)
+    except OSError:
+        pass
+
+
+def _free_sibling(parent, base):
+    target = os.path.join(parent, base)
+    number = 2
+    while os.path.lexists(target):
+        target = os.path.join(parent, "%s_%d" % (base, number))
+        number += 1
+    return target
+
+
 def fresh_copy_plan(folder, today=None):
-    """Where a fresh copy of ``folder``'s repository would go. Returns
-    ``{"ok", "url", "branch", "top", "rel", "target", "path", "message"}``:
-    ``target`` is the new clone folder (next to the repository's top folder,
-    never an existing path) and ``path`` the study folder inside it (the same
-    sub-folder as now when the study is not the repository's top folder)."""
+    """What a fresh copy of ``folder``'s repository would do. Returns ``{"ok", "url",
+    "branch", "top", "rel", "target", "retired", "path", "message"}``:
+
+      ``top``      the repository's top folder: this is what gets renamed, also for
+                   a study in a sub-folder (``rel``)
+      ``target``   the temporary sibling folder to clone into
+      ``retired``  what ``top`` becomes: ``RETIRED_<name>_<date>``, numbered when
+                   taken
+      ``path``     the study folder afterwards: the SAME path as now, so saved
+                   configs and shortcuts keep working"""
     folder = str(folder or "").strip()
     plan = {"ok": False, "url": "", "branch": "", "top": "", "rel": "", "target": "",
-            "path": "", "message": ""}
+            "retired": "", "path": "", "message": ""}
     if not folder or not os.path.isdir(folder) or not is_git_repo(folder):
         plan["message"] = "This folder is not a git repository."
         return plan
@@ -4644,41 +5335,61 @@ def fresh_copy_plan(folder, today=None):
                            "nothing to copy from.")
         return plan
     top = os.path.normpath(top)
+    if not os.path.isdir(os.path.join(top, ".git")):
+        # A linked worktree or a submodule: its .git is a pointer that a rename breaks.
+        plan["message"] = ("This folder is part of a bigger git setup (a worktree or a "
+                           "submodule), so it cannot be swapped. Sort it out with Git.")
+        return plan
     rel = os.path.relpath(os.path.realpath(folder), os.path.realpath(top))
     rel = "" if rel in (".", "") else rel
     day = (today or _dt.date.today()).strftime("%Y%m%d")
-    base = "%s_fresh_%s" % (os.path.basename(top.rstrip("/\\")) or "study", day)
+    name = os.path.basename(top.rstrip("/\\")) or "study"
     parent = os.path.dirname(top)
-    target = os.path.join(parent, base)
-    number = 2
-    while os.path.lexists(target):
-        target = os.path.join(parent, "%s_%d" % (base, number))
-        number += 1
-    plan.update(ok=True, url=url, branch=branch, top=top, rel=rel, target=target,
-                path=os.path.join(target, rel) if rel else target)
+    plan.update(ok=True, url=url, branch=branch, top=top, rel=rel,
+                target=_free_sibling(parent, "%s_fresh_%s_tmp" % (name, day)),
+                retired=_free_sibling(parent, "RETIRED_%s_%s" % (name, day)),
+                path=os.path.normpath(folder))
     return plan
 
 
-def git_fresh_copy(folder, runner=None, on_phase=None, today=None, researcher=None):
-    """Clone ``folder``'s repository again into a NEW folder next to it.
+def git_fresh_copy(folder, runner=None, on_phase=None, today=None, researcher=None,
+                   port=None):
+    """Clone ``folder``'s repository again and swap the copies: the new one takes the
+    ORIGINAL folder name, the old one becomes ``RETIRED_<name>_<date>``.
 
-    Returns the same shape as :func:`git_clone_org_repo`
-    (``{"ok", "status", "message", "action", "hint", "output", "path"}``):
-    on success ``path`` is the study folder inside the new clone, for the face
-    to select. NOTHING in the old folder is read for content, changed or
-    removed. Never asks for a login; bounded by timeouts; never raises.
+      1. refuse while a server of this study runs (``status`` "server_running"),
+      2. clone into a temporary sibling, so nothing moves if the clone fails,
+      3. rename old -> RETIRED,
+      4. rename the clone -> the original name; if that fails, the old folder gets its
+         name back, so nothing changed. On Windows an open console or Explorer window
+         fails step 3 or 4 (``status`` "locked", ``hint`` says what to close),
+      5. a failure anywhere removes the temporary clone,
+      6. if the old folder had the lab block, add it to the new one
+         (:func:`carry_lab_block`).
 
-    A fresh copy is written to the clone log (fresh_copy True) with
-    ``researcher``, or, when that is None, whoever got the old folder (the log),
-    else "". The result carries ``token_label``."""
+    Returns the shape of :func:`git_clone_org_repo` (``{"ok", "status", "message",
+    "action", "hint", "output", "path"}``) plus ``retired``, ``title`` and ``detail``;
+    on success ``path`` is the study folder, the same path as before. The old folder
+    remains as a backup, and its gitignored and untracked files stay in it: only its
+    name changes. Never asks for a login; bounded by timeouts; never raises.
+
+    A fresh copy is written to the clone log (fresh_copy True) with ``researcher``, or,
+    when that is None, whoever got the old folder (the log), else "". The result
+    carries ``token_label``."""
     def outcome(status, message, hint="", output="", path="", action=""):
         return {"ok": status == "ok", "status": status, "message": message,
                 "action": action, "hint": hint, "output": (output or "").strip(),
-                "path": path, "old_path": str(folder or "").strip()}
+                "path": path, "old_path": str(folder or "").strip(), "retired": "",
+                "title": message, "detail": hint}
 
     plan = fresh_copy_plan(folder, today=today)
     if not plan["ok"]:
         return outcome("no_source", plan["message"])
+    problem = study_server_problem(plan["top"], port)
+    if problem:
+        return outcome("server_running", problem)
+    had_block = bool(inspect_settings(plan["path"]).get("has_block"))
+    who = researcher if researcher is not None else clone_researcher_for(folder)
     if on_phase is not None:
         try:
             on_phase("cloning")
@@ -4700,7 +5411,7 @@ def git_fresh_copy(folder, runner=None, on_phase=None, today=None, researcher=No
                                                or plan["url"]):
                 if url == plan["url"] or (current and github_url_user(url) == current):
                     continue
-                shutil.rmtree(plan["target"], ignore_errors=True)
+                _remove_tree(plan["target"])
                 code, again = _run_git(clone_args(url), runner=runner, timeout=600,
                                        no_prompt=True)
                 if code == 0:
@@ -4710,27 +5421,57 @@ def git_fresh_copy(folder, runner=None, on_phase=None, today=None, researcher=No
         return outcome("no_git", "git is not installed on this computer.",
                        "Ask the lab manager to install git.")
     except subprocess.TimeoutExpired:
-        shutil.rmtree(plan["target"], ignore_errors=True)   # drop a half-made clone
+        _remove_tree(plan["target"])   # drop a half-made clone
         return outcome("timeout", "Getting a fresh copy took too long and was stopped.",
                        "Check the internet connection, then try again.")
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        shutil.rmtree(plan["target"], ignore_errors=True)
+        _remove_tree(plan["target"])
         return outcome("error", "Could not run git clone.", str(error))
     if code != 0:
+        _remove_tree(plan["target"])
         why = classify_git_error(output)
         status = why["code"] if why["code"] in ("auth", "not_found", "network") else "error"
         return outcome(status, "Could not get a fresh copy.", why["reason"], output)
-    if not os.path.isdir(plan["path"]):
+    inside = os.path.join(plan["target"], plan["rel"]) if plan["rel"] else plan["target"]
+    if not os.path.isdir(inside):
+        _remove_tree(plan["target"])
         return outcome("error", "The fresh copy does not contain this study folder.",
-                       "", output)
+                       "Nothing was changed.", output)
     used = _git_text(plan["target"], "remote", "get-url", "origin", timeout=10) or plan["url"]
+    try:
+        _rename_folder(plan["top"], plan["retired"])
+    except OSError as error:
+        _remove_tree(plan["target"])
+        return outcome("locked", GIT_FRESH_COPY_LOCKED_TEXT, GIT_FRESH_COPY_LOCKED_HINT,
+                       str(error))
+    try:
+        _rename_folder(plan["target"], plan["top"])
+    except OSError as error:
+        _remove_tree(plan["target"])
+        try:
+            _rename_folder(plan["retired"], plan["top"])
+        except OSError as back:
+            lost = outcome(
+                "locked", "Could not get a fresh copy, and the old folder could not get its "
+                "name back: it is now %s." % plan["retired"],
+                "Close whatever has it open, then rename it back to %s." %
+                os.path.basename(plan["top"]), "%s\n%s" % (error, back))
+            lost["retired"] = plan["retired"]
+            return lost
+        return outcome("locked", GIT_FRESH_COPY_LOCKED_TEXT, GIT_FRESH_COPY_LOCKED_HINT,
+                       str(error))
+    bits = [GIT_FRESH_COPY_BACKUP_TEXT % os.path.basename(plan["retired"])]
+    if had_block:
+        problem = carry_lab_block(plan["path"])
+        bits.append(problem or "Lab support added.")
     label = github_url_user(used) or ""
     owner, name = _repo_owner_and_name(used)
-    who = researcher if researcher is not None else clone_researcher_for(folder)
     record_clone(owner, name, who, plan["path"], token_label=label, fresh_copy=True)
-    result = outcome("ok", "Fresh copy saved in %s. The old folder was not changed."
-                     % plan["target"], output=output, path=plan["path"])
-    result["token_label"] = label
+    detail = " ".join(bits)
+    result = outcome("ok", "%s %s" % (GIT_FRESH_COPY_DONE_TEXT, detail), output=output,
+                     path=plan["path"])
+    result.update(token_label=label, retired=plan["retired"],
+                  title=GIT_FRESH_COPY_DONE_TEXT, detail=detail)
     return result
 
 
@@ -5967,15 +6708,33 @@ def _prodserver_argv(cfg, otree=None):
     return argv
 
 
+# A study ends its own server cleanly by exiting with this code (for example an
+# End session button calling ``os._exit(42)``), and the server window then closes.
+# Any other code keeps the window open: a crash's traceback stays readable, and after
+# Ctrl+C the window still has its environment for a manual restart (a new terminal
+# has no DATABASE_URL and would fall back to SQLite without a word).
+SERVER_CLEAN_EXIT_CODE = 42
+
+
+def _posix_close_on_clean_exit():
+    """The POSIX shell check to run right after the server. Exits 0, so a Terminal
+    profile set to close when the shell exits cleanly closes the window."""
+    return "if [ $? -eq %d ]; then exit 0; fi" % SERVER_CLEAN_EXIT_CODE
+
+
 def macos_shell_script(cfg, project_path, env_pairs, otree=None):
     """The shell line that a new macOS Terminal window will run. The window
     gets the login shell's PATH, not ours, so a recorded ``otree`` path is
-    written into the line itself."""
+    written into the line itself. After the server it ends the shell only on
+    :data:`SERVER_CLEAN_EXIT_CODE`. Whether the window then disappears is the
+    Terminal profile's choice ("When the shell exits"): the default leaves a
+    finished window saying the process completed."""
     parts = ["cd " + shlex.quote(project_path)]
     for key, value in env_pairs:
         parts.append("export %s=%s" % (key, shlex.quote(value)))
     parts.append("echo '%s: oTree prodserver. Press Ctrl-C to stop the server.'" % APP_NAME)
     parts.append(" ".join(shlex.quote(part) for part in _prodserver_argv(cfg, otree)))
+    parts.append(_posix_close_on_clean_exit())
     return "; ".join(parts)
 
 
@@ -5994,6 +6753,9 @@ def build_server_launch(cfg, project_path, env, platform_name=None, otree=None):
     command-line quoting for cmd, so there the caller puts the command's folder
     first on ``env``'s PATH (:func:`env_with_otree_first`), which the console
     inherits.
+
+    The window closes only on :data:`SERVER_CLEAN_EXIT_CODE`, on every platform
+    with a window; see the note there.
     """
     platform_name = platform_name or sys.platform
     env_pairs = [(key, env[key]) for key in launcher_env_keys(cfg) if key in env]
@@ -6002,8 +6764,14 @@ def build_server_launch(cfg, project_path, env, platform_name=None, otree=None):
 
     if platform_name.startswith("win"):
         # cmd /k keeps the console open after the server stops, so the
-        # researcher can still read the traceback that killed it.
-        inner = 'title oTree Server ({app}) && {prod}'.format(app=APP_NAME, prod=prodserver)
+        # researcher can still read the traceback that killed it. Only the clean
+        # exit code closes it. "if errorlevel N" means N or higher, hence the pair,
+        # and unlike %errorlevel% it is read when it runs, not when the line is
+        # parsed. "&", because "&&" would skip the check on a non-zero code.
+        inner = ('title oTree Server ({app}) && {prod} & '
+                 'if errorlevel {code} if not errorlevel {above} exit').format(
+            app=APP_NAME, prod=prodserver, code=SERVER_CLEAN_EXIT_CODE,
+            above=SERVER_CLEAN_EXIT_CODE + 1)
         return {
             "kind": "windows",
             "cmd": ["cmd", "/k", inner],
@@ -6028,9 +6796,15 @@ def build_server_launch(cfg, project_path, env, platform_name=None, otree=None):
 
     for terminal in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
         if shutil.which(terminal):
+            # A terminal closes when its command ends, so "staying open" is handing
+            # over to an interactive shell, which inherits the environment.
+            # gnome-terminal's -e takes one word only: it wants "--".
+            script = '%s; %s; exec "${SHELL:-/bin/sh}"' % (
+                " ".join(shlex.quote(part) for part in argv), _posix_close_on_clean_exit())
+            run_flag = "--" if terminal == "gnome-terminal" else "-e"
             return {
                 "kind": "linux-terminal",
-                "cmd": [terminal, "-e"] + argv,
+                "cmd": [terminal, run_flag, "sh", "-c", script],
                 "cwd": project_path,
                 "creationflags": 0,
                 "shell": False,
@@ -6499,6 +7273,7 @@ def default_lab_presets():
             "map": resolve_lab_map(raw["map"], maps_table),
             "map_name": raw["map"],
             "default_room": raw["default_room"],
+            "default_port": raw.get("default_port"),
             "shortcut_label": raw["shortcut_label"],
             "deleted": raw["deleted"],
             "suggested_database": raw.get("suggested_database"),
@@ -6600,6 +7375,9 @@ def normalize_lab_preset(preset):
     # configs). Missing/blank -> "study", so an older lab_info.json / store with
     # no room field keeps working unchanged.
     out["default_room"] = sanitize_room_name(out.get("default_room"))
+    # Per-lab default launch port; missing or unusable -> the usual one.
+    port = _parse_launch_port(out.get("default_port"))
+    out["default_port"] = str(port) if port is not None else DEFAULT_CONFIG["port"]
     # Optional human name of the participant-PC desktop shortcuts (e.g.
     # "Experiment"). Surfaced only in the launch briefing; blank is fine.
     out["shortcut_label"] = str(out.get("shortcut_label", "") or "").strip()
@@ -6807,7 +7585,7 @@ def validate_lab_preset_fields(name, ip, seats):
 
 
 def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_GRID, cols=0,
-                   default_room=None, shortcut_label=None):
+                   default_room=None, shortcut_label=None, default_port=None):
     """Validate and append a new lab preset. Returns (ok, message, new_list, preset).
 
     ``cols`` is an optional column count for the plain-grid seat map, so an added
@@ -6816,6 +7594,8 @@ def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_
     participant-PC desktop-shortcut name.
     """
     ok, message, labels = validate_lab_preset_fields(name, ip, seats)
+    if ok and launch_port_problem(default_port):
+        ok, message = False, launch_port_problem(default_port)
     if not ok:
         return False, message, list(lab_presets or []), None
     presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
@@ -6828,6 +7608,7 @@ def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_
         "geometry": geometry,
         "cols": cols,
         "default_room": default_room,
+        "default_port": default_port,
         "shortcut_label": shortcut_label or "",
         "builtin": False,
     })
@@ -6836,12 +7617,13 @@ def add_lab_preset(lab_presets, name, ip, seats, display=True, geometry=LAB_GEO_
 
 
 def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, display=None,
-                      cols=None, default_room=None, shortcut_label=None):
+                      cols=None, default_room=None, shortcut_label=None,
+                      default_port=None):
     """Edit an existing lab preset in place (by id). Returns (ok, message, new_list, preset).
 
     ``default_room`` / ``shortcut_label`` are only changed when passed (None leaves
     the stored value); an empty string is a real value and clears the shortcut
-    label, while a blank room name coerces back to "study".
+    label, while a blank room name coerces back to "study" and a blank port to 8000.
     """
     presets = [normalize_lab_preset(p) for p in (lab_presets or [])]
     target = None
@@ -6855,6 +7637,8 @@ def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, displ
     next_ip = target["ip"] if ip is None else ip
     next_seats = target["seats"] if seats is None else seats
     ok, message, labels = validate_lab_preset_fields(next_name, next_ip, next_seats)
+    if ok and launch_port_problem(default_port):
+        ok, message = False, launch_port_problem(default_port)
     if not ok:
         return False, message, presets, None
     target["name"] = next_name.strip()
@@ -6871,6 +7655,9 @@ def update_lab_preset(lab_presets, lab_id, name=None, ip=None, seats=None, displ
         target["default_room"] = sanitize_room_name(default_room)
     if shortcut_label is not None:
         target["shortcut_label"] = str(shortcut_label or "").strip()
+    if default_port is not None:
+        target["default_port"] = str(_parse_launch_port(default_port)
+                                     or DEFAULT_CONFIG["port"])
     return True, "Updated the lab %r." % target["name"], presets, target
 
 
@@ -8623,10 +9410,21 @@ def launch_briefing(cfg, lab_presets=None):
     local_only = (lab == LAB_LOCAL)
     if lab in (LAB_CUSTOM, LAB_LOCAL):
         has_participant_links = False
+    # A lab's participant shortcuts are made for that lab's default port, so on
+    # another port the summary must not send people to them: it gives the link
+    # and says why. No note where no lab shortcuts exist.
+    port_note = ""
+    if lab not in (LAB_CUSTOM, LAB_LOCAL):
+        lab_port = lab_default_port(lab, resolved_presets)
+        if port != lab_port:
+            port_note = LAUNCH_PORT_NOTE % (port, lab_port, lab_port)
+            has_participant_links = False
     return {
         "lab_label": lab_label,
         "host": host,
         "port": port,
+        "port_line": LAUNCH_PORT_PILL % port,
+        "port_note": port_note,
         "room": room,
         "is_study": is_study,
         "default_room": lab_room,
@@ -9892,8 +10690,19 @@ HEADLESS_SESSION_RUNNING_MESSAGE = (
     "A session is already running on the launch port, so the one-click shortcut "
     "did not start another one and did not reset the database. Stop the running "
     "session first (close its server window), then run the shortcut again.")
-PORT_IN_USE_MESSAGE = ("Port %d is in use: a session is already running on it. Stop it "
-                       "first (close its server window), then Re-check.")
+PORT_IN_USE_MESSAGE = ("Port %d is in use: a session or another program is already running "
+                       "on it. Stop it first (close its server window), then Re-check.")
+# This computer refused the bind and nothing is listening: no session is running.
+# The launcher never asks for elevated rights.
+PORT_NO_PERMISSION_MESSAGE = (
+    "This computer does not allow the launcher to use port %d, so the server could not "
+    "start on it. Ports below 1024 can need administrator rights, and the launcher does "
+    "not ask for those. Choose another port with the pen next to Port, or ask your IT "
+    "department.")
+HEADLESS_PORT_REFUSED_EXIT = 12
+# What a server that never came up may have run into (all three launch paths).
+SERVER_START_FAILED_CAUSES = ("a missing project, a database error, the port already in "
+                              "use, or no permission to use the port")
 
 
 # The one-click shortcut (--run) has no window, so it cannot show the launch
@@ -10304,19 +11113,37 @@ def delete_shortcut_file(path, config_name=None):
     return True, "Deleted the shortcut %s." % path
 
 
+PORT_KIND_INVALID = "invalid"
+PORT_KIND_IN_USE = "in_use"
+PORT_KIND_NO_PERMISSION = "no_permission"
+
+
 def running_server_problem(config):
-    """The last guard before a launch touches anything: "" when the launch port
-    is free, else the plain reason (a server is already answering there).
+    """The last guard before a launch touches anything: "" when no server answers
+    on the launch port, else the plain reason.
 
     Every launch path (both faces and the headless one-click run) calls this
     BEFORE ``otree resetdb``, so a relaunch can never reset the database of a
     session that is still running, and can never report the OLD server's answer
-    as its own success. Fail-soft: anything unexpected reads as free."""
+    as its own success. ``study_server_problem`` relies on it meaning exactly
+    that: a port this computer refuses is not a running server (see
+    :func:`launch_port_refusal`). Fail-soft: anything unexpected reads as free."""
+    return _blocking_port_message(config, (PORT_KIND_IN_USE,))
+
+
+def launch_port_refusal(config):
+    """The other last guard: "" unless this launch cannot use its port even though
+    no server is there, because the value is invalid or this computer refuses it.
+    A launch must stop before ``otree resetdb`` here too: it could not start."""
+    return _blocking_port_message(config, (PORT_KIND_INVALID, PORT_KIND_NO_PERMISSION))
+
+
+def _blocking_port_message(config, kinds):
     try:
         result = preflight_check_port(config)
     except Exception:
         return ""
-    if result.get("ok") or not result.get("blocking"):
+    if result.get("ok") or not result.get("blocking") or result.get("kind") not in kinds:
         return ""
     return str(result.get("message") or "")
 
@@ -10332,27 +11159,17 @@ def preflight_check_port(config):
     disambiguated: only when something actually ACCEPTS a test connection is the
     port reported in use; a lingering TIME_WAIT socket (which refuses
     connections) reads as free, after one retried bind following a short pause.
-    Either way this is a SOFT check -- launch-anyway still works.
+    A port that cannot work is a must-fix (``blocking``), with its ``kind``:
+    invalid, in use, or refused by this computer.
     """
     import errno
     c = normalize_config(config)
     raw = str(c["port"]).strip()
-    try:
-        port = int(raw)
-    except (TypeError, ValueError):
-        return _preflight_result(
-            "port", True,
-            "No numeric launch port set, skipping the port check.",
-            "port=%r" % raw)
-
-    # A value outside 1..65535 would make socket.bind raise OverflowError (not
-    # OSError), so it slipped past the except below and crashed the preflight.
-    # Treat it as a clean validation failure instead.
-    if not (1 <= port <= 65535):
-        return _preflight_result(
-            "port", False,
-            "The launch port %d is out of range (it must be between 1 and 65535)." % port,
-            "port=%r" % raw)
+    port = _parse_launch_port(raw)
+    if port is None:
+        result = _preflight_result("port", False, launch_port_problem(raw), "")
+        result.update(blocking=True, kind=PORT_KIND_INVALID)
+        return result
 
     ok, error = _port_bind_free(port)
     if ok:
@@ -10375,13 +11192,19 @@ def preflight_check_port(config):
         # session that is still running: so this is a MUST-FIX (``blocking``),
         # not a warning. Both faces render it as a blocker with Re-check.
         result = _preflight_result("port", False, PORT_IN_USE_MESSAGE % port, str(err))
-        result["blocking"] = True
+        result.update(blocking=True, kind=PORT_KIND_IN_USE)
         return result
 
-    # EACCES is a permission problem (a privileged port), not a TIME_WAIT lag --
-    # keep reporting it as busy.
+    # EACCES is a permission problem, not a TIME_WAIT lag. With something answering
+    # the port IS taken (a server started as administrator; Windows also answers
+    # this way for a port another program holds). Otherwise say what it is: telling
+    # someone to stop a session that does not exist would send them nowhere.
     if error.errno == errno.EACCES:
-        return _in_use(error)
+        if _port_has_listener(port):
+            return _in_use(error)
+        result = _preflight_result("port", False, PORT_NO_PERMISSION_MESSAGE % port, str(error))
+        result.update(blocking=True, kind=PORT_KIND_NO_PERMISSION)
+        return result
 
     # EADDRINUSE: a live listener, or just the release lag from a quit server?
     if _port_has_listener(port):
@@ -11363,6 +12186,7 @@ def convert_legacy_data(source, now=None, pc=None):
                 "default_room": over.get("default_room") or base.get("default_room"),
                 "shortcut_label": over.get("shortcut_label", base.get("shortcut_label", "")),
                 "deleted": bool(over.get("deleted", base.get("deleted", False))),
+                "default_port": over.get("default_port", base.get("default_port")),
             })
             if base.get("name") and merged["name"] != base.get("name"):
                 renamed.append(lab_id)

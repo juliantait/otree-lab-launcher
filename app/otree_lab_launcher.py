@@ -648,9 +648,8 @@ def _headless_startup_failure_message(process=None):
     server terminal window (real traceback) and surface an early child exit when
     the linux-background handle shows one."""
     base = ("ERROR: the oTree server did not become ready — it may have crashed on "
-            "startup (a missing project, a database error, or the port already in "
-            "use). Nothing was marked as launched. Check the server terminal window "
-            "for the real error.")
+            "startup (%s). Nothing was marked as launched. Check the server terminal "
+            "window for the real error." % core.SERVER_START_FAILED_CAUSES)
     try:
         if process is not None:
             code = process.poll()
@@ -810,7 +809,9 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
     Cancel in the question box (core.headless_ask_problems: a newer version of
     the study online, the update check of a git folder could not finish, the
     database not reachable, the room not the lab default). ``11`` means the
-    ``otree`` command the launch runs was not found (nothing touched).
+    ``otree`` command the launch runs was not found (nothing touched). ``12`` means
+    the config's launch port cannot be used: invalid, or refused by this computer
+    (nothing touched).
 
     When a newer version is online the box has a third choice, Git pull: the
     same fast-forward pull as the launcher's button (core.git_update_study).
@@ -934,6 +935,14 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         _hlog("NOTE: the oTree recorded in the shortcut is not there any more (%s); "
               "using the 'otree' command on the PATH. Save the shortcut again to "
               "record the new one." % recorded)
+
+    # 0a. A port that cannot work: stop here too, and say what is wrong with it.
+    refused = core.launch_port_refusal(cfg)
+    if refused:
+        _hlog("ERROR: %s" % refused)
+        core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                            outcome="fail", lab_presets=lab_presets)
+        return _headless_fail(core.HEADLESS_PORT_REFUSED_EXIT, refused)
 
     # 0. A server already answering on the launch port = a session is running.
     #    Refuse BEFORE the seat file or the database is touched (N1): a relaunch
@@ -2306,6 +2315,10 @@ class LauncherApp(object):
                 self.var[key] = tk.StringVar(self.root, value=json.dumps(default))
             else:
                 self.var[key] = tk.StringVar(self.root, value=default)
+        # True = the port on screen is this config's own choice, else it follows the
+        # lab (core.PORT_OVERRIDE_KEY). _port_lab: the lab that choice was made on.
+        self.port_override = False
+        self._port_lab = None
         self.db_mode_label = tk.StringVar(self.root, value=DB_MODE_LABELS[DB_MODE_LAB])
         self.seat_mode_label = tk.StringVar(self.root, value=SEAT_MODE_LABELS[SEAT_DEFAULT])
         self.seat_count = tk.StringVar(self.root, value="")
@@ -2320,6 +2333,9 @@ class LauncherApp(object):
     def _wire_traces(self):
         for key in FIELD_KEYS:
             self.var[key].trace_add("write", self._on_field_change)
+        # Added after the general field trace, so it runs first (Tcl runs the newest
+        # first): the dirty check then already sees the choice.
+        self.var["port"].trace_add("write", self._on_port_typed)
         # The database chooser is now a pen-icon menu (_open_db_menu →
         # _choose_db_mode), not a traced combobox, so db_mode_label carries no
         # trace: it stays as a plain mirror of the current mode for display.
@@ -3405,7 +3421,8 @@ class LauncherApp(object):
         self._field(cf, 0, "Host", hostrow)
         self.room_entry = ttk.Entry(cf, textvariable=self.var["room_name"])
         self._field(cf, 1, "Room name", self.room_entry)
-        # Port and Page are almost never changed, so fold them behind a link.
+        # Port and Page are almost never changed, so fold them behind a link. (Same
+        # port as the Port pill below: typing here is this config's own choice.)
         self._custom_more_shown = False
         self.custom_more_link = tk.Label(cf, text="▸  Port and page", bg=COLORS["card"],
                                          fg=COLORS["muted"], font=self.fonts.small,
@@ -3457,12 +3474,51 @@ class LauncherApp(object):
         ttk.Button(self.room_row, text="Change room...", style="Slim.TButton",
                    command=self.pick_room).pack(side="left", padx=(10, 0))
 
+        # -- The launch port: a pill with what will really be used, for every host,
+        #    and a pen that opens the box to choose this config's own port.
+        self.port_box = tk.Frame(body, bg=COLORS["card"])
+        self.port_box.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        port_line = tk.Frame(self.port_box, bg=COLORS["card"])
+        port_line.pack(fill="x")
+        self.port_pill = tk.Label(port_line, text="", bg=COLORS["accent_soft"],
+                                  fg=COLORS["accent"], font=self.fonts.small_bold, padx=8, pady=2,
+                                  highlightthickness=1, highlightbackground=COLORS["accent"])
+        self.port_pill.pack(side="left")
+        self.port_tag = tk.Label(port_line, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                                 font=self.fonts.small, anchor="w")
+        self.port_tag.pack(side="left", padx=(6, 0))
+        self.port_edit_link = tk.Label(port_line, text=" ✎", bg=COLORS["card"], fg=COLORS["muted"],
+                                       font=self.fonts.small_bold, cursor="hand2")
+        self.port_edit_link.pack(side="left", padx=(4, 0))
+        self.port_edit_link.bind("<Button-1>", lambda _e: self._toggle_port_edit())
+        self._pen_hover(self.port_edit_link)
+        Tooltip(self.port_edit_link, lambda: "Choose this config's own port").attach(
+            self.port_edit_link)
+        self.port_panel = tk.Frame(self.port_box, bg=COLORS["card"])
+        port_edit_row = tk.Frame(self.port_panel, bg=COLORS["card"])
+        port_edit_row.pack(fill="x", pady=(6, 0))
+        self.launch_port_entry = ttk.Entry(port_edit_row, textvariable=self.var["port"], width=8)
+        self.launch_port_entry.pack(side="left")
+        self.port_reset_link = tk.Label(port_edit_row, text=core.LAUNCH_PORT_RESET,
+                                        bg=COLORS["card"], fg=COLORS["accent"],
+                                        font=self.fonts.small, cursor="hand2")
+        self.port_reset_link.bind("<Button-1>", lambda _e: self._use_default_port())
+        self.launch_port_hint = tk.Label(self.port_panel, text=core.LAUNCH_PORT_HINT,
+                                         bg=COLORS["card"], fg=COLORS["muted"],
+                                         font=self.fonts.small, anchor="w", justify="left",
+                                         wraplength=420)
+        self.launch_port_hint.pack(fill="x", pady=(3, 0))
+        self.launch_port_msg = tk.Label(self.port_panel, text="", bg=COLORS["card"],
+                                        fg=COLORS["warn"], font=self.fonts.small, anchor="w",
+                                        justify="left", wraplength=420)
+        self.launch_port_msg.pack(fill="x")
+
         # -- Participant list row (dropdown only) ------------------------------
         # The seat count is not repeated here (round 7): it lives in the Room
         # layout caption ("Room layout - N seats"), which shows whether the
         # layout is expanded or collapsed.
         partrow = tk.Frame(body, bg=COLORS["card"])
-        partrow.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        partrow.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         tk.Label(partrow, text="Participant list", bg=COLORS["card"], fg=COLORS["muted"],
                  font=self.fonts.body).pack(side="left", padx=(0, 10))
         self.seat_mode_box = ttk.Combobox(
@@ -3474,7 +3530,7 @@ class LauncherApp(object):
         # The file picker, shown only in File mode. (In Edit mode the map itself
         # is the seat selector, so no flat checkbox list is needed.)
         self.seat_extra = tk.Frame(body, bg=COLORS["card"])
-        self.seat_extra.grid(row=7, column=0, columnspan=2, sticky="ew")
+        self.seat_extra.grid(row=8, column=0, columnspan=2, sticky="ew")
         self.seat_extra.columnconfigure(0, weight=1)
         self.seat_file_row = tk.Frame(self.seat_extra, bg=COLORS["card"])
         self.seat_file_row.columnconfigure(0, weight=1)
@@ -3513,7 +3569,7 @@ class LauncherApp(object):
         self._map_expanded = False
         self._map_default_for = None
         self.map_holder = tk.Frame(body, bg=COLORS["card"])
-        self.map_holder.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.map_holder.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.map_holder.columnconfigure(0, weight=1)
         self.map_caption = tk.Label(self.map_holder, text="", bg=COLORS["card"],
                                     fg=COLORS["muted"], font=self.fonts.small_bold, anchor="w",
@@ -3691,6 +3747,47 @@ class LauncherApp(object):
     def _toggle_map(self, _event=None):
         self._map_expanded = not getattr(self, "_map_expanded", False)
         self._apply_lab_view()
+
+    # -- the launch port --------------------------------------------------------
+
+    def _on_port_typed(self, *_args):
+        """Typing a port makes it this config's own; emptying the box gives it back
+        to the lab. The launcher's own writes run under the loading guard."""
+        if not self.loading:
+            self.port_override = bool(self.var["port"].get().strip())
+
+    def _toggle_port_edit(self):
+        if self.port_panel.winfo_manager():
+            self.port_panel.pack_forget()
+        else:
+            self.port_panel.pack(fill="x")
+
+    def _use_default_port(self):
+        self.port_override = False
+        self.refresh_previews()
+        self.refresh_dirty()
+
+    def _refresh_port_view(self, cfg):
+        """The pill says what a launch will really use (core), and while the port
+        follows the lab the box shows that too."""
+        if not hasattr(self, "port_pill"):
+            return
+        box = self.var["port"].get().strip()
+        # (An emptied box stays empty while someone is about to type in it.)
+        if not cfg[core.PORT_OVERRIDE_KEY] and box and box != cfg["port"]:
+            was_loading, self.loading = self.loading, True
+            try:
+                self.var["port"].set(cfg["port"])
+            finally:
+                self.loading = was_loading
+        pill, tag = core.port_pill(cfg)
+        self.port_pill.configure(text=pill)
+        self.port_tag.configure(text=tag)
+        self.launch_port_msg.configure(text=core.launch_port_problem(cfg["port"]))
+        if cfg[core.PORT_OVERRIDE_KEY]:
+            self.port_reset_link.pack(side="left", padx=(10, 0))
+        else:
+            self.port_reset_link.pack_forget()
 
     def _toggle_custom_more(self):
         self._custom_more_shown = not getattr(self, "_custom_more_shown", False)
@@ -4133,6 +4230,7 @@ class LauncherApp(object):
                 except ValueError:
                     raw = type(DEFAULT_CONFIG[key])()
             values[key] = raw
+        values[core.PORT_OVERRIDE_KEY] = self.port_override
         return normalize_config(values)
 
     def load_fields(self, cfg, index):
@@ -4145,6 +4243,8 @@ class LauncherApp(object):
                 value = values[key]
                 self.var[key].set(json.dumps(value, sort_keys=True)
                                   if isinstance(value, (list, dict)) else value)
+            self.port_override = values[core.PORT_OVERRIDE_KEY]
+            self._port_lab = values["lab"]
             # Rebuild the lab selector to OFFER this config's OWN lab -- even when
             # it is hidden (display=False) -- so opening a config saved on a
             # now-hidden lab neither drops nor silently reassigns its lab (BUG B).
@@ -4249,6 +4349,11 @@ class LauncherApp(object):
         if self.loading:
             return
         lab = self.var["lab"].get()
+        # Choosing another lab or host applies ITS default port: a port chosen for
+        # one lab's network says nothing about the next. The pill shows the result.
+        if lab != self._port_lab:
+            self._port_lab = lab
+            self.port_override = False
         # A pseudo-host (typed custom host, or Local/localhost) has no known seat
         # list, so it drops to an open room; a real lab pins the shortcut room and
         # comes with a seat list.
@@ -4373,6 +4478,7 @@ class LauncherApp(object):
         self._refresh_db_summary()
         self._refresh_admin_summary(cfg)
         self._refresh_run_summary(cfg)
+        self._refresh_port_view(cfg)
         # Additional services (Advanced): follows the lab and the choices.
         self.refresh_services_view()
 
@@ -4838,7 +4944,7 @@ class LauncherApp(object):
           current        one quiet muted line ("Experiment up to date · checked HH:MM")
                          (hidden while a successful Git pull result says the same)
           behind         an amber banner with the question and an Update button
-          local_changes  one line + "Get a fresh copy"
+          local_changes  one line + the options core offers (core.update_options)
           no_access      one grey line + "GitHub login…"
         """
         box = getattr(self, "update_box", None)
@@ -4904,7 +5010,9 @@ class LauncherApp(object):
                     self.update_github_mark.grid(row=0, column=0, padx=(0, 5))
                     self.update_message_label.grid(row=0, column=1, sticky="ew")
             action = status.get("action")
-            if action == "fresh_copy":
+            if status.get("options"):
+                self.update_action_button = self._update_options_row(box, status["options"])
+            elif action == "fresh_copy":
                 self.update_action_button = ttk.Button(
                     row, text=status.get("action_label") or core.GIT_FRESH_COPY_LABEL,
                     style="Slim.TButton", command=self.get_fresh_copy)
@@ -4912,7 +5020,7 @@ class LauncherApp(object):
                 self.update_action_button = ttk.Button(
                     row, text=core.GITHUB_LOGIN_ACTION_LABEL, style="Slim.TButton",
                     command=lambda: self.open_github_login(self._recheck_after_login))
-            if self.update_action_button is not None:
+            if self.update_action_button is not None and not status.get("options"):
                 self.update_action_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
         before = self.git_result if self.git_result.winfo_manager() else self._git_divider
         box.pack(fill="x", pady=(8, 0), before=before)
@@ -4940,11 +5048,88 @@ class LauncherApp(object):
     def _recheck_after_login(self):
         self._sync_update_check(self._current_project_path(), reselect=True)
 
+    def _update_options_row(self, parent, options):
+        """The ways out when a folder cannot be moved forward: core.update_options
+        decides them, for both faces; this draws one button each, stacked, because
+        the labels are too long for one line of the project card. Returns the Fresh
+        copy button (the callers disable it while it runs)."""
+        row = tk.Frame(parent, bg=COLORS["card"])
+        row.pack(fill="x", pady=(5, 0))
+        fresh = None
+        for option in options:
+            button = ttk.Button(row, text=option.get("label", ""), style="Slim.TButton",
+                                command=lambda chosen=option: self._run_update_option(chosen))
+            button.pack(side="top", anchor="w", pady=(0, 3))
+            if option.get("id") == "fresh_copy":
+                fresh = button
+        return fresh
+
+    def _run_update_option(self, option):
+        chosen = (option or {}).get("id")
+        if chosen == "show_diff":
+            return self.show_local_diff()
+        if chosen == "fresh_copy":
+            return self.get_fresh_copy()
+        if chosen == "keep":
+            return self.launch()
+        if chosen == "discard":
+            return self.discard_and_update(option)
+        return None
+
+    def show_local_diff(self):
+        """"Show what's different": a read-only window (core.update_local_diff)."""
+        diff = core.update_local_diff(self._current_project_path())
+        if not diff.get("ok"):
+            self.log(diff.get("message") or "Could not compare the files.", "err")
+            return None
+        window = tk.Toplevel(self.root)
+        window.title(diff.get("title") or core.GIT_DIFF_TITLE)
+        tk.Label(window, text=", ".join(diff.get("files") or []), font=self.fonts.small_bold,
+                 anchor="w", justify="left", wraplength=640).pack(fill="x", padx=10, pady=(10, 4))
+        area = tk.Frame(window)
+        area.pack(fill="both", expand=True, padx=10)
+        scroll = ttk.Scrollbar(area, orient="vertical")
+        scroll.pack(side="right", fill="y")
+        box = tk.Text(area, wrap="none", width=90, height=28, font=self.fonts.mono,
+                      yscrollcommand=scroll.set)
+        box.pack(side="left", fill="both", expand=True)
+        scroll.config(command=box.yview)
+        box.insert("1.0", diff.get("text") or "")
+        box.config(state="disabled")
+        ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+        return window
+
+    def discard_and_update(self, option):
+        """"Discard my edits to these files and update": asks first, naming the
+        files; core.git_discard_and_update makes the backups, refuses while a server
+        runs and puts everything back when the pull fails. Returns True when it ran."""
+        path = self._current_project_path()
+        if not path or self._git_pull_running:
+            return False
+        option = option or {}
+        if not messagebox.askyesno(option.get("title") or core.GIT_DISCARD_TITLE,
+                                   option.get("confirm") or "", parent=self.root):
+            return False
+        files = list(option.get("files") or [])
+        port = self.form_values().get("port", "")
+        self._git_pull_running = True
+        self.log("Discarding edits to %s and updating ..." % ", ".join(files), "info")
+        self._render_git_result(
+            {"busy": True, "busy_text": "Discarding your edits and updating..."}, path)
+
+        def work():
+            return core.git_discard_and_update(path, files, confirmed=True, port=port)
+        if not self._update_check_async:                 # tests: run it at once
+            self._on_git_update_done(work(), path)
+            return True
+        run_in_background(self.root, work,
+                          lambda result: self._on_git_update_done(result, path))
+        return True
+
     def get_fresh_copy(self):
-        """"Get a fresh copy": clone the study's repository again into a NEW
-        folder next to this one and select it (core.git_fresh_copy). The old
-        folder is never changed: the launcher does not commit, merge or discard
-        in a study folder."""
+        """"Get a fresh copy" (core.git_fresh_copy): the study is cloned again, the
+        new copy takes this folder's name, so saved configs and shortcuts keep
+        working, and the old folder remains as a backup, RETIRED_<name>_<date>."""
         path = self._current_project_path()
         if not path or getattr(self, "_fresh_copy_running", False):
             return False
@@ -4958,10 +5143,11 @@ class LauncherApp(object):
                     pass
         self.log("Getting a fresh copy of %s ..." % path, "info")
         self._render_git_result({"busy": True, "busy_text": "Getting a fresh copy..."}, path)
+        port = self.form_values().get("port", "")
         if not self._update_check_async:                 # tests: run it at once
-            self._on_fresh_copy_done(core.git_fresh_copy(path), path)
+            self._on_fresh_copy_done(core.git_fresh_copy(path, port=port), path)
             return True
-        run_in_background(self.root, lambda: core.git_fresh_copy(path),
+        run_in_background(self.root, lambda: core.git_fresh_copy(path, port=port),
                           lambda result: self._on_fresh_copy_done(result, path))
         return True
 
@@ -4974,6 +5160,11 @@ class LauncherApp(object):
             self.var["project_path"].set(new)
             self.log(result.get("message") or ("Fresh copy saved in %s." % new), "ok")
             self.refresh_previews()
+            # The same path now holds another copy: ask about updates again.
+            self._sync_update_check(new, reselect=True)
+            self._render_git_result({"ok": True, "status": "fresh",
+                                     "message": result.get("title"),
+                                     "detail": result.get("detail")}, new)
             self._maybe_offer_get_ready(new)
             return
         self.log(result.get("message") or "Could not get a fresh copy.", "err")
@@ -5194,7 +5385,9 @@ class LauncherApp(object):
                      font=self.fonts.small, anchor="w", justify="left",
                      wraplength=360).pack(fill="x", pady=(2, 0))
         # What to do about a failure, as a button (no terminal needed).
-        if not result.get("ok") and not result.get("busy") \
+        if not result.get("ok") and not result.get("busy") and result.get("options"):
+            self.fresh_copy_button = self._update_options_row(frame, result["options"])
+        elif not result.get("ok") and not result.get("busy") \
                 and (result.get("login_action") or result.get("fresh_copy")):
             actions = tk.Frame(frame, bg=bg)
             actions.pack(fill="x", pady=(5, 0))
@@ -5248,6 +5441,11 @@ class LauncherApp(object):
     def save_as_new(self, on_success=None):
         """Save the on-screen settings as a new config. ``on_success`` (used by
         the save-and-launch flow) is called only after a successful save."""
+        port_problem = core.launch_port_problem(self.form_values()["port"])
+        if port_problem:
+            self.log(port_problem, "err")
+            self.inline_status.set("error", port_problem)
+            return
         suggestion = ""
         # Prefill the Researcher field with whoever added the chosen project
         # folder through the GitHub dialog (the clone log), else the last author
@@ -6379,7 +6577,7 @@ class LauncherApp(object):
         # already answering on the launch port means a session is running. A
         # relaunch would reset ITS database and then report the old server's
         # answer as success, so refuse here whatever the screen allowed.
-        running = core.running_server_problem(cfg)
+        running = core.launch_port_refusal(cfg) or core.running_server_problem(cfg)
         if running:
             self.log(running, "err")
             self._on_main(lambda msg=running: self.inline_status.set("error", msg))
@@ -6514,9 +6712,8 @@ class LauncherApp(object):
         there) and, when the linux-background child has already exited, surfaces
         its exit code."""
         base = ("The oTree server did not become ready — it may have crashed on "
-                "startup (a missing project, a database error, or the port already "
-                "in use). Nothing was marked as launched. Check the server terminal "
-                "window for the real error.")
+                "startup (%s). Nothing was marked as launched. Check the server terminal "
+                "window for the real error." % core.SERVER_START_FAILED_CAUSES)
         proc = getattr(self, "_server_proc", None)
         try:
             if proc is not None:
@@ -8160,6 +8357,12 @@ class LaunchBriefingDialog(object):
             row=0, column=0, sticky="w")
         self.info_icon = self._info_icon(head)
         self.info_icon.grid(row=0, column=1, sticky="e")
+        if briefing.get("port_line"):
+            # On the card itself, not behind the (i): Julian wants the port named.
+            self.port_line = tk.Label(summary, text=briefing["port_line"], bg=COLORS["card"],
+                                      fg=COLORS["muted"], font=fonts.small, anchor="w")
+            self.port_line.grid(row=sr, column=0, sticky="w", pady=(0, 8))
+            sr += 1
         if self._info_open:
             info = tk.Frame(summary, bg=COLORS["field_off"], highlightthickness=1,
                             highlightbackground=COLORS["card_line"])
@@ -8270,7 +8473,7 @@ class LaunchBriefingDialog(object):
             # match", the link still works).
             # (An "Other host" has no lab shortcuts at all, so there is no
             # study-room alternative to point at: it just gets the link.)
-            if not briefing.get("is_study", False):
+            if briefing.get("port_note") or not briefing.get("is_study", False):
                 warn = tk.Frame(summary, bg=COLORS["warn_soft"], highlightthickness=1,
                                 highlightbackground=COLORS["card_line"])
                 warn.grid(row=sr, column=0, sticky="ew", pady=(0, 8))
@@ -8278,11 +8481,12 @@ class LaunchBriefingDialog(object):
                 warn.columnconfigure(0, weight=1)
                 tk.Label(warn, bg=COLORS["warn_soft"], fg=COLORS["warn"], font=fonts.small,
                          anchor="w", justify="left", wraplength=self.WRAP - 50,
-                         text=("This session uses the room %r. Open the link below on each "
-                               "participant computer, one per seat. Or use the %r room to use "
-                               "the shortcuts already on the participant PC."
-                               % (briefing.get("room", ""),
-                                  briefing.get("default_room", "study")))
+                         text=briefing.get("port_note") or (
+                             "This session uses the room %r. Open the link below on each "
+                             "participant computer, one per seat. Or use the %r room to use "
+                             "the shortcuts already on the participant PC."
+                             % (briefing.get("room", ""),
+                                briefing.get("default_room", "study")))
                          ).grid(row=0, column=0, sticky="ew", padx=10, pady=7)
             if template:
                 # Label + Copy on one line, then the link at FULL width below so
@@ -9958,7 +10162,7 @@ def _ask_shortcut_hotkey(parent, fonts):
 
 
 def export_participant_shortcuts_dialog(parent, fonts, lab_name, host, seats,
-                                        room=None, shortcut_label=""):
+                                        room=None, shortcut_label="", port=None):
     """Ask for an optional hotkey + a destination folder and write the .lnk bundle.
 
     Shared by the Add/Edit-lab tick box and the Lab Settings "Export PC
@@ -9982,7 +10186,7 @@ def export_participant_shortcuts_dialog(parent, fonts, lab_name, host, seats,
     if not dest:
         return None
     result = core.export_participant_shortcuts(
-        dest, lab_name, host, labels, room=room, shortcut_label=shortcut_label,
+        dest, lab_name, host, labels, room=room, port=port, shortcut_label=shortcut_label,
         hotkey_key=hotkey_key)
     if result.get("ok"):
         messagebox.showinfo("Shortcuts created", result["message"], parent=parent)
@@ -10039,6 +10243,15 @@ class LabPresetEditDialog(object):
         self.room = tk.StringVar(top, value=(preset or {}).get("default_room", "")
                                  or DEFAULT_ROOM_NAME)
         ttk.Entry(roomrow, textvariable=self.room, width=22).pack(anchor="w", pady=(2, 0))
+        tk.Label(roomrow, text=core.LAB_PORT_LABEL, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.body).pack(anchor="w", pady=(8, 0))
+        self.default_port = tk.StringVar(top, value=(preset or {}).get("default_port")
+                                         or DEFAULT_CONFIG["port"])
+        self.default_port_entry = ttk.Entry(roomrow, textvariable=self.default_port, width=8)
+        self.default_port_entry.pack(anchor="w", pady=(2, 0))
+        tk.Label(roomrow, text=core.LAB_PORT_HINT, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.small, anchor="w", justify="left", wraplength=420).pack(
+            anchor="w", pady=(2, 0))
         shortcut_head = tk.Frame(roomrow, bg=COLORS["card"])
         shortcut_head.pack(anchor="w", pady=(8, 0))
         tk.Label(shortcut_head, text="Shortcut label (optional)", bg=COLORS["card"],
@@ -10093,7 +10306,8 @@ class LabPresetEditDialog(object):
             return
         ok, message = self.on_save(self.name.get(), self.ip.get(),
                                    self.seats.get("1.0", "end"), cols,
-                                   self.room.get(), self.shortcut.get())
+                                   self.room.get(), self.shortcut.get(),
+                                   self.default_port.get())
         if not ok:
             self.status.configure(text=message)
             return
@@ -10103,7 +10317,8 @@ class LabPresetEditDialog(object):
             export_participant_shortcuts_dialog(
                 self.top, self.fonts, self.name.get(), self.ip.get(),
                 core.parse_seat_list(self.seats.get("1.0", "end")),
-                room=self.room.get(), shortcut_label=self.shortcut.get())
+                room=self.room.get(), shortcut_label=self.shortcut.get(),
+                port=self.default_port.get())
         self._close()
 
     def _close(self):
@@ -11252,10 +11467,12 @@ class LabSettingsDialog(object):
         self._refresh_summaries()
 
     def _add(self):
-        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None):
+        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None,
+                    default_port=None):
             ok, message, new_list, _preset = core.add_lab_preset(
                 self._lab_presets(), name, ip, seats, cols=cols,
-                default_room=default_room, shortcut_label=shortcut_label)
+                default_room=default_room, shortcut_label=shortcut_label,
+                default_port=default_port)
             if ok:
                 self._save_presets(new_list)
                 self.preset_status.configure(text=message, fg=COLORS["ok"])
@@ -11268,10 +11485,12 @@ class LabSettingsDialog(object):
             self.preset_status.configure(text="No lab with that id.", fg=COLORS["warn"])
             return
 
-        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None):
+        def on_save(name, ip, seats, cols=0, default_room=None, shortcut_label=None,
+                    default_port=None):
             ok, message, new_list, _preset = core.update_lab_preset(
                 self._lab_presets(), lab_id, name=name, ip=ip, seats=seats, cols=cols,
-                default_room=default_room, shortcut_label=shortcut_label)
+                default_room=default_room, shortcut_label=shortcut_label,
+                default_port=default_port)
             if ok:
                 self._save_presets(new_list)
                 self.preset_status.configure(text=message, fg=COLORS["ok"])
@@ -11286,7 +11505,8 @@ class LabSettingsDialog(object):
             return
         result = export_participant_shortcuts_dialog(
             self.top, self.fonts, preset["name"], preset["ip"], preset["seats"],
-            room=preset.get("default_room"), shortcut_label=preset.get("shortcut_label", ""))
+            room=preset.get("default_room"), shortcut_label=preset.get("shortcut_label", ""),
+            port=preset.get("default_port"))
         if result and result.get("ok"):
             self.preset_status.configure(text=result["message"], fg=COLORS["ok"])
         elif result:
@@ -11499,7 +11719,7 @@ class FirstRunWizard(object):
         for lab in self.new_labs:
             self.lab_list.insert("end", self._lab_line(lab))
         tk.Button(parent, text="Remove selected", command=self._remove_lab).pack(anchor="e")
-        # Only what a lab needs: Name, Host, Seats. The rest (default room,
+        # Only what a lab needs: Name, Host, Port, Seats. The rest (default room,
         # shortcut label, map, the default oTree admin login) has a working
         # default and sits under "More options".
         form = tk.Frame(parent)
@@ -11510,11 +11730,19 @@ class FirstRunWizard(object):
         self.w_name.grid(row=1, column=0, padx=(0, 6))
         self.w_host = tk.Entry(form, width=22)
         self.w_host.grid(row=1, column=1, padx=(0, 6))
-        tk.Button(form, text="Add lab", command=self._add_lab).grid(row=1, column=2)
+        self.w_port_label = tk.Label(form, text=core.LAB_PORT_LABEL)
+        self.w_port_label.grid(row=0, column=2, sticky="w")
+        self.w_port = tk.Entry(form, width=10)
+        self.w_port.insert(0, DEFAULT_CONFIG["port"])
+        self.w_port.grid(row=1, column=2, padx=(0, 6), sticky="w")
+        tk.Button(form, text="Add lab", command=self._add_lab).grid(row=1, column=3)
+        self.w_port_hint = tk.Label(form, text=core.LAUNCH_PORT_HINT, fg="#5d6874", anchor="w",
+                                    justify="left", wraplength=480)
+        self.w_port_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         tk.Label(form, text="Seats (one per line, or space/comma separated)").grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.w_seats = tk.Text(form, width=68, height=3)
-        self.w_seats.grid(row=3, column=0, columnspan=3, sticky="ew")
+        self.w_seats.grid(row=4, column=0, columnspan=4, sticky="ew")
 
         self.more_link = tk.Label(parent, text="", fg="#5d6874", anchor="w", cursor="hand2")
         self.more_link.pack(anchor="w", pady=(8, 0))
@@ -11568,8 +11796,11 @@ class FirstRunWizard(object):
 
     @staticmethod
     def _lab_line(lab):
-        return "%s · %s · %d seats · room: %s%s" % (
-            lab["name"], lab["host"], len(lab["seats"]), lab["default_room"],
+        port = lab.get("default_port") or DEFAULT_CONFIG["port"]
+        return "%s · %s%s · %d seats · room: %s%s" % (
+            lab["name"], lab["host"],
+            "" if port == DEFAULT_CONFIG["port"] else " · port: %s" % port,
+            len(lab["seats"]), lab["default_room"],
             "" if not lab.get("map") else " · map: " + lab["map"])
 
     def _lab_form_filled(self):
@@ -11585,6 +11816,9 @@ class FirstRunWizard(object):
         host = self.w_host.get().strip()
         seats = core.parse_seat_list(self.w_seats.get("1.0", "end"))
         ok, message, seats = core.validate_lab_preset_fields(name, host, seats)
+        port = self.w_port.get().strip()
+        if ok and core.launch_port_problem(port):
+            ok, message = False, core.launch_port_problem(port)
         if not ok:
             self.status.configure(text=message)
             return False
@@ -11592,6 +11826,7 @@ class FirstRunWizard(object):
         lab = {"name": name, "host": host, "seats": seats,
                "map": "" if map_choice == "(plain grid)" else map_choice,
                "default_room": core.sanitize_room_name(self.w_room.get()),
+               "default_port": port,
                "shortcut_label": self.w_shortcut.get().strip()}
         self.new_labs.append(lab)
         self.lab_list.insert("end", self._lab_line(lab))
@@ -11600,6 +11835,8 @@ class FirstRunWizard(object):
         self.w_seats.delete("1.0", "end")
         self.w_room.delete(0, "end")
         self.w_room.insert(0, DEFAULT_ROOM_NAME)
+        self.w_port.delete(0, "end")
+        self.w_port.insert(0, DEFAULT_CONFIG["port"])
         self.status.configure(text="")
         return True
 

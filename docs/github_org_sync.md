@@ -389,7 +389,7 @@ not change your experiment files.** The check can never ask for a login.
 | You see | It means | What to do |
 | --- | --- | --- |
 | **Experiment up to date · checked 14:02** (small, grey) | The folder has everything the online copy has. | Nothing. |
-| **A newer version of this study is available on GitHub.** with a **Git pull** button (amber) | A newer version exists and updating will work. Edits to *other* files on this computer (for example the lab block that **Get ready for the lab** added to `settings.py`) do not get in the way. | **Click Git pull.** The line turns into the result: *Pulled N changed files.* |
+| **A newer version of this study is available on GitHub.** with a **Git pull** button (amber) | A newer version exists and updating will work. Edits to *other* files on this computer do not get in the way, and neither does the lab block that **Get ready for the lab** added to `settings.py`: it is kept (**Updated, lab support kept.**). | **Click Git pull.** The line turns into the result: *Pulled N changed files.* |
 | ***settings.py* was changed on this computer and in the newer version.** with **Get a fresh copy** | The same file was edited here and online, so the folder cannot simply be updated. (Or: *This folder has changes of its own that are not in the online copy*.) | **Click Get a fresh copy** (5e), or have the researcher put the edits into the study. |
 | **Could not check for a newer version: the login was not accepted.** with **GitHub login…** (grey) | This computer's login was rejected: typically the lab token expired. | **Click GitHub login…** and store a valid one. |
 | *Nothing at all* | Nothing to say: the folder is not a git repository, has no online branch to compare with, the computer is offline, or the check took too long. | Nothing. No message means no check result, not an error. |
@@ -407,35 +407,51 @@ git folder or a login problem: no question. (See the user guide.)
 
 The banner's **Git pull** button and the standing **Git pull** button in the
 project box do the same thing (`git pull` in the study folder); only one of them
-is on screen at a time. They **move the folder forward to the newest version and never do anything else**:
-no merge, no change to a file that was edited on this computer. The result
-appears in the project status box:
+is on screen at a time. They **move the folder forward to the newest version**:
+no merge, no change to a file that was edited on this computer. The one thing the
+launcher handles itself is its own lab block: when `settings.py` also changed
+online and the block is the only local difference, the block is taken out, the
+pull runs, the current block goes back in (**Updated, lab support kept.**), with a
+`.bak` first; a failed pull puts the file back exactly. The result appears in the
+project status box:
 
 - **Nothing new: already up to date.**
 - **Pulled N changed files.** with the date and subject of the newest commit
   that came in, and a collapsed **Changes pulled from Git** list with each file
   marked *added*, *modified* or *deleted*, plus lines added and removed.
   **Check the date and subject are the version you expect** before launching.
-- **Git pull failed**, with the reason and, right under it, **the button that
-  fixes it**: **GitHub login…** for a login problem, **Get a fresh copy** when
-  the folder was changed on this computer. **Nothing was changed** in the folder
-  when it fails.
+- **Git pull failed**, with the reason and, right under it, **the buttons that
+  help**: **GitHub login…** for a login problem, the choices in 5e when the folder
+  was changed on this computer. **Nothing was changed** in the folder when it
+  fails.
 
 The result stays while that study folder is selected and clears when you choose
 a different one.
 
 ### 5e. Get a fresh copy
 
-When a file was edited on this computer and also in the newer version, or
-someone committed on the lab PC, the folder cannot be moved forward. **The
-launcher never commits, pushes, merges or discards anything in a study folder.**
-Instead, **Get a fresh copy** downloads the study again into a **new folder next
-to the old one**, named `<study-repo>_fresh_<date>`, and selects it. The old
-folder stays exactly as it is (delete it yourself once you are sure nothing in
-it is needed).
+When a file was edited on this computer and also in the newer version, the folder
+cannot be moved forward. **The launcher never commits, pushes or merges in a study
+folder, and it discards only on your confirmed click.** It names the files and
+offers: **Show what's different**; **Get a fresh copy** (recommended); **Keep this
+version and launch**; **Discard my edits to these files and update** (asks first,
+keeps a `.bak` per file, refused while a session of this study runs). When someone
+committed on the lab PC, only **Get a fresh copy** is offered: *This folder has its
+own commits, so sort it out with Git or get a fresh copy.*
 
-A fresh copy that does not yet carry the lab block gets the usual **Get ready
-for the lab** offer. It is added to this computer's clone log (5f) as a fresh
+**Get a fresh copy** clones the study again, first into a temporary folder, so
+nothing moves if that fails. The **new copy takes the original folder name**, so
+saved configs and shortcuts keep working, and the old folder is renamed
+`RETIRED_<study-repo>_<date>` (with a number if that exists). **The old folder
+remains as a backup**, and its gitignored and untracked files (for example a seat
+list) stayed in it: copy over what you need, and delete it yourself once you are
+sure nothing in it is needed. For a study in a sub-folder of its repository, the
+repository's top folder is what is renamed. It is refused while a session of this
+study is running. On Windows, an open console or Explorer window inside the folder
+stops the rename: nothing changes, and the message says what to close.
+
+If the old folder had the lab block, the new copy gets it automatically; otherwise
+it gets the usual **Get ready for the lab** offer. A fresh copy is added to this computer's clone log (5f) as a fresh
 copy, under the researcher who got the old folder.
 
 ### 5f. Which studies are on this computer

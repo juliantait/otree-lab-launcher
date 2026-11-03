@@ -492,6 +492,8 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .git-update.behind b{font-weight:700}
 .git-update.local{color:var(--warn)}
 .git-update.local,.git-update.noaccess{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.git-update.local .git-opts{flex-basis:100%}
+.git-opts{display:flex;flex-wrap:wrap;gap:6px}
 .git-update[hidden]{display:none}
 /* The GitHub mark on the "up to date" line, where the valid-project line has its tick. */
 .git-update .gh-mark,.git-result .gh-mark{width:13px;height:13px;vertical-align:-2px;margin-right:5px;fill:currentColor}
@@ -734,6 +736,12 @@ input::placeholder{color:var(--faint)}
 .card--adv .db-details-toggle{padding-top:0}
 .adv-cap{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint)}
 .adv-body{margin-top:10px}
+.bl-port{margin:0 0 8px;font-size:12.5px;color:var(--muted)}
+.port-pill{display:inline-flex;align-items:center;font-size:12.5px;font-weight:600;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent);border-radius:999px;padding:2px 10px}
+.port-edit{margin-top:8px}
+.port-edit-row{display:flex;align-items:center;gap:8px}
+.port-edit-row input{width:78px;flex:none}
+.port-hint{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
 .svc-head{display:flex;align-items:center;gap:4px;font-size:13px;margin-bottom:6px}
 .svc-group{margin:10px 0 2px;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--faint)}
 .svc-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:4px 0}
@@ -1468,7 +1476,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">v1.8.3</div>
+      <div class="af-ver" id="footVersion">v1.9.0</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -1705,6 +1713,19 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               <button class="btn tiny" onclick="openRoomPicker()">Change room...</button>
             </div>
 
+            <!-- The launch port, for every host: what will really be used, and a pen
+                 to choose this config's own (core.port_pill says the same in Tk). -->
+            <div class="labrow" id="portRow">
+              <span class="port-pill" id="portPill">Port: 8000</span>
+              <span class="roomtag" id="portTag">(lab default)</span>
+              <button type="button" class="db-edit pen" id="portEdit" title="Choose this config's own port" aria-label="Choose this config's own port" aria-expanded="false" onclick="togglePortEdit()">&#9998;</button>
+            </div>
+            <div class="port-edit" id="portEditBox" hidden>
+              <div class="port-edit-row"><input type="text" id="launch_port" value="8000" inputmode="numeric" spellcheck="false" aria-label="Port" oninput="onLaunchPortInput()"><button type="button" class="btn tiny" id="portReset" onclick="usePortDefault()" hidden>Use the default</button></div>
+              <div class="port-hint" id="portHint"></div>
+              <div class="svc-msg" id="launchPortMsg" hidden></div>
+            </div>
+
             <!-- Participant list -->
             <div class="labrow">
               <span class="k">Participant list</span>
@@ -1893,7 +1914,7 @@ var lastSettings=null, defaultAuthor="", pendingDelete=null;
    full display name incl. the built-in "(Large lab)" suffix (fable review #13). */
 var CONFIG_ROWS=[];
 /* The full field dict of the loaded config, echoed back by gatherFields for the
-   fields the UI does NOT edit (port, page, wait_seconds, open_browser), so a
+   fields the UI does NOT edit (page, wait_seconds), so a
    Tk-saved config round-trips unchanged and stops reporting phantom "unsaved
    changes" (items 1 & 2). */
 var hiddenFields={};
@@ -2074,6 +2095,15 @@ var UI_TEXT={
   opens_group_lab:"From the lab settings",
   opens_group_own:"Added for this config",
   services_advanced:"Advanced",
+  port_pill:"Port: %s",
+  port_tag_lab:"(lab default)",
+  port_tag_default:"(default)",
+  port_tag_own:"(this config)",
+  port_reset:"Use the default",
+  port_invalid:"The port must be a whole number from 1 to 65535, not \"%s\".",
+  port_hint:"Participant computers must be able to reach this port. Check your lab's firewall: other ports than the default may need your IT department.",
+  lab_port_label:"Default port",
+  lab_port_hint:"Participant computers must be able to reach this port. Check your lab's firewall: other ports than the default may need your IT department. Shortcuts already on the participant computers keep their old port: export them again after a change.",
   link_check_running:"Checking the participant link\u2026",
   service_include:"Include by default",
   service_default_tag:"on by default",
@@ -2148,6 +2178,8 @@ function fillStaticTips(){
   var vb=el("viewBlockLink");if(vb)vb.textContent=UI_TEXT.view_block_link;
   var st=el("svcTip");if(st)st.innerHTML=tipBadge("services_launch");
   var sl=el("advLabel");if(sl)sl.textContent=UI_TEXT.services_advanced;
+  var phn=el("portHint");if(phn)phn.textContent=UI_TEXT.port_hint;
+  var prs=el("portReset");if(prs)prs.textContent=UI_TEXT.port_reset;
   var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.services_section;
   [["svcAdminName","opens_group_admin"],["svcGroupLab","opens_group_lab"],["svcGroupOwn","opens_group_own"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
   var sa=el("svcAddBtn");if(sa)sa.textContent=UI_TEXT.service_add_own;
@@ -2235,16 +2267,18 @@ window.pywOnCloneDone=function(r){
 };
 /* Clone progress (checking -> cloning), pushed by the worker; shown on the busy
    line inside the dialog. */
-/* "Get a fresh copy" finished (core.git_fresh_copy): the study was cloned again
-   into a NEW folder next to the old one. On success select that folder (same
-   path as a Browse pick); the old folder is untouched. */
+/* "Get a fresh copy" finished (core.git_fresh_copy): the new copy has this
+   folder's name and the old folder remains as a backup. The path is the same, so
+   re-read it as a Browse pick does and ask about updates again. */
 window.pywOnFreshCopyDone=function(r){
   r=r||{};
   var old=(r.old_path||currentProjectPath||"").trim();
   if(r.ok&&r.path){
     gitPullResult=null;gitPullResultPath="";
     window.pywOnProjectPicked({path:r.path,project:r.project,settings:r.settings});
-    window.pywStatus("ok",r.message||"Fresh copy selected as the study folder.","github");
+    startUpdateCheck();
+    renderGitPullResult({ok:true,status:"fresh",message:r.title,detail:r.detail},r.path);
+    window.pywStatus("ok",r.message||"Fresh copy ready.","github");
     return;
   }
   window.pywStatus("err",r.message||"Could not get a fresh copy.","github");
@@ -2591,11 +2625,10 @@ function renderUpdateStatus(){
     box.innerHTML='<b>'+escapeHtml(s.message||"")+'</b>'+
       '<button type="button" class="btn accent tiny" id="updateBannerBtn" onclick="onGitUpdateStudy()">'+escapeHtml(s.action_label||UPDATE_ACTION_LABEL)+'</button>';
   }else if(s.state==="local_changes"){
-    /* This folder cannot be moved forward. The launcher never commits, merges
-       or discards in it; the one thing it offers is a fresh copy next to it. */
+    /* This folder cannot be moved forward: core names the files and says what to
+       offer (core.update_options). */
     box.className="git-update local";
-    box.innerHTML='<span>'+escapeHtml(s.message||"")+'</span>'+
-      (s.action==="fresh_copy"?('<button type="button" class="btn tiny" data-fresh-copy onclick="onFreshCopy()">'+escapeHtml(s.action_label||UI_TEXT.git_fresh_copy)+'</button>'):"");
+    box.innerHTML='<span>'+escapeHtml(s.message||"")+'</span>'+updateOptionsHtml(s.options);
   }else if(s.state==="no_access"){
     /* The login was rejected (an expired token, say): one quiet line. */
     box.className="git-update noaccess";
@@ -2630,8 +2663,57 @@ function applyPullToUpdateStatus(r,path){
   if(r&&r.update_status){updateStatus=r.update_status;updateStatusPath=(path||"").trim();}
   renderUpdateStatus();
 }
-/* "Get a fresh copy": clone the study again into a new folder next to this one
-   and select it (Api.fresh_copy -> pywOnFreshCopyDone). */
+/* The ways out when a folder cannot be moved forward. core.update_options decides
+   them, for both faces; this only draws them and passes the click on. */
+var _updateOptions=[];
+function updateOptionsHtml(options){
+  var base=_updateOptions.length;
+  _updateOptions=_updateOptions.concat(options||[]);
+  var h=(options||[]).map(function(o,i){
+    return '<button type="button" class="btn tiny'+(o.recommended?' accent':'')+'"'+(o.id==="fresh_copy"?' data-fresh-copy':'')+
+      ' onclick="onUpdateOption('+(base+i)+')">'+escapeHtml(o.label)+'</button>';
+  }).join("");
+  return h?'<div class="git-opts">'+h+'</div>':"";
+}
+function onUpdateOption(i){
+  var o=_updateOptions[i]||{};
+  if(o.id==="show_diff")onShowLocalDiff(o);
+  else if(o.id==="fresh_copy")onFreshCopy();
+  else if(o.id==="keep")onLaunch();
+  else if(o.id==="discard")onDiscardAndUpdate(o);
+}
+function onShowLocalDiff(){
+  var p=(currentProjectPath||"").trim();
+  if(!p||!NATIVE||!API||!API.update_local_diff)return;
+  API.update_local_diff(p).then(function(d){
+    d=d||{};
+    if(!d.ok){window.pywStatus("err",d.message||"Could not compare the files.");return;}
+    openModal(d.title||"What's different",
+      '<p class="modal-desc"><b>'+escapeHtml((d.files||[]).join(", "))+'</b></p>'+
+      '<div class="mono-line" style="white-space:pre;max-height:380px;overflow:auto">'+escapeHtml(d.text||"")+'</div>'+
+      '<div class="cta" data-modal-no-enter><button class="btn ghost" onclick="closeModal()">Close</button></div>',true);
+  });
+}
+/* Discarding needs the in-app confirm naming the files; core refuses without it. */
+function onDiscardAndUpdate(o){
+  var p=(currentProjectPath||"").trim();
+  if(!p||!NATIVE||!API||!API.discard_and_update)return;
+  confirmDelete(o.title||"Discard your edits?",escapeHtml(o.confirm||""),function(){
+    closeModal();
+    window.pywStatus("","Discarding your edits and updating…");
+    renderGitPullResult({busy:true,busy_text:"Discarding your edits and updating…"},p);
+    API.discard_and_update(p,o.files||[],shownPort(),true).then(function(r){
+      r=r||{};
+      if(r.ok){window.pywStatus("ok",r.message||"Updated.","github");clearNotices("github");}
+      else window.pywStatus("err",r.message||"Could not discard and update.");
+      if(r.output)appendLog(r.ok?"muted":"err",r.output);
+      renderGitPullResult(r,p);
+      applyPullToUpdateStatus(r,p);
+    });
+  },null,o.label||"Discard");
+}
+/* "Get a fresh copy": clone the study again; the new copy takes this folder's name
+   and the old one remains as a backup (Api.fresh_copy -> pywOnFreshCopyDone). */
 function onFreshCopy(){
   var p=(currentProjectPath||"").trim();
   if(!p)return;
@@ -2639,7 +2721,7 @@ function onFreshCopy(){
   var bs=document.querySelectorAll("[data-fresh-copy]");for(var i=0;i<bs.length;i++)bs[i].disabled=true;
   window.pywStatus("","Getting a fresh copy of the study…");
   renderGitPullResult({busy:true,busy_text:"Getting a fresh copy…"},p);
-  API.fresh_copy(p).then(function(r){
+  API.fresh_copy(p,shownPort()).then(function(r){
     if(r&&r.ok&&r.pending)return;     /* the result arrives via pywOnFreshCopyDone */
     window.pywOnFreshCopyDone({ok:false,message:(r&&r.message)||"Could not get a fresh copy.",old_path:p});
   });
@@ -2908,8 +2990,8 @@ function refreshDbSummary(){
 function setLabs(labs){
   LABS=(labs||[]).map(function(l){return {id:l.id,name:l.name||l.id,host:l.host||"localhost",
     seats:(l.seats||[]).slice(),map:(l.map&&typeof l.map==="object")?l.map:null,
-    default_room:l.default_room||"study",shortcut_label:l.shortcut_label||""};});
-  LAB_BY_ID={};LABS.forEach(function(l){LAB_BY_ID[l.id]=l;});buildLabTiles();
+    default_room:l.default_room||"study",shortcut_label:l.shortcut_label||"",default_port:l.default_port||"8000"};});
+  LAB_BY_ID={};LABS.forEach(function(l){LAB_BY_ID[l.id]=l;});buildLabTiles();renderPort();
 }
 function buildLabTiles(){
   var box=el("labTiles");box.innerHTML="";
@@ -2934,7 +3016,58 @@ function selectLab(id){
     t.classList.toggle("active",t.dataset.lab===selectedLabId);t.classList.remove("faded");});
   markHostPick("");el("backToLabLink").hidden=true;
   el("customFields").hidden=true;el("roomRow").hidden=false;
-  updateSeats();updateDirtyState();refreshServices();
+  updateSeats();hostChosen();updateDirtyState();refreshServices();
+}
+/* The launch port: this config's own choice (the pen), else the lab's default, else
+   8000. core.normalize_config decides for a launch; this keeps the pill the same. */
+var portOverride=false, portForLab=null;
+function labPort(){var l=labById(selectedLabId);return (l&&l.default_port)||"8000";}
+function shownPort(){return portOverride?val("launch_port").trim():labPort();}
+function renderPort(typing){
+  if(!el("portPill"))return;
+  if(!portOverride&&!typing)el("launch_port").value=labPort();
+  el("portPill").textContent=UI_TEXT.port_pill.replace("%s",shownPort());
+  el("portTag").textContent=portOverride?UI_TEXT.port_tag_own:
+    ((selectedLabId==="custom"||selectedLabId==="local")?UI_TEXT.port_tag_default:UI_TEXT.port_tag_lab);
+  el("portReset").hidden=!portOverride;
+}
+/* Choosing another lab or host applies ITS default: a port chosen for one lab's
+   network says nothing about the next. The pill shows the result. */
+function hostChosen(){
+  if(selectedLabId!==portForLab){portForLab=selectedLabId;portOverride=false;showLaunchPortProblem("");}
+  renderPort();
+}
+function togglePortEdit(){
+  var b=el("portEditBox");b.hidden=!b.hidden;
+  el("portEdit").setAttribute("aria-expanded",b.hidden?"false":"true");
+  if(!b.hidden)el("launch_port").focus();
+}
+function usePortDefault(){portOverride=false;showLaunchPortProblem("");renderPort();updateDirtyState();}
+/* The page's copy of core.launch_port_problem, for the wizard's lab form, which
+   decides on the spot (tests/test_wizard_lab_port.py holds the two equal under node;
+   core checks again when the wizard saves). */
+function launchPortProblem(raw){
+  var t=String(raw==null?"":raw).trim(),n=Number(t);
+  return (!t||(/^[0-9]+$/.test(t)&&n>=1&&n<=65535))?"":UI_TEXT.port_invalid.replace("%s",t);
+}
+function showLaunchPortProblem(message){
+  var m=el("launchPortMsg");if(!m)return;
+  m.textContent=message||"";m.hidden=!message;
+}
+/* Typing makes it this config's own; emptying the box gives it back to the lab. */
+function onLaunchPortInput(){
+  var typed=val("launch_port");
+  portOverride=!!typed.trim();
+  renderPort(true);
+  updateDirtyState();
+  if(!NATIVE||!API||!API.validate_launch_port){
+    showLaunchPortProblem(launchPortProblem(typed));
+    return;
+  }
+  API.validate_launch_port(typed).then(function(r){
+    /* Only the answer for what is still in the box. */
+    if(r&&val("launch_port")===typed)showLaunchPortProblem(r.ok?"":r.message);
+  });
 }
 /* The two host buttons are ALWAYS shown, side by side; this only moves the
    selected look ("local", "custom", or "" when a lab tile is the choice). */
@@ -2948,7 +3081,7 @@ function selectCustomHost(){
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
   markHostPick("custom");el("backToLabLink").hidden=false;
   el("customFields").hidden=false;el("roomRow").hidden=true;el("mapRow").hidden=true;
-  updateDirtyState();refreshServices();
+  hostChosen();updateDirtyState();refreshServices();
 }
 /* Local (this computer): a first-class off-lab host on localhost. Its host is
    fixed (no typed field), it shows the normal Room row and a note, and it has no
@@ -2958,7 +3091,7 @@ function selectLocalHost(){
   document.querySelectorAll("#labTiles .lab-tile").forEach(function(t){t.classList.remove("active");t.classList.add("faded");});
   markHostPick("local");el("backToLabLink").hidden=false;
   el("customFields").hidden=true;el("roomRow").hidden=false;el("mapRow").hidden=true;
-  updateDirtyState();refreshServices();
+  hostChosen();updateDirtyState();refreshServices();
 }
 /* This computer's own lab when it has a tile, else the first tile. */
 function homeLabId(){
@@ -3187,7 +3320,7 @@ function setRoom(name){
 function applyFields(f){
   f=f||{};
   /* Remember the full loaded config so gatherFields can echo back the fields the
-     UI does not edit (port/page/wait_seconds/open_browser) and the seat
+     UI does not edit (page/wait_seconds) and the seat
      exclusions, so a Tk-saved config round-trips unchanged (items 1 & 2). */
   hiddenFields=Object.assign({},f);
   currentSeatExcluded=(f.seat_excluded||[]).slice();
@@ -3214,13 +3347,16 @@ function applyFields(f){
   el("resetdb").checked=(f.resetdb!==false);
   el("seat_mode").value=f.seat_mode||"lab_default";onSeatMode();
   setRoom(f.room_name||"study");
+  /* After the lab: choosing a lab clears a port choice, loading a config restores it. */
+  portOverride=!!f.port_override;portForLab=selectedLabId;
+  el("launch_port").value=f.port||"8000";showLaunchPortProblem("");renderPort();
   refreshDbSummary();
   markFormClean();
   refreshServices();
 }
 function gatherFields(){
   var lab=selectedLabId;var custom=(lab==="custom");var pseudo=(custom||lab==="local");
-  /* Only the fields the UI actually edits. port/page/wait_seconds/open_browser are
+  /* Only the fields the UI actually edits. page/wait_seconds are
      NOT edited here, so they are echoed from the loaded config (hiddenFields)
      rather than hardcoded, and seat_excluded carries the maintained exclusions
      -- so a Tk-saved config re-saves byte-identical and its exclusions survive
@@ -3241,7 +3377,11 @@ function gatherFields(){
     seat_file:currentSeatFile,
     service_choices:sortedServiceChoices(),
     extra_services:currentExtraServices.map(function(x){return {name:x.name,url:x.url,enabled:x.enabled!==false};}),
-    open_browser:el("open_browser").checked
+    open_browser:el("open_browser").checked,
+    /* Following the lab = no port of its own: core fills in the lab's current one,
+       so a lab default changed in Settings does not read as an edit here. */
+    port:portOverride?val("launch_port").trim():"",
+    port_override:portOverride
   };
   return Object.assign({},hiddenFields,gathered);
 }
@@ -3752,7 +3892,7 @@ function onGitUpdateStudy(){
    decides the outcome (HEAD before vs after); this only renders it:
      nothing new  -> bold "Nothing new: already up to date."
      failed       -> bold "Git pull failed" + the plain reason + what to do
-                     about it (GitHub login… / Get a fresh copy) + raw git
+                     about it (GitHub login… / the update options) + raw git
                      output (collapsed)
      pulled       -> bold "Pulled N changed files." + latest commit date/subject
                      + a collapsed "Changes pulled from Git" file list.
@@ -3789,7 +3929,8 @@ function renderGitPullResult(r,path){
     /* What to do about it, as a button (no terminal needed). */
     var acts="";
     if(r.login_action)acts+=ghLoginButtonHtml("pull");
-    if(r.fresh_copy)acts+='<button type="button" class="btn tiny" data-fresh-copy onclick="onFreshCopy()">'+escapeHtml(UI_TEXT.git_fresh_copy)+'</button>';
+    if(r.options&&r.options.length)acts+=updateOptionsHtml(r.options);
+    else if(r.fresh_copy)acts+='<button type="button" class="btn tiny" data-fresh-copy onclick="onFreshCopy()">'+escapeHtml(UI_TEXT.git_fresh_copy)+'</button>';
     if(acts)h+='<div class="gh-actions">'+acts+'</div>';
     if(r.output)h+='<details><summary>Git output</summary><div class="mono-line">'+escapeHtml(r.output)+'</div></details>';
   }
@@ -5063,10 +5204,11 @@ function toggleLabShown(id){
 function labPresetEdit(id){
   var p=id?(LAB_PRESETS.filter(function(x){return x.id===id;})[0]||null):null;
   var name=p?(p.name||""):"", ip=p?(p.ip||p.host||""):"", seats=p?((p.seats||[]).join("\n")):"", cols=(p&&p.cols)?p.cols:"";
-  var room=p?(p.default_room||"study"):"study", shortcut=p?(p.shortcut_label||""):"";
+  var room=p?(p.default_room||"study"):"study", shortcut=p?(p.shortcut_label||""):"", port=p?(p.default_port||"8000"):"8000";
   openModal(id?"Edit lab":"Add a lab",
     '<div class="mfield"><label>Lab name</label><input id="lpName" type="text" value="'+escapeHtml(name)+'"></div>'+
     '<div class="mfield"><label>IP address or host</label><input id="lpIp" type="text" value="'+escapeHtml(ip)+'"></div>'+
+    '<div class="mfield" style="align-items:start"><label>'+escapeHtml(UI_TEXT.lab_port_label)+'</label><div><input id="lpPort" type="text" inputmode="numeric" placeholder="8000" style="max-width:100px" value="'+escapeHtml(port)+'"><div class="port-hint">'+escapeHtml(UI_TEXT.lab_port_hint)+'</div></div></div>'+
     '<div class="mfield" style="align-items:start"><label>Seat labels</label><textarea id="lpSeats" rows="4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--bg-deep);color:var(--text);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px" placeholder="one per line, or spaces/commas">'+escapeHtml(seats)+'</textarea></div>'+
     '<div class="mfield"><label>Default oTree room '+infoBadge(ROOM_HELP)+'</label><input id="lpRoom" type="text" placeholder="study" value="'+escapeHtml(room)+'"></div>'+
     '<div class="mfield"><label>Shortcut label '+tipBadge("shortcut_label")+'</label><input id="lpShortcut" type="text" placeholder="(optional)" value="'+escapeHtml(shortcut)+'"></div>'+
@@ -5090,6 +5232,7 @@ function labPresetEdit(id){
 function saveLabPreset(id){
   var name=(val("lpName")||"").trim(),ip=(val("lpIp")||"").trim(),seats=val("lpSeats")||"",cols=(val("lpCols")||"").trim();
   var room=(val("lpRoom")||"").trim()||"study",shortcut=(val("lpShortcut")||"").trim();
+  var labDefaultPort=(val("lpPort")||"").trim();
   var makeShortcuts=!!(el("lpMakeShortcuts")&&el("lpMakeShortcuts").checked);
   function fail(m){var s=el("lpStatus");if(s){s.className="ls-status warn";s.textContent=m;}}
   if(!NATIVE||!API){fail("Adding labs works in the app, not the static preview.");return;}
@@ -5111,8 +5254,8 @@ function saveLabPreset(id){
          lab (the Edit view's "Export PC shortcuts" button does the same later). */
       if(makeShortcuts){var savedId=id||r.new_id;if(savedId)askHotkeyThenExport(savedId);}}
     else fail((r&&r.message)||"Could not save the lab.");};
-  if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
-  else API.add_lab(name,ip,seats,colsNum,room,shortcut,currentLab()).then(done);
+  if(id)API.update_lab(id,name,ip,seats,colsNum,room,shortcut,currentLab(),labDefaultPort).then(done);
+  else API.add_lab(name,ip,seats,colsNum,room,shortcut,currentLab(),labDefaultPort).then(done);
 }
 function pcShortcutsResult(r){
   if(!r)return;
@@ -5199,7 +5342,8 @@ function previewBriefing(){
   var f=gatherFields();var open_room=(f.seat_mode==="none");
   var room=f.room_name||"study";var host=(selectedLabId==="custom")?(val("custom_host")||"localhost"):lab.host;
   var seats=lab.seats||[];
-  return {lab_label:lab.name,host:host,port:"8000",room:room,is_study:(room==="study"),
+  return {lab_label:lab.name,host:host,port:shownPort(),
+    port_line:UI_TEXT.port_pill.replace("%s",shownPort()),room:room,is_study:(room==="study"),
     default_room:"study",open_room:open_room,seat_mode:f.seat_mode,seat_count:seats.length,
     example_seat:open_room?"":(f.seat_mode==="file"?"SEAT":(seats[0]||"SEAT")),
     shared_db:(currentDbMode==="lab")};
@@ -5253,6 +5397,8 @@ function briefingSummaryHtml(b,launched){
     (b.local_only?'':('<p class="bl-linklabel">'+linkLabel+'</p><div class="mono-line">'+link+'</div>'+
       ((!launched&&b.welcome_note)?'<p class="bl-linklabel" style="font-weight:400;color:var(--muted)">'+escapeHtml(b.welcome_note)+'</p>':'')))+
     '</div></details>';
+  /* The port is on the card itself, not behind the (i): Julian wants it named. */
+  if(b.port_line)html+='<p class="bl-port" id="blPort">'+escapeHtml(b.port_line)+'</p>';
   html+=dbNote;
   /* 2. what to open on the participant computers. The rendering is the SAME
      pre-launch and on the running screen: the study-room shortcut pill keeps the
@@ -5278,7 +5424,8 @@ function briefingSummaryHtml(b,launched){
        room, give the one-per-seat link to open on each computer, and note the
        study-room alternative (the link still works; do NOT say the shortcuts
        "will not match"). */
-    html+='<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
+    html+=b.port_note?'<div class="warn-box">'+escapeHtml(b.port_note)+'</div>':
+      '<div class="warn-box">This session uses the room <code>'+escapeHtml(b.room)+'</code>. Open the link below on each participant computer, one per seat. Or use the <code>'+escapeHtml(b.default_room||"study")+'</code> room to use the shortcuts already on the participant PC.</div>';
     html+=linkRow(linkLabel,link);
   }
   /* The welcome_page_ok=1 explainer: THE link to document / put on the lab PCs,
@@ -5805,12 +5952,12 @@ function wizStepLab(){
   var rows=WIZ.newLabs.length?WIZ.newLabs.map(function(l,i){
     return '<div class="wiz-row"><input type="radio" name="wizNewHome" title="This computer is in this lab"'+(i===WIZ.newHome?" checked":"")+' onchange="WIZ.newHome='+i+'">'+
       '<span class="nm">'+escapeHtml(l.name)+'</span>'+
-      '<span class="meta">'+escapeHtml(l.host||"(no host)")+' · '+l.seats.length+' seats</span>'+
+      '<span class="meta">'+escapeHtml(l.host||"(no host)")+((l.default_port&&l.default_port!=="8000")?' · port '+escapeHtml(l.default_port):'')+' · '+l.seats.length+' seats</span>'+
       '<button class="x" onclick="wizRemoveLab('+i+')" title="Remove">×</button></div>';
   }).join(""):'';
   var maps=["(plain grid)"].concat(WIZ.setup.maps||[]).map(function(m){
     var v=(m==="(plain grid)")?"":m;return '<option value="'+escapeHtml(v)+'">'+escapeHtml(m)+'</option>';}).join("");
-  /* Only what a lab needs is asked up front: name, host, seats. Room, shortcut
+  /* Only what a lab needs is asked up front: name, host, port, seats. Room, shortcut
      label, map and the default oTree admin login all have working defaults and
      sit behind "More options". Next adds the lab that is typed. */
   return '<p class="modal-desc"><b>Add your lab.</b>'+tipBadge("wizard_no_labs")+(WIZ.newLabs.length>1?' The ticked one is the lab this computer is in.':'')+'</p>'+
@@ -5818,6 +5965,7 @@ function wizStepLab(){
     '<div class="ls-card" style="margin-top:12px">'+
     '<div class="mfield"><label>Name</label><input type="text" id="wlName" placeholder="e.g. Small lab"></div>'+
     '<div class="mfield"><label>Host / IP</label><input type="text" id="wlHost" placeholder="host or IP the seats connect to"></div>'+
+    '<div class="mfield" style="align-items:start"><label>'+escapeHtml(UI_TEXT.lab_port_label)+'</label><div><input type="text" id="wlPort" value="8000" inputmode="numeric" spellcheck="false" style="max-width:100px"><div class="port-hint">'+escapeHtml(UI_TEXT.port_hint)+'</div></div></div>'+
     '<div class="mfield" style="align-items:start"><label>Seats</label>'+
       '<textarea id="wlSeats" rows="3" placeholder="one per line, or space / comma separated" style="font-family:var(--mono);font-size:12px"></textarea></div>'+
     '<button type="button" class="link" id="wlMoreLink" onclick="wizToggleMore()">'+(WIZ.moreOpen?"Fewer options":"More options")+'</button>'+
@@ -5845,7 +5993,9 @@ function wizAddLab(){
   if(!name){wizErr("Give the lab a name.");return false;}
   if(!host){wizErr("Enter the lab's IP address or host name.");return false;}
   if(!seats.length){wizErr("Add at least one seat.");return false;}
-  WIZ.newLabs.push({name:name,host:host,seats:seats,map:val("wlMap")||"",
+  var port=(val("wlPort")||"").trim(),portProblem=launchPortProblem(port);
+  if(portProblem){wizErr(portProblem);return false;}
+  WIZ.newLabs.push({name:name,host:host,seats:seats,map:val("wlMap")||"",default_port:port,
     default_room:(val("wlRoom")||"").trim()||"study",shortcut_label:(val("wlShortcut")||"").trim()});
   wizErr("");wizRender();return true;
 }
@@ -6139,7 +6289,7 @@ function loadFooterVersion(){
     if(r&&r.ok&&r.version)v.textContent=r.label||versionLabel(r.version);
   });
 }
-/* Mirror of core.version_label: the compact sidebar label "v1.8.3" (held equal
+/* Mirror of core.version_label: the compact sidebar label "v1.9.0" (held equal
    under node by tests/test_sidebar_version_label.py). */
 function versionLabel(version){return "v"+String(version);}
 function clearPreviewContent(){

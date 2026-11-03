@@ -24,8 +24,8 @@ launcher, point it at their project, and launch.
 the `data/` folder next to the app, and nothing in it is part of the app, so an
 update never touches it:
 
-- **`lab_info.json` - the lab.** The labs (name, host address, seat list, room
-  map, default room, participant-shortcut label, a suggested database name),
+- **`lab_info.json` - the lab.** The labs (name, host address, default port, seat
+  list, room map, default room, participant-shortcut label, a suggested database name),
   the room maps themselves, the default oTree admin login for new configs, and
   the lab-wide settings (the GitHub organisation, "Databases on this computer
   only"). **This is the one file you copy to every computer of the lab.** It
@@ -44,8 +44,10 @@ launcher opens a **setup wizard** with three steps:
 
 1. **Lab: which lab is this computer?** Pick it from the labs in
    `lab_info.json`. On the very first computer (no labs yet) you add the lab
-   here instead: **a name, the host address of the machine that runs sessions
-   and the seat list**, then **Next** (or **Use example values**). The default
+   here instead: **a name, the host address of the machine that runs sessions,
+   its default port and the seat list**, then **Next** (or **Use example values**).
+   The port starts at 8000: leave it unless your lab needs another (see **The port**
+   below); a value outside 1 to 65535 keeps you on this step. The default
    room, shortcut label, room map and default oTree admin login all have working
    defaults and sit under **More options**.
 2. **Postgres on this computer.** The Postgres superuser (prefilled `postgres`)
@@ -222,25 +224,43 @@ takes the setup.
      shows one of: **Experiment up to date · checked HH:MM**; the amber **A newer
      version of this study is available on GitHub.** with a **Git pull** button;
      ***settings.py* was changed on this computer and in the newer version.** with
-     **Get a fresh copy**; **Could not check for a newer version: the login was
+     the choices below; **Could not check for a newer version: the login was
      not accepted.** with **GitHub login…**; or, when there is nothing to say
      (not a git repository, offline), nothing at all. It never blocks choosing a
      study or launching.
    - **Git pull.** The banner's **Git pull** button and the standing **Git
      pull** button do the same thing (only one of them is on screen at a
-     time): they run `git pull` in the study folder and move the folder forward to the newest version, **and never do
-     anything else** (no merge, no changes to files edited on this computer).
+     time): they run `git pull` in the study folder and move the folder forward to the newest version. They never
+     merge and never change files you edited on this computer.
      The result replaces the status line: **Nothing new: already up to date.**,
      or **Pulled N changed files.** with the latest commit and a collapsed
      **Changes pulled from Git** list, or **Git pull failed** with the reason
-     and, right under it, the button that fixes it (**GitHub login…** or **Get a
-     fresh copy**). "Get ready for the lab" does not get in the way of updates.
-   - **Get a fresh copy.** When a file was edited on this computer and also in
-     the newer version, the folder cannot simply be updated. The launcher never
-     undoes or merges anything in a study folder; instead **Get a fresh copy**
-     downloads the study again into a new folder next to the old one
-     (`<name>_fresh_<date>`) and selects it. The old folder stays exactly as it
-     is.
+     and, right under it, the buttons that help.
+   - **"Get ready for the lab" and updates.** The lab block is the launcher's
+     own, so it never gets in the way. When `settings.py` also changed online and
+     the block is the only difference from the committed file, the launcher backs
+     the file up (`.bak`), takes the block out, pulls, and puts the current block
+     back: **Updated, lab support kept.** If the pull fails, the file is put back
+     exactly as it was. A block you edited by hand, or any other edit in
+     `settings.py`, counts as your own edit (next item).
+   - **Your own edits in the way.** When a file was edited on this computer and
+     also in the newer version, the launcher names the files and offers:
+     **Show what's different** (changes nothing); **Get a fresh copy**, the
+     recommended way; **Keep this version and launch**; and **Discard my edits to
+     these files and update**, which asks first, naming the files, keeps a `.bak`
+     of each file, and is refused while a session of this study is running.
+   - **Its own commits.** When someone committed in this folder, the line says
+     **This folder has its own commits, so sort it out with Git or get a fresh
+     copy.** Get a fresh copy is the only button.
+   - **Get a fresh copy.** Downloads the study again. The new copy takes the
+     folder's name, so saved configs and shortcuts keep working. The old folder
+     is renamed `RETIRED_<name>_<date>`. **The old folder remains as a backup**,
+     and its gitignored and untracked files (for example a seat list) stayed in
+     it: copy over what you still need. If the old folder had the lab block, the
+     new one gets it too. It is refused while a session of this study is running.
+     If something has the folder open (on Windows: a console or Explorer window in
+     it), nothing changes and the message says what to close. A study in a
+     sub-folder of its repository: the repository's top folder is what is renamed.
 
 **The per-seat links (the important part)**
 
@@ -251,6 +271,8 @@ http://HOST:8000/room/study?participant_label=SEAT&welcome_page_ok=1
 ```
 
 - `HOST` is the machine that runs the session (the one running the launcher).
+- `8000` is the lab's port: 8000 unless you set another **Default port** for the
+  lab (Settings, Labs, the lab's pen, next to the address).
 - `study` is the room.
 - `SEAT` is that computer's seat label.
 - `welcome_page_ok=1` skips oTree 6's Welcome/Start page, so the seat auto-admits
@@ -274,6 +296,16 @@ http://HOST:8000/room/THEIRROOM?participant_label=SEAT&welcome_page_ok=1
 
 The launch confirmation screen warns about this whenever the chosen room is not
 `study`, and shows the correct link to use.
+
+**The port.** Each lab has a **Default port** in Lab Settings, next to its address
+(8000 when you set nothing). Participant computers must be able to reach it, so
+check your lab's firewall: other ports than the default may need your IT department.
+Exporting the participant-PC shortcuts uses the lab's default port. Shortcuts already
+on the participant computers, and any script of your own that expects a port, keep
+the old one, so export or change those after changing it. Ports below 1024 can need
+administrator rights on some computers. The launcher does not ask for them: the
+launch screen then says the computer does not allow that port, and Launch stays off.
+oTree serves plain `http` on any port, also on 443, so links start with `http://`.
 
 **Saving configs.** You can save a config per study. A saved config relaunches
 that study in one click in later sessions, so common studies are always a
@@ -481,9 +513,31 @@ The collapsed Advanced line counts what will open, for example *oTree admin +
 2 services*. These choices are part of the config: save it to keep them. A
 page that cannot open never stops the launch; the activity log says so.
 
+*The port:* the summary always names it (**Port: 8000**). In the Lab card, the
+**Port** pill shows the port this launch will really use, and why: *(lab default)*,
+*(default)* off a lab, or *(this config)*. Click the pen next to it to type a
+port for this config (1 to 65535), or **Use the default** to go back. Save the config to
+keep it; a one-click shortcut launches the saved config, so it keeps the port too.
+Choosing another lab or host applies that lab's default and drops the port you
+typed, and the pill shows the result. A config that never chose a port follows its
+lab, also when the lab's default changes later. On a port that is not the lab's
+default, the summary gives the link to open instead of the lab's shortcut.
+
+*The server window:* it stays open when the server stops, so you can read an error,
+and after Ctrl+C you can start the server again from that window with the same settings
+(`otree prodserver` plus the port). Use that window for it: a new terminal does not
+have the launcher's settings, and without `DATABASE_URL` oTree falls back to SQLite
+without saying so.
+
+*Ending a session from your study:* any study may stop its own server cleanly by
+exiting with exit code **42**, for example an End session button calling
+`os._exit(42)`. The launcher's server window then closes, on that code only. On a Mac,
+Terminal decides whether a finished window disappears (Settings, Profiles, Shell,
+"When the shell exits"); by default it stays, saying the process completed.
+
 *If a session is already running:* the screen shows the must-fix **"Port 8000 is
-in use: a session is already running on it."** and **Launch stays off**. Stop
-the running session first (close its server window), then click **Re-check**.
+in use: a session or another program is already running on it."** and **Launch stays
+off**. Stop it first (close its server window), then click **Re-check**.
 The launcher never resets the database of a session that is still running.
 
 *Participant link check:* once the server is up, the launcher checks the lab you
