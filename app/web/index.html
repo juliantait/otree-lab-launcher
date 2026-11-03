@@ -1476,7 +1476,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
          fixed identity. The update nudge lives on the Lab Settings page. -->
     <div class="app-footer" id="appFooter">
       <div class="af-name">oTree Lab Launcher</div>
-      <div class="af-ver" id="footVersion">v1.9.0</div>
+      <div class="af-ver" id="footVersion">v1.9.1</div>
       <div class="af-by">by Julian Tait</div>
     </div>
   </aside>
@@ -6289,7 +6289,7 @@ function loadFooterVersion(){
     if(r&&r.ok&&r.version)v.textContent=r.label||versionLabel(r.version);
   });
 }
-/* Mirror of core.version_label: the compact sidebar label "v1.9.0" (held equal
+/* Mirror of core.version_label: the compact sidebar label "v1.9.1" (held equal
    under node by tests/test_sidebar_version_label.py). */
 function versionLabel(version){return "v"+String(version);}
 function clearPreviewContent(){

@@ -81,7 +81,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -1870,6 +1870,53 @@ class BlockAlreadyPresent(Exception):
     under the lock) and refused to append it a second time."""
 
 
+class SettingsFileRefused(OSError):
+    """This computer would not let settings.py be replaced. The text is the plain
+    reason for the screen, not the system's error."""
+
+
+SETTINGS_REPLACE_RETRIES = 8      # an editor, sync tool or virus scanner lets go after a moment
+SETTINGS_REPLACE_PAUSE = 0.125
+
+
+def _marked_read_only(path):
+    try:
+        return not os.stat(path).st_mode & stat.S_IWRITE
+    except OSError:
+        return False
+
+
+def _replace_settings_file(source, target):
+    """os.replace onto a study's file, repeated for about a second while Windows refuses
+    it. A read-only target is not waited for, and its attribute is never cleared. Raises
+    :class:`SettingsFileRefused` when it stays refused; other errors go through."""
+    for attempt in range(SETTINGS_REPLACE_RETRIES + 1):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as error:
+            if _marked_read_only(target):
+                raise SettingsFileRefused(SETTINGS_READ_ONLY_TEXT) from error
+            if attempt >= SETTINGS_REPLACE_RETRIES:
+                raise SettingsFileRefused(SETTINGS_IN_USE_TEXT) from error
+            time.sleep(SETTINGS_REPLACE_PAUSE)
+
+
+def _remove_own_file(path):
+    """Remove a temp file or backup the launcher made, also when it took over a read-only
+    attribute, which Windows will not delete. Never raises."""
+    try:
+        os.remove(path)
+    except PermissionError:
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            os.remove(path)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
 def append_block(project_path):
     """Atomically back up settings.py and append the lab support block.
 
@@ -1889,7 +1936,9 @@ def append_block(project_path):
 
     Returns ``(backup, settings_path)`` -- the same shape callers/tests expect.
     Raises :class:`BlockAlreadyPresent` if the block is already present, or
-    OSError on a read/write problem.
+    OSError on a read/write problem (:class:`SettingsFileRefused` with the plain
+    reason when the file cannot be replaced). A failed write leaves no temp file
+    and no backup: settings.py did not change.
     """
     path = settings_path_for(project_path)
     folder = os.path.dirname(path) or "."
@@ -1914,28 +1963,10 @@ def append_block(project_path):
         shutil.copy2(path, backup)
         separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
         new_text = text + separator + LAB_BLOCK
-        handle = tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", errors="surrogateescape", dir=folder,
-            prefix=".settings-", suffix=".tmp", delete=False
-        )
-        tmp_name = handle.name
         try:
-            handle.write(new_text)
-            handle.flush()
-            os.fsync(handle.fileno())
-            handle.close()
-            # Keep the researcher's original file mode on the replacement.
-            try:
-                os.chmod(tmp_name, stat.S_IMODE(os.stat(path).st_mode))
-            except OSError:
-                pass
-            os.replace(tmp_name, path)
+            _write_settings_atomically(path, folder, new_text)
         except Exception:
-            handle.close()
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
+            _remove_own_file(backup)
             raise
     return backup, path
 
@@ -1955,17 +1986,15 @@ def _write_settings_atomically(path, folder, new_text):
         handle.flush()
         os.fsync(handle.fileno())
         handle.close()
+        # Keep the researcher's original file mode on the replacement.
         try:
             os.chmod(tmp_name, stat.S_IMODE(os.stat(path).st_mode))
         except OSError:
             pass
-        os.replace(tmp_name, path)
+        _replace_settings_file(tmp_name, path)
     except Exception:
         handle.close()
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+        _remove_own_file(tmp_name)
         raise
 
 
@@ -1984,7 +2013,7 @@ def refresh_block(project_path):
 
     When no block is present it simply appends the current block (so it is safe to
     call in either state). Returns ``(backup, settings_path)``; raises OSError on a
-    read/write problem.
+    read/write problem, as :func:`append_block`, and likewise leaves nothing behind.
     """
     path = settings_path_for(project_path)
     folder = os.path.dirname(path) or "."
@@ -2017,7 +2046,11 @@ def refresh_block(project_path):
         kept = kept.rstrip("\n")
         separator = "" if not kept else "\n\n"
         new_text = kept + separator + LAB_BLOCK
-        _write_settings_atomically(path, folder, new_text)
+        try:
+            _write_settings_atomically(path, folder, new_text)
+        except Exception:
+            _remove_own_file(backup)
+            raise
     return backup, path
 
 
@@ -2097,12 +2130,12 @@ def carry_lab_block(project_path):
         elif state["needs_refresh"]:
             made = refresh_block(project_path)[0]
         if made:
-            try:
-                os.remove(made)
-            except OSError:
-                pass
+            _remove_own_file(made)
     except BlockAlreadyPresent:
         pass
+    except SettingsFileRefused as error:
+        return "Lab support was not added. %s Then click %s before launching." % (
+            error, GET_READY_LABEL)
     except (OSError, ValueError) as error:
         return ("Lab support could not be added (%s). Click %s before launching."
                 % (error, GET_READY_LABEL))
@@ -4393,6 +4426,8 @@ def git_update_study(folder):
             change = lab_block_only_change(folder)
             if change is not None:
                 code, output, lab_block = _pull_around_lab_block(folder, change, output)
+    except SettingsFileRefused as error:
+        return failed("settings_refused", str(error))
     except FileNotFoundError:
         return failed("no_git", "git is not installed on this computer.")
     except subprocess.TimeoutExpired:
@@ -4543,21 +4578,32 @@ def _timestamped_backup(path):
     return backup
 
 
+def _same_bytes(first, second):
+    try:
+        if os.path.islink(first) or os.path.islink(second):
+            return False
+        with open(first, "rb") as one, open(second, "rb") as other:
+            return one.read() == other.read()
+    except OSError:
+        return False
+
+
 def _restore_backup(backup, path):
     """Put a file back from its backup, byte for byte, and remove the backup, so
-    the folder is exactly as before. False when that failed (the backup stays)."""
+    the folder is exactly as before. False when that failed (the backup stays).
+
+    A file that never changed needs no replace: when git could not touch a locked file,
+    the same lock must not read as a file that could not be put back."""
     temp = backup + ".restoring"
     try:
-        shutil.copy2(backup, temp, follow_symlinks=False)
-        os.replace(temp, path)
-        os.remove(backup)
-        return True
+        if not _same_bytes(backup, path):
+            shutil.copy2(backup, temp, follow_symlinks=False)
+            _replace_settings_file(temp, path)
     except OSError:
-        try:
-            os.remove(temp)
-        except OSError:
-            pass
+        _remove_own_file(temp)
         return False
+    _remove_own_file(backup)
+    return True
 
 
 def _pull_around_lab_block(folder, change, first_output):
@@ -4568,8 +4614,13 @@ def _pull_around_lab_block(folder, change, first_output):
 
     The caller re-adds the block once the pull worked. A crash in between leaves
     the committed file with no block, and the pre-launch check catches a missing
-    block (test_crash_after_the_restore_is_caught_before_launch)."""
+    block (test_crash_after_the_restore_is_caught_before_launch).
+
+    A read-only settings.py stops it first (:class:`SettingsFileRefused`): git would
+    replace the file and so drop the attribute without a word."""
     settings = change["settings"]
+    if _marked_read_only(settings):
+        raise SettingsFileRefused(SETTINGS_READ_ONLY_TEXT)
     backup = _timestamped_backup(settings)
     try:
         code, output = _run_git(["--literal-pathspecs", "-C", change["top"], "checkout",
@@ -6555,10 +6606,10 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
             return _run_git(["clone", clone_url, target], runner=runner, timeout=600,
                             no_prompt=True)
         except (FileNotFoundError, subprocess.TimeoutExpired) as error:
-            shutil.rmtree(target, ignore_errors=True)   # drop a half-made clone
+            _remove_tree(target)   # drop a half-made clone
             return spawn_errors("Cloning")[type(error)]
         except (OSError, ValueError, subprocess.SubprocessError) as error:
-            shutil.rmtree(target, ignore_errors=True)
+            _remove_tree(target)
             return outcome("error", "Could not run git clone.", str(error))
 
     def succeeded(clone_url, output):
@@ -6583,7 +6634,7 @@ def git_clone_org_repo(org, repo, dest_parent, runner=None, url_template=None,
             return succeeded(direct, output)
         if classify_git_error(output)["code"] not in ("auth", "not_found"):
             return git_failure(output)
-        shutil.rmtree(target, ignore_errors=True)       # then check as usual
+        _remove_tree(target)       # then check as usual
 
     phase("checking")
     # Several tokens: try each in turn (then the plain login) and clone with the
@@ -10646,6 +10697,8 @@ def _port_bind_free(port):
     below), and on Windows it would let the probe bind over an ACTIVE listener
     (hijack), which would hide a genuinely-busy port. So the plain bind is the
     conservative signal; the caller sorts a real listener from a TIME_WAIT lag.
+    On Windows it does NOT see a listener on one address: see
+    :func:`_port_held_on_one_address`.
     """
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -10682,6 +10735,43 @@ def _port_has_listener(port, host="127.0.0.1", timeout=PREFLIGHT_PORT_CONNECT_TI
             sock.close()
         except Exception:
             pass
+
+
+def _port_held_on_one_address(port):
+    """The bind error when a server listens on ``port`` on ONE address of this
+    computer, else None. Asked after the bind on all interfaces succeeded.
+
+    Windows lets that bind succeed next to a listener on one address (Microsoft's
+    "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE": default socket on a specific address,
+    then default socket on the wildcard: Success), and that is what ``otree devserver``
+    (127.0.0.1) and ``otree prodserver <ip>:<port>`` are. The launcher's own launch binds
+    all interfaces, which the plain bind does see. Linux and macOS refuse the wildcard
+    bind, so this finds nothing new there.
+
+    A bind on the same address collides everywhere. Only then does it connect, to tell
+    a server from a port being released, because on Windows a connection to a closed
+    port takes the whole timeout. Fail-soft: without the address list, loopback alone."""
+    import errno
+    import socket
+    try:
+        addresses = list(local_ipv4_addresses())
+    except Exception:
+        addresses = []
+    for host in dict.fromkeys(["127.0.0.1"] + addresses):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((host, port))
+            continue
+        except OSError as error:
+            taken = error if error.errno in (errno.EADDRINUSE, errno.EACCES) else None
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if taken is not None and _port_has_listener(port, host=host):
+            return taken
+    return None
 
 
 # The one-click shortcut's message box for the same situation (no window, so no
@@ -11171,18 +11261,6 @@ def preflight_check_port(config):
         result.update(blocking=True, kind=PORT_KIND_INVALID)
         return result
 
-    ok, error = _port_bind_free(port)
-    if ok:
-        return _preflight_result("port", True, "Port %d is free." % port, "")
-
-    # A non-"in use" error (e.g. an odd platform errno) is not something we can
-    # act on: pass with a note, exactly as before.
-    if error.errno not in (errno.EADDRINUSE, errno.EACCES):
-        return _preflight_result(
-            "port", True,
-            "Could not test port %d (%s), continuing." % (port, error),
-            str(error))
-
     def _in_use(err):
         # INFORM, never kill: the launcher only starts its own things and never
         # stops whatever holds the port. The operator chooses a different port or
@@ -11194,6 +11272,21 @@ def preflight_check_port(config):
         result = _preflight_result("port", False, PORT_IN_USE_MESSAGE % port, str(err))
         result.update(blocking=True, kind=PORT_KIND_IN_USE)
         return result
+
+    ok, error = _port_bind_free(port)
+    if ok:
+        held = _port_held_on_one_address(port)
+        if held is not None:
+            return _in_use(held)
+        return _preflight_result("port", True, "Port %d is free." % port, "")
+
+    # A non-"in use" error (e.g. an odd platform errno) is not something we can
+    # act on: pass with a note, exactly as before.
+    if error.errno not in (errno.EADDRINUSE, errno.EACCES):
+        return _preflight_result(
+            "port", True,
+            "Could not test port %d (%s), continuing." % (port, error),
+            str(error))
 
     # EACCES is a permission problem, not a TIME_WAIT lag. With something answering
     # the port IS taken (a server started as administrator; Windows also answers
@@ -12831,6 +12924,18 @@ QUIT_LAUNCHER_NOTE = "Closes the launcher. A launched study keeps running."
 LAUNCH_HISTORY_LABEL = "Launch history"
 LAUNCH_HISTORY_BUTTON_LABEL = "History"
 VIEW_BLOCK_LINK_LABEL = "View settings.py block"
+# When settings.py cannot be replaced (SettingsFileRefused).
+SETTINGS_BY_HAND_TEXT = ('Or open "%s", click Copy and paste the block into settings.py '
+                         "by hand." % VIEW_BLOCK_LINK_LABEL)
+SETTINGS_READ_ONLY_TEXT = (
+    "settings.py is marked Read-only, so it was left as it is. Right-click it, choose "
+    "Properties and untick Read-only, then try again. " + SETTINGS_BY_HAND_TEXT)
+SETTINGS_IN_USE_TEXT = (
+    "settings.py could not be changed, so it was left as it is. Common causes: another "
+    "program has it open (close any editor), the file is marked Read-only (untick it in "
+    "Properties), your account has no permission to change this file or folder (check "
+    "with whoever set up this computer), or OneDrive or other syncing is holding it "
+    "(pause it for a moment). Then try again. " + SETTINGS_BY_HAND_TEXT)
 UNSAVED_CHANGES_TEXT = "Unsaved changes"
 UNSAVED_SETTINGS_TITLE = "Unsaved settings"
 
