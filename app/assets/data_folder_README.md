@@ -19,6 +19,13 @@ example lab settings, the example room maps) live in `app/assets/`.
 - `clone_history.jsonl` - one line per study cloned from GitHub on this computer
   (and per fresh copy): who got it, where it went, which token label (never the
   token). Shown in Settings > GitHub > Studies from <org> on this computer.
+- `config_history.jsonl` - the edit log: each Replace, own-script Edit, delete and recover,
+  with who, when and per field the old and new value (a password only as "changed"). A helpful
+  record, not proof of who did it. Shown in History > Config edits.
+- `deleted_configs.json` - full copies of deleted configs and of versions replaced by Replace.
+  **It holds what `saved_configs.json` holds, passwords included**, so treat it the same: never
+  copy it to another computer or share it. Shown in Settings > Deleted configs. Never cleaned up
+  automatically.
 - `seats/` - generated participant-label files.
 - `locks/` - short-lived lock files (removed after use).
 - `update_check.json`, `otree-lab-launcher.log`, `web_launcher.log`.

@@ -19,7 +19,7 @@ env/
 # app/assets/). The launcher writes everything in it at runtime: lab_info.json
 # (the lab's settings), machine.json (this PC's databases + passwords),
 # saved_configs.json (saved configs, which may hold passwords),
-# launch_history.jsonl, clone_history.jsonl, seats/, locks/, retired/ (old
+# launch_history.jsonl, clone_history.jsonl, config_history.jsonl, deleted_configs.json, seats/, locks/, retired/ (old
 # files after an upgrade),
 # update_check.json, logs and save leftovers. Ignore the whole folder.
 /data/

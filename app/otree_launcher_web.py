@@ -50,7 +50,7 @@ INDEX_HTML = os.path.join(HERE, "web", "index.html")
 # ~HEARTBEAT_INTERVAL_MS ms, always carrying the tab's document.hidden state.
 #
 # The PRIMARY real-close signal is a navigator.sendBeacon to /api/quit (fired on
-# pagehide/beforeunload), which shuts the server down INSTANTLY on an actual close.
+# pagehide only: beforeunload may still be cancelled by the person), which shuts the server down INSTANTLY on an actual close.
 # The heartbeat watchdog is only a GENEROUS FALLBACK for a crash / sleep / lost
 # network: HEARTBEAT_TIMEOUT is deliberately well ABOVE browser background-tab
 # timer throttling (~60s, not a few seconds) so a backgrounded-but-open tab -- whose
@@ -261,6 +261,11 @@ def _ui_text():
         "dashboard_sent_logged_in": core.DASHBOARD_SENT_LOGGED_IN,
         "dashboard_sent_login_page": core.DASHBOARD_SENT_LOGIN_PAGE,
         "script_add_own": core.SCRIPT_ADD_OWN_LABEL,
+        "script_add": core.SCRIPT_ADD_LABEL,
+        "website_add": core.WEBSITE_ADD_LABEL,
+        "script_show": core.SCRIPT_SHOW_LABEL,
+        "script_hide": core.SCRIPT_HIDE_LABEL,
+        "timeline_copy_link": core.TIMELINE_COPY_LINK_LABEL,
         "website_add_own": core.WEBSITE_ADD_OWN_LABEL,
         "script_include": core.SCRIPT_INCLUDE_LABEL,
         "script_hidden": core.SCRIPT_HIDDEN_LABEL,
@@ -338,9 +343,28 @@ def _ui_text():
         "quit_launcher_note": core.QUIT_LAUNCHER_NOTE,
         "launch_history": core.LAUNCH_HISTORY_LABEL,
         "launch_history_button": core.LAUNCH_HISTORY_BUTTON_LABEL,
+        "deleted_configs": core.DELETED_CONFIGS_LABEL,
+        "deleted_configs_empty": core.DELETED_CONFIGS_EMPTY,
+        "deleted_recover": core.DELETED_RECOVER_LABEL,
+        "delete_confirm": core.DELETE_CONFIRM_TEXT,
         "view_block_link": core.VIEW_BLOCK_LINK_LABEL,
         "unsaved_changes": core.UNSAVED_CHANGES_TEXT,
         "unsaved_settings": core.UNSAVED_SETTINGS_TITLE,
+        # Saving a config: the words the page needs before it has asked Python.
+        "save_config_label": core.SAVE_CONFIG_LABEL,
+        "save_as_new_label": core.SAVE_AS_NEW_LABEL,
+        "save_and_launch": core.SAVE_AND_LAUNCH_LABEL,
+        "save_and_launch_anyway": core.SAVE_AND_LAUNCH_ANYWAY_LABEL,
+        "launch_plain": core.LAUNCH_PLAIN_LABEL,
+        "launch_anyway": core.LAUNCH_ANYWAY_LABEL,
+        "save_needs_researcher": core.SAVE_NEEDS_RESEARCHER,
+        "save_name_label": core.SAVE_NAME_LABEL,
+        "save_researcher_label": core.SAVE_RESEARCHER_LABEL,
+        "save_replace_hint": core.SAVE_REPLACE_RESEARCHER_HINT,
+        "shortcut_needs_save": core.SHORTCUT_NEEDS_SAVE_LEAD,
+        "config_history": core.CONFIG_HISTORY_LABEL,
+        "config_history_note": core.CONFIG_HISTORY_NOTE,
+        "config_history_empty": core.CONFIG_HISTORY_EMPTY,
     }
 
 
@@ -1140,40 +1164,62 @@ class Api(object):
     # -- saving / deleting configs ----------------------------------------
 
     @api_call
-    def save_config_as(self, name, fields, author=None):
-        name = (name or "").strip()
-        if not name:
-            return {"ok": False, "message": "Give the config a name."}
-        if not core.unique_name(name, self.presets):
-            return {"ok": False, "message": "A config called %r already exists." % name}
-        author = (author or "").strip() or self._default_author()
-        port_problem = core.launch_port_problem((fields or {}).get("port"))
-        if port_problem:
-            return {"ok": False, "message": port_problem}
-        preset = core.preset_from_fields(
-            name, fields_to_config(fields), author=author,
+    def save_config_as(self, name, fields, author=None, mode=core.SAVE_MODE_NEW, target=""):
+        """The Save dialog: a new config, or (``mode`` replace) over ``target``. All the
+        rules are core.save_config_choice's, shared with the launch row and the Tk face."""
+        result = core.save_config_choice(
+            self, mode, name, author, fields_to_config(fields or {}), target=target,
             lab_presets=core.lab_presets_from_store(self.store_extra))
-
-        def _apply():
-            self.presets.append(preset)
-            self.presets = core.order_presets_for_display(self.presets)
-            # Remember the author across sessions (round-tripped through
-            # store_extra), so the next Save As prefills it. Kept
-            # JSON-serialisable; unknown keys in store_extra are preserved.
-            if preset.get("author"):
-                self.store_extra["last_author"] = preset["author"]
-
-        try:
-            # Lock-guarded: a background launch stamping last_run cannot interleave
-            # with this save and lose either change.
-            self._mutate_store(_apply)
-        except OSError as error:
-            return {"ok": False, "message": "Could not save: %s" % error}
+        if not result["ok"]:
+            return {"ok": False, "message": result["message"]}
         # Log line is RETURNED for the page to append, not pushed via
         # evaluate_js from this JS-invoked method (that would deadlock).
+        said = ("Replaced config %r." if result["mode"] == core.SAVE_MODE_REPLACE
+                else "Saved config %r.") % result["name"]
+        log = [["ok", said]]
+        if result["warning"]:
+            log.append(["warn", result["warning"]])
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
-                "selected": name,
-                "log": [["ok", "Saved config %r." % name]]}
+                "selected": result["name"], "mode": result["mode"],
+                "warning": result["warning"], "log": log}
+
+    def _labs(self):
+        return core.lab_presets_from_store(self.store_extra)
+
+    def _os_user(self):
+        try:
+            return getpass.getuser()
+        except Exception:
+            return ""
+
+    @api_call
+    def save_dialog_state(self, fields, config_name="", lead=""):
+        """What the Save dialog shows (core.save_dialog_state)."""
+        state = core.save_dialog_state(fields_to_config(fields or {}), config_name, self.presets,
+                                       self.store_extra, self._labs(), self._os_user(), lead)
+        return dict(state, ok=True)
+
+    @api_call
+    def launch_save_offer(self, fields, config_name=""):
+        """The save row of Before you launch (core.launch_save_offer); None = no row."""
+        return {"ok": True, "offer": core.launch_save_offer(
+            fields_to_config(fields or {}), config_name, self.presets, self.store_extra,
+            self._labs(), self._os_user())}
+
+    @api_call
+    def unsaved_question(self, fields, config_name=""):
+        """Would replacing the form lose work? (core.unsaved_work_question)"""
+        return dict(core.unsaved_work_question(fields_to_config(fields or {}), config_name,
+                                               self.presets, self._labs()), ok=True)
+
+    @api_call
+    def config_history(self, limit=200):
+        """The edit log for the read-only viewer, newest first (fail-soft in core)."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 200
+        return {"ok": True, "rows": core.config_history_rows(limit)}
 
     @api_call
     def delete_config(self, name):
@@ -1185,17 +1231,27 @@ class Api(object):
         if core.is_builtin(preset):
             return {"ok": False, "builtin": True,
                     "message": "%r is a built-in config and cannot be deleted." % name}
-        def _apply():
-            self.presets = [p for p in self.presets if p is not preset]
-            if not self.presets:
-                self.presets = [core.default_preset()]
-
-        try:
-            self._mutate_store(_apply)
-        except OSError as error:
-            return {"ok": False, "message": "Could not save: %s" % error}
+        result = core.delete_config_keeping_copy(self, name)
+        if not result["ok"]:
+            return {"ok": False, "message": result["message"]}
+        if not self.presets:
+            self.presets = [core.default_preset()]
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
-                "selected": self.presets[0].get("name")}
+                "selected": self.presets[0].get("name"), "warning": result["warning"]}
+
+    @api_call
+    def deleted_configs(self):
+        """The Deleted configs popup: no password ever reaches the page."""
+        return {"ok": True, "rows": core.deleted_config_rows(self._labs())}
+
+    @api_call
+    def recover_config(self, entry_id):
+        """Back in the saved list; the page refreshes its sidebar and leaves the form."""
+        result = core.recover_deleted_config(self, entry_id)
+        if not result["ok"]:
+            return {"ok": False, "message": result["message"]}
+        return {"ok": True, "message": result["message"], "warning": result["warning"],
+                "name": result["name"], "configs": [preset_row(p) for p in self.presets]}
 
     def _apply_lab_identity(self, lab):
         """BUG A: after this PC's lab is (re)written, collapse the DISPLAYED labs to
@@ -1425,6 +1481,7 @@ class Api(object):
         for entry in entries:
             # The study version that ran, as one short label (core words it).
             entry["version_label"] = core.study_version_label(entry.get("study_version"))
+            entry["config_label"] = core.session_config_label(entry)
         return {"ok": True, "entries": entries}
 
     @api_call
@@ -3015,7 +3072,7 @@ class Api(object):
         return bool(state.get("readable")) and not state.get("has_block")
 
     @api_call
-    def launch(self, fields, force=False, config_name=""):
+    def launch(self, fields, force=False, config_name="", save=None):
         """Validate, run the pre-launch preflight, then launch on a worker thread.
 
         Validation errors and preflight failures are RETURNED to the page (which
@@ -3027,6 +3084,11 @@ class Api(object):
         front, BEFORE anything runs and before any handoff banner. The actual
         work runs on a daemon thread, and only that thread streams the log and
         reports the REAL outcome via window.pywOnLaunchResult.
+
+        ``save`` (``{mode, name, researcher, target}``, from the launch row) saves THESE
+        fields first and launches under the saved name. It comes after every check, so
+        saving never gets past a blocker; a failed save returns ``save_error`` and does
+        not launch.
         """
         cfg = fields_to_config(fields)
         project = cfg.get("project_path", "").strip()
@@ -3043,11 +3105,31 @@ class Api(object):
                      "detail": f.get("detail", "")}
                     for f in failures]}
 
-        # config_name is the SELECTED config's identity (the page's
-        # currentConfigName). A server-ready launch stamps last_run on THAT
-        # config, even if its room/fields were edited on-screen and never saved.
-        self._spawn(lambda: self._run_launch(cfg, config_name), "launch")
-        return {"ok": True, "launching": True}
+        answer = {"ok": True, "launching": True}
+        labs = self._labs()
+        if save:
+            blockers = self._hard_block_problems(cfg, labs)
+            refused = (blockers[0] if blockers
+                       else core.launch_port_refusal(cfg) or core.running_server_problem(cfg))
+            if refused:
+                return {"ok": False, "message": refused}
+            saved = core.save_config_choice(self, save.get("mode"), save.get("name"),
+                                            save.get("researcher"), cfg,
+                                            target=save.get("target", ""), lab_presets=labs)
+            if not saved["ok"]:
+                return {"ok": False, "save_error": saved["message"]}
+            run_name = saved["name"]
+            answer["saved"] = saved["mode"]
+            answer["warning"] = saved["warning"]
+        else:
+            # config_name is the SELECTED config's identity (the page's
+            # currentConfigName); settings equal to another saved config run as that one.
+            run_name = core.launch_run_name(cfg, config_name, self.presets, labs)
+        if run_name != config_name or save:
+            answer["selected"] = run_name
+            answer["configs"] = [preset_row(p) for p in self.presets]
+        self._spawn(lambda: self._run_launch(cfg, run_name), "launch")
+        return answer
 
     @api_call
     def reopen_dashboard(self):
@@ -3118,7 +3200,39 @@ class Api(object):
             shutdown()
             return {"ok": True}
         # pywebview window path: close the native window (ends the process).
+        self._close_allowed = True
         self._spawn(self._do_close, "quit")
+        return {"ok": True}
+
+    # -- the window's close box (pywebview only) ----------------------------
+    # The closing event runs ON the GUI thread and waits for its handler, so asking the
+    # page from inside it would deadlock (evaluate_js needs that same thread on macOS).
+    # So the first close is always cancelled and the page is asked from a worker: it runs
+    # the same path as Quit (Save / Discard / Cancel when the form has unsaved changes),
+    # and Api.quit closes for real. If the page does not answer in time (it hung), the
+    # window closes anyway: a launcher window that cannot be closed is worse.
+    CLOSE_ANSWER_SECONDS = 4.0
+
+    def _on_window_closing(self):
+        if getattr(self, "_close_allowed", False):
+            return True
+        self._close_answered = threading.Event()
+        self._spawn(self._ask_page_to_close, "ask-close")
+        return False
+
+    def _ask_page_to_close(self):
+        self._callback("pywCloseRequested", {})
+        if not self._close_answered.wait(self.CLOSE_ANSWER_SECONDS):
+            LOG.warning("the page did not answer the close request; closing anyway")
+            self._close_allowed = True
+            self._do_close()
+
+    @api_call
+    def close_request_seen(self):
+        """The page has taken over the close request (see _on_window_closing)."""
+        seen = getattr(self, "_close_answered", None)
+        if seen is not None:
+            seen.set()
         return {"ok": True}
 
     def _run_launch(self, cfg, config_name=""):
@@ -3411,11 +3525,12 @@ class Api(object):
         """Stamp the just-launched saved config as run now, and return it.
 
         Prefers the SELECTED config's identity (``config_name``, the page's
-        currentConfigName): a launch stamps that config even if its room (or any
-        field) was edited on-screen and never saved back to the preset, so the
-        sidebar no longer shows "never run" after a "(lab default)" refresh. Only
-        when no selected identity is given (e.g. a headless one-click run) does it
-        fall back to matching by config content.
+        currentConfigName). A launch of an edited config WITHOUT saving is not stamped
+        (Julian's PRINCIPLES 14 call, 2026-11-04): "Last run" next to a saved config says
+        those saved settings ran, and picking it next time gives the saved settings, not
+        what ran. The launch history records it as "<name> (changed)". The config is
+        still returned, so it stays selected. Only when no selected identity is given
+        (e.g. a headless one-click run) does it fall back to matching by config content.
 
         Runs on the launch WORKER thread, so it goes through the store lock: a
         UI-thread "save as new" cannot interleave with this stamp-and-save and
@@ -3436,7 +3551,8 @@ class Api(object):
                 # The built-in Lab default is a launch TEMPLATE you launch FROM,
                 # never a saved config, so it must NEVER record a run (Job 2).
                 # Keep it as the matched/selected config, but do not stamp it.
-                if not core.is_builtin(preset):
+                if (not core.is_builtin(preset)
+                        and not core.launch_differs_from_config(cfg, preset, self._labs())):
                     preset["last_run"] = core.now_iso()
 
         try:
@@ -3458,7 +3574,8 @@ class Api(object):
         core.record_session(
             cfg, config_name=config_name, author=author, outcome=outcome,
             server_ready_seconds=ready_seconds,
-            lab_presets=core.lab_presets_from_store(self.store_extra))
+            lab_presets=core.lab_presets_from_store(self.store_extra),
+            config_changed=core.launch_differs_from_config(cfg, preset, self._labs()))
 
     def _launched_config_state(self, matched):
         """Refreshed config rows + selected name for a live post-launch repaint.
@@ -4056,6 +4173,10 @@ def main(argv=None):
         background_color="#1b1b1c",
     )
     api.window = window
+    # Older pywebview without window.events: the close box simply closes, as it used to.
+    events = getattr(window, "events", None)
+    if events is not None:
+        events.closing += api._on_window_closing
     # devtools (right-click -> Inspect) let JS run against the privileged js_api
     # (e.g. append_settings_block), so they are OFF by default in the shipped
     # launcher and only enabled by an explicit opt-in env var for debugging.

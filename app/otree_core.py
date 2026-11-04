@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -81,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -104,6 +105,7 @@ STORAGE_VERSION = SCHEMA_VERSION
 MACHINE_FILENAME = "machine.json"
 SAVED_CONFIGS_FILENAME = "saved_configs.json"
 LAUNCH_HISTORY_FILENAME = "launch_history.jsonl"
+CONFIG_HISTORY_FILENAME = "config_history.jsonl"
 # Every study cloned from GitHub on this computer (and every fresh copy).
 CLONE_HISTORY_FILENAME = "clone_history.jsonl"
 UPDATE_CHECK_FILENAME = "update_check.json"
@@ -3205,13 +3207,15 @@ def _session_database_label(cfg):
 
 def build_session_entry(cfg, config_name="", author="", outcome="ok",
                         server_ready_seconds=None, resetdb=None,
-                        lab_presets=None, when=None):
+                        lab_presets=None, when=None, config_changed=False):
     """One session-history record (a plain dict) for a single launch.
 
     Pure and shared by BOTH faces so the JSONL lines are identical in shape. It
     carries no secrets -- only the database LABEL, never the URL or password.
     ``outcome`` is normalised to "ok"/"fail". ``server_ready_seconds`` is how long
     the server took to answer the readiness poll (None when not measured).
+    ``config_changed`` True = these settings were NOT the saved config's: the form was
+    edited and launched without saving (the key is only written then).
     """
     c = normalize_config(cfg)
     author = str(author or "").strip()
@@ -3226,7 +3230,7 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
             seconds = round(float(server_ready_seconds), 1)
         except (TypeError, ValueError):
             seconds = None
-    return {
+    entry = {
         "timestamp": when or now_iso(),
         "config": str(config_name or "").strip(),
         "author": author,
@@ -3240,11 +3244,14 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
         "outcome": "ok" if outcome == "ok" else "fail",
         "server_ready_seconds": seconds,
     }
+    if config_changed:
+        entry["config_changed"] = True
+    return entry
 
 
 def record_session(cfg, config_name="", author="", outcome="ok",
                    server_ready_seconds=None, resetdb=None, lab_presets=None,
-                   path=None):
+                   path=None, config_changed=False):
     """Append ONE JSON line to data/launch_history.jsonl for a launch.
 
     FAIL-SOFT by contract: every error (a bad path, a full disk, a serialisation
@@ -3259,7 +3266,7 @@ def record_session(cfg, config_name="", author="", outcome="ok",
         entry = build_session_entry(
             cfg, config_name=config_name, author=author, outcome=outcome,
             server_ready_seconds=server_ready_seconds, resetdb=resetdb,
-            lab_presets=lab_presets)
+            lab_presets=lab_presets, config_changed=config_changed)
         # The version of the study that ran (a git repository only): the commit
         # ties a dataset to the code that produced it.
         version = study_version(entry.get("project"))
@@ -9433,6 +9440,37 @@ TIMELINE_REORDER_LABEL = "Reorder"
 TIMELINE_REORDER_DONE_LABEL = "Done"
 TIMELINE_AVAILABLE_TITLE = "Not selected"
 TIMELINE_AVAILABLE_NONE = "Nothing else to add."
+# Advanced is short by default (Julian, 2026-11-04, "too much information"): names and
+# marks. A script's text and a website's address are one hover or one click away.
+SCRIPT_SHOW_LABEL = "Show script"
+SCRIPT_HIDE_LABEL = "Hide script"
+TIMELINE_COPY_LINK_LABEL = "Copy link"
+SCRIPT_ADD_LABEL = "Add script"
+WEBSITE_ADD_LABEL = "Add website"
+ADD_FORM_CANCEL_LABEL = "Cancel"
+
+
+# Wherever a script's text is shown it stops at this height and scrolls inside itself, so
+# a long script never stretches the view. Each face has one style for it.
+SCRIPT_TEXT_MAX_LINES = 6
+SCRIPT_TIP_MAX_CHARS = 100
+
+
+def script_tip_text(text):
+    """A script's hover tip: its first lines, cut short, then "...". Never an enormous tip."""
+    lines = str(text or "").splitlines()
+    shown = [(l[:SCRIPT_TIP_MAX_CHARS] + "...") if len(l) > SCRIPT_TIP_MAX_CHARS else l
+             for l in lines[:SCRIPT_TEXT_MAX_LINES]]
+    if len(lines) > SCRIPT_TEXT_MAX_LINES:
+        shown.append("...")
+    return "\n".join(shown)
+
+
+def timeline_available_caption(count):
+    """The Not selected disclosure: "Not selected (3)"; "" when there is nothing in it."""
+    return "%s (%d)" % (TIMELINE_AVAILABLE_TITLE, count) if count else ""
+
+
 LAUNCH_OTREE_ROW_NAME = "Launch oTree server"
 LAUNCH_RESETDB_ROW_NAME = "Reset database"
 SCRIPTS_CARD_TITLE = "Launch scripts"
@@ -9735,7 +9773,8 @@ def _lab_script_selected(script, choices):
 
 def _script_row(script, source, selected, **more):
     row = {"id": script["id"], "kind": "script", "source": source, "name": script["name"],
-           "detail": script["script"], "selected": bool(selected), "movable": True,
+           "detail": script["script"], "tip": script_tip_text(script["script"]),
+           "selected": bool(selected), "movable": True,
            "wait": script["wait"], "wait_port": script["wait_port"],
            "wait_text": script_wait_text(script), "can_remove": True, "explicit": False,
            "can_reset": False, "can_delete": False, "can_edit": False, "tag": ""}
@@ -9935,7 +9974,12 @@ def save_own_script_edit(mutate_store, get_preset, script_id, name, script, wait
                 "message": "Could not save the script: %s" % error}
     if not stored:
         return {"ok": True, "saved": False, "message": OWN_SCRIPT_UNSAVED_NOTE, "script": entry}
-    return {"ok": True, "saved": True, "message": OWN_SCRIPT_SAVED_TEXT, "script": entry}
+    # The edit log: a failure there never undoes the save, and is said (PRINCIPLES 9).
+    warning = record_config_change(
+        CONFIG_ACTION_SCRIPT_EDIT, undo["preset"].get("name", ""), undo["preset"].get("author", ""),
+        own_script_changes(undo["scripts"], undo["preset"].get(EXTRA_SCRIPTS_KEY)))
+    return {"ok": True, "saved": True, "message": OWN_SCRIPT_SAVED_TEXT, "script": entry,
+            "warning": warning}
 
 
 def launch_caption(cfg, lab_presets=None):
@@ -12336,8 +12380,12 @@ def headless_missing_config_reason(wanted, names):
     wanted = str(wanted or "").strip()
     names = [str(n).strip() for n in (names or []) if str(n or "").strip()]
     if wanted:
-        lines = ['No saved config named "%s" on this computer. It may have been '
-                 "renamed or deleted after this shortcut was made." % wanted]
+        if config_is_in_deleted_list(wanted):
+            lines = ['No saved config named "%s" on this computer. It is in Deleted configs in '
+                     "the launcher's Settings and can be recovered there." % wanted]
+        else:
+            lines = ['No saved config named "%s" on this computer. It may have been '
+                     "renamed or deleted after this shortcut was made." % wanted]
     else:
         lines = ["This shortcut does not name a config."]
     if names:
@@ -14235,6 +14283,747 @@ def config_subline(preset, dirty):
     if dirty:
         return UNSAVED_CHANGES_TEXT
     return (saved[:1].upper() + saved[1:]) if saved else ""
+
+
+# ---------------------------------------------------------------------------
+# Saving a config at the moment it is worth keeping (Julian, 2026-11-04;
+# PRINCIPLES 9, 13, 14). Both faces only render what these helpers decide: the row
+# in Before you launch, the Save dialog, the Save / Discard / Cancel question, the
+# edit log. Nothing here runs on a one-click launch, which runs the saved config.
+# ---------------------------------------------------------------------------
+
+SAVE_MODE_NEW = "new"
+SAVE_MODE_REPLACE = "replace"
+SAVE_OFFER_UNSAVED = "unsaved"
+SAVE_OFFER_CHANGED = "changed"
+SAVE_OFFER_SAME = "same"
+SAVE_DIALOG_COPY = "copy"
+
+SAVE_CONFIG_LABEL = "Save config..."
+SAVE_AS_NEW_LABEL = "Save as new config..."
+SAVE_CONFIG_TITLE = "Save config"
+SAVE_AS_NEW_TITLE = "Save as new config"
+SAVE_OFFER_UNSAVED_LINE = "This isn't saved yet. It will be saved as:"
+SAVE_OFFER_CHANGED_LINE = "%s has unsaved changes"
+SAVE_OFFER_SAME_LINE = "Same as %s"
+SAVE_TICK_UNSAVED = "Save as"
+SAVE_TICK_CHANGED = "Save as new"
+SAVE_REPLACE_LABEL = "Replace %s"
+SAVE_REPLACE_NOTE = ("Will replace %s. Its one-click shortcut will run these settings too. "
+                     "The old version goes to Deleted configs.")
+SAVE_BACK_LABEL = "Save as new instead"
+SAVE_SKIP_NOTE = "The one-click shortcut and the next session keep the saved version."
+SAVE_NAME_LABEL = "Config name"
+SAVE_RESEARCHER_LABEL = "Researcher"
+SAVE_REPLACE_RESEARCHER_HINT = "Goes in the edit log. The config keeps its own author."
+SAVE_AND_LAUNCH_LABEL = "Save and launch"
+SAVE_AND_LAUNCH_ANYWAY_LABEL = "Save and launch anyway"
+LAUNCH_PLAIN_LABEL = "Launch"
+LAUNCH_ANYWAY_LABEL = "Launch anyway"
+SAVE_NEEDS_RESEARCHER = "Type a researcher to save, or untick to launch without saving."
+SAVE_DIALOG_NEEDS_RESEARCHER = "Type a researcher. A saved config needs one."
+SAVE_NEEDS_NAME = "Give the config a name."
+SAVE_NAME_TAKEN = 'A config called "%s" already exists. Pick another name, or use Replace.'
+SAVE_NAME_TAKEN_PLAIN = 'A config called "%s" already exists. Pick another name.'
+SAVE_NO_TARGET = 'No config called "%s" to replace.'
+SAVE_BUILTIN_REPLACE = "The built-in Lab default cannot be replaced."
+SAVE_FAILED = "Could not save: %s"
+SHORTCUT_NEEDS_SAVE_LEAD = "A shortcut needs a saved config."
+UNSAVED_QUESTION_CHANGED = "%s has unsaved changes."
+UNSAVED_QUESTION_NEW = "These settings aren't saved yet."
+UNSAVED_QUESTION_NOTE = "A launched study keeps running either way."
+UNSAVED_TITLE = "Save your changes?"
+UNSAVED_SAVE = "Save..."
+UNSAVED_DISCARD = "Discard"
+UNSAVED_CANCEL = "Cancel"
+LAUNCH_CHANGED_NAME = "%s (changed)"
+CONFIG_HISTORY_LABEL = "Config edits"
+CONFIG_HISTORY_NOTE = "A helpful record, not proof of who did it."
+CONFIG_HISTORY_EMPTY = ("No config has been replaced or edited yet. Each Replace and each "
+                        "script Edit adds lines here.")
+CONFIG_LOG_WARNING = "Saved, but the edit log could not be written: %s"
+CONFIG_HISTORY_HIDDEN = "(changed, value not recorded)"
+CONFIG_ACTION_REPLACE = "replace"
+CONFIG_ACTION_SCRIPT_EDIT = "script_edit"
+CONFIG_ACTION_LABELS = {CONFIG_ACTION_REPLACE: "Replaced", CONFIG_ACTION_SCRIPT_EDIT: "Script edited"}
+
+# Written by the launcher itself, never a change somebody made to a config's settings.
+_CONFIG_LOG_SKIP = ("name", "created", "last_run", "author", "builtin", ROOM_FOLLOWS_LAB_KEY,
+                    PORT_OVERRIDE_KEY)
+_SECRET_KEY = re.compile(r"pass(word|wd|phrase)?|pwd|secret|token|credential|(^|_)pw($|_)", re.I)
+_URL_LOGIN = re.compile(r"(://[^/\s:@]*:)[^/\s@]*@")
+
+
+def saved_config_named(name, presets):
+    """The saved config called ``name``, or None for a blank name, an unknown one and
+    the built-in Lab default (a template, never saved)."""
+    wanted = str(name or "").strip()
+    for preset in (presets or []):
+        if wanted and str(preset.get("name", "")).strip() == wanted:
+            return None if is_builtin(preset) else preset
+    return None
+
+
+def versioned_config_name(name, presets):
+    """The next free version of ``name``: "Dictator study" -> "Dictator study v2",
+    "Dictator study v2" -> "Dictator study v3" (never "v2 v2"), skipping every name
+    already taken."""
+    text = str(name or "").strip()
+    match = re.match(r"^(.*\S)\s+[vV](\d+)$", text)
+    base, number = (match.group(1), int(match.group(2)) + 1) if match else (text, 2)
+    while not unique_name("%s v%d" % (base, number), presets or []):
+        number += 1
+    return "%s v%d" % (base, number)
+
+
+def study_folder_name(path):
+    """The last part of a study folder path, for either OS's separator."""
+    return re.split(r"[\\/]", str(path or "").strip().rstrip("\\/"))[-1]
+
+
+def suggested_config_name(fields, presets, preset=None):
+    """The name offered for saving: the next version of a saved config, else the study
+    folder's name, made unique. "" with no folder chosen."""
+    if preset is not None and not is_builtin(preset):
+        return versioned_config_name(preset.get("name", ""), presets)
+    folder = study_folder_name((fields or {}).get("project_path"))
+    if not folder:
+        return ""
+    return folder if unique_name(folder, presets or []) else versioned_config_name(folder, presets)
+
+
+def identical_saved_config(fields, presets, lab_presets=None, skip=None):
+    """The saved config these settings are identical to (not ``skip``), or None."""
+    for preset in (presets or []):
+        if is_builtin(preset) or preset is skip:
+            continue
+        if not configs_differ(fields, follow_lab_room(preset, lab_presets)):
+            return preset
+    return None
+
+
+def launch_differs_from_config(cfg, preset, lab_presets=None):
+    """Did these settings differ from the saved ``preset``? Never for the Lab default
+    or no config: those have no saved settings for a launch to differ from."""
+    if not preset or is_builtin(preset):
+        return False
+    return configs_differ(cfg, follow_lab_room(preset, lab_presets))
+
+
+def launch_run_name(cfg, config_name, presets, lab_presets=None):
+    """The config a launch without a save runs as: the selected one, unless the settings
+    equal ANOTHER saved config while differing from the selected one. Then what runs IS
+    that other config, so it gets the run stamp and a clean history line."""
+    selected = saved_config_named(config_name, presets)
+    if selected is not None and not launch_differs_from_config(cfg, selected, lab_presets):
+        return config_name
+    same = identical_saved_config(cfg, presets, lab_presets, skip=selected)
+    return same.get("name", "") if same is not None else config_name
+
+
+def researcher_choices(extra, presets=None, os_user=""):
+    """The researcher list: the roster, then the last author and the OS user. On a
+    shared lab computer those two are often someone else, so they are choices in the
+    list and never a prefilled value."""
+    names = list_researchers(extra, presets)
+    return _dedupe_names(names + [str((extra or {}).get("last_author", "") or ""),
+                                  str(os_user or "")])
+
+
+def offered_researcher(fields, preset=None):
+    """Who a new config is prefilled with: the edited config's author, else whoever got
+    this folder through the GitHub dialog (the clone log), else nobody. Deliberately not
+    the last author or the OS user: on a shared PC that writes the wrong person."""
+    if preset is not None and not is_builtin(preset):
+        return str(preset.get("author", "") or "").strip()
+    path = str((fields or {}).get("project_path") or "").strip()
+    if not path:
+        return ""
+    try:
+        return clone_researcher_for(path).strip()
+    except Exception:
+        return ""
+
+
+def _save_form_state(kind, fields, preset, presets, extra, os_user):
+    target = str((preset or {}).get("name", "")) if kind == SAVE_OFFER_CHANGED else ""
+    return {
+        "kind": kind,
+        "name": suggested_config_name(fields, presets, preset),
+        "researcher": offered_researcher(fields, preset),
+        "researchers": researcher_choices(extra, presets, os_user),
+        "replace_target": target,
+        "replace_label": SAVE_REPLACE_LABEL % target if target else "",
+        "replace_note": SAVE_REPLACE_NOTE % target if target else "",
+        "replace_researcher": str((preset or {}).get("author", "") or "").strip(),
+        "back_label": SAVE_BACK_LABEL,
+    }
+
+
+def launch_save_offer(fields, config_name, presets, extra=None, lab_presets=None, os_user=""):
+    """What Before you launch shows about saving, for both faces. None = nothing:
+    a saved config unedited (PRINCIPLES 13), or no folder chosen yet (the launch is
+    blocked by that anyway; the row appears once a folder is chosen)."""
+    preset = saved_config_named(config_name, presets)
+    if preset is not None and not launch_differs_from_config(fields, preset, lab_presets):
+        return None
+    if preset is None and not study_folder_name((fields or {}).get("project_path")):
+        return None
+    same = identical_saved_config(fields, presets, lab_presets, skip=preset)
+    if same is not None:
+        return {"kind": SAVE_OFFER_SAME, "same_as": same.get("name", ""),
+                "line": SAVE_OFFER_SAME_LINE % same.get("name", "")}
+    kind = SAVE_OFFER_CHANGED if preset is not None else SAVE_OFFER_UNSAVED
+    offer = _save_form_state(kind, fields, preset, presets, extra, os_user)
+    offer["line"] = (SAVE_OFFER_CHANGED_LINE % preset.get("name", "") if preset is not None
+                     else SAVE_OFFER_UNSAVED_LINE)
+    offer["tick_label"] = SAVE_TICK_CHANGED if preset is not None else SAVE_TICK_UNSAVED
+    offer["skip_note"] = SAVE_SKIP_NOTE if preset is not None else ""
+    return offer
+
+
+def launch_save_action(mode, ticked, researcher, warnings=False):
+    """The launch button under the save row: what it says and whether it may be
+    pressed. ``mode`` None = no row. The page mirrors this rule in blSaveAction; a test
+    holds the two equal."""
+    plain = LAUNCH_ANYWAY_LABEL if warnings else LAUNCH_PLAIN_LABEL
+    if not mode or not ticked:
+        return {"label": plain, "enabled": True, "reason": ""}
+    label = SAVE_AND_LAUNCH_ANYWAY_LABEL if warnings else SAVE_AND_LAUNCH_LABEL
+    if mode == SAVE_MODE_NEW and not str(researcher or "").strip():
+        return {"label": label, "enabled": False, "reason": SAVE_NEEDS_RESEARCHER}
+    return {"label": label, "enabled": True, "reason": ""}
+
+
+def save_button_label(preset):
+    """The main Save button: "Save as new config..." once a saved config is on screen,
+    "Save config..." when nothing is saved yet. It never changes with the dirty state,
+    so the header does not move while someone types."""
+    return SAVE_AS_NEW_LABEL if preset and not is_builtin(preset) else SAVE_CONFIG_LABEL
+
+
+def save_dialog_state(fields, config_name, presets, extra=None, lab_presets=None, os_user="",
+                      lead=""):
+    """The Save dialog of both faces, by the same rules as the launch row."""
+    preset = saved_config_named(config_name, presets)
+    changed = preset is not None and launch_differs_from_config(fields, preset, lab_presets)
+    kind = (SAVE_OFFER_CHANGED if changed
+            else (SAVE_DIALOG_COPY if preset is not None else SAVE_OFFER_UNSAVED))
+    state = _save_form_state(kind, fields, preset, presets, extra, os_user)
+    state["title"] = SAVE_AS_NEW_TITLE if preset is not None else SAVE_CONFIG_TITLE
+    state["lead"] = str(lead or "")
+    same = identical_saved_config(fields, presets, lab_presets, skip=preset)
+    state["same_line"] = SAVE_OFFER_SAME_LINE % same.get("name", "") if same is not None else ""
+    return state
+
+
+def config_save_problem(mode, name, researcher, presets, target="", fields=None):
+    """Why this save cannot happen, or "". The one rule, also applied under the store
+    lock, where another process's change has just been merged in."""
+    if mode == SAVE_MODE_REPLACE:
+        wanted = str(target or "").strip()
+        for preset in (presets or []):
+            if str(preset.get("name", "")).strip() == wanted:
+                if is_builtin(preset):
+                    return SAVE_BUILTIN_REPLACE
+                return launch_port_problem((fields or {}).get("port")) if fields else ""
+        return SAVE_NO_TARGET % wanted
+    clean = str(name or "").strip()
+    if not clean:
+        return SAVE_NEEDS_NAME
+    if not unique_name(clean, presets or []):
+        taken_by_saved = saved_config_named(clean, presets) is not None
+        return (SAVE_NAME_TAKEN if taken_by_saved else SAVE_NAME_TAKEN_PLAIN) % clean
+    if not str(researcher or "").strip():
+        return SAVE_DIALOG_NEEDS_RESEARCHER
+    return launch_port_problem((fields or {}).get("port")) if fields else ""
+
+
+def save_config_choice(host, mode, name, researcher, fields, target="", lab_presets=None,
+                       keep_order=False):
+    """Save the form as a new config, or over ``target``, through the host's locked store
+    save, so no other config can be lost. ``host`` is either face: it has ``presets``,
+    ``store_extra`` and ``_mutate_store``.
+
+    A failed write is undone in memory and claims nothing. Replacing keeps the config's
+    name, author and dates, moves a full copy of the old version into the deleted list
+    FIRST (no copy, no replace), and writes a line to the edit log; a log failure never
+    blocks the save and comes back as ``warning``.
+
+    Returns ``{"ok", "message", "name", "mode", "warning", "preset"}``."""
+    mode = SAVE_MODE_REPLACE if mode == SAVE_MODE_REPLACE else SAVE_MODE_NEW
+    researcher = str(researcher or "").strip()
+    clean = str((target if mode == SAVE_MODE_REPLACE else name) or "").strip()
+    state = {"undo": None, "preset": None, "old": None, "copy_id": ""}
+
+    def apply():
+        problem = config_save_problem(mode, clean, researcher, host.presets, clean, fields)
+        if problem:
+            return problem
+        if mode == SAVE_MODE_NEW:
+            preset = preset_from_fields(clean, fields, author=researcher, lab_presets=lab_presets)
+            before = list(host.presets), copy.deepcopy(host.store_extra)
+            state["undo"] = lambda: _undo_new_config(host, before)
+            host.presets.append(preset)
+            if not keep_order:
+                host.presets = order_presets_for_display(host.presets)
+            host.store_extra["last_author"] = researcher
+            add_researcher(host.store_extra, researcher)
+        else:
+            preset = saved_config_named(clean, host.presets)
+            old = copy.deepcopy(preset)
+            try:
+                state["copy_id"] = _keep_deleted_copy(preset, DELETED_REASON_REPLACED)
+            except Exception as error:  # noqa: BLE001 - said to the user; nothing replaced
+                return REPLACE_COPY_FAILED % error
+            fresh = preset_from_fields(clean, fields, lab_presets=lab_presets)
+            fresh["author"] = old.get("author", "")
+            fresh["created"] = old.get("created")
+            fresh["last_run"] = old.get("last_run")
+            state["undo"] = lambda: (preset.clear(), preset.update(old))
+            state["old"] = old
+            preset.clear()
+            preset.update(fresh)
+        state["preset"] = preset
+        return ""
+
+    try:
+        problem = host._mutate_store(apply)
+    except Exception as error:  # noqa: BLE001 - said to the user, never claimed as saved
+        if state["undo"]:
+            state["undo"]()
+        _drop_deleted_copy(state["copy_id"])
+        return {"ok": False, "message": SAVE_FAILED % error, "name": clean, "mode": mode,
+                "warning": "", "preset": None}
+    if problem:
+        return {"ok": False, "message": problem, "name": clean, "mode": mode, "warning": "",
+                "preset": None}
+    warning = ""
+    if mode == SAVE_MODE_REPLACE:
+        who = researcher or str(state["old"].get("author", "") or "")
+        warning = record_config_change(CONFIG_ACTION_REPLACE, clean, who,
+                                       config_field_changes(state["old"], state["preset"]))
+    return {"ok": True, "message": "", "name": clean, "mode": mode, "warning": warning,
+            "preset": state["preset"]}
+
+
+def _undo_new_config(host, before):
+    host.presets, extra = before
+    host.store_extra.clear()
+    host.store_extra.update(extra)
+
+
+def unsaved_work_question(fields, config_name, presets, lab_presets=None):
+    """Would replacing the form lose work? ``{"ask": False}`` when clean, or for an
+    untouched Lab default; otherwise the question both faces ask."""
+    preset = None
+    wanted = str(config_name or "").strip()
+    for candidate in (presets or []):
+        if wanted and str(candidate.get("name", "")).strip() == wanted:
+            preset = candidate
+            break
+    if preset is None:
+        c = normalize_config(fields or {})
+        dirty = bool(c["project_path"].strip() or c[EXTRA_SCRIPTS_KEY] or c["extra_services"])
+    else:
+        dirty = configs_differ(fields, follow_lab_room(preset, lab_presets))
+    if not dirty:
+        return {"ask": False}
+    line = (UNSAVED_QUESTION_CHANGED % preset.get("name", "")
+            if preset is not None and not is_builtin(preset) else UNSAVED_QUESTION_NEW)
+    return {"ask": True, "title": UNSAVED_TITLE, "line": line, "note": UNSAVED_QUESTION_NOTE,
+            "save": UNSAVED_SAVE, "discard": UNSAVED_DISCARD, "cancel": UNSAVED_CANCEL}
+
+
+def session_config_label(entry):
+    """A launch history row's config: "Dictator study (changed)" when the launched
+    settings were not the saved ones, "(unsaved)" with no config at all."""
+    entry = entry or {}
+    name = str(entry.get("config") or "").strip() or "(unsaved)"
+    return LAUNCH_CHANGED_NAME % name if entry.get("config_changed") else name
+
+
+# -- the edit log: config_history.jsonl, one line per Replace or own-script Edit -----
+
+def config_history_path():
+    return os.path.join(data_dir(), CONFIG_HISTORY_FILENAME)
+
+
+def _log_value(key, value):
+    """A value fit for the edit log: secrets hidden at any depth, and a login inside a
+    URL masked. Script text is kept: it is what the log is for."""
+    if isinstance(value, dict):
+        return {k: (CONFIG_HISTORY_HIDDEN if _SECRET_KEY.search(str(k)) else _log_value(k, v))
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_log_value(key, v) for v in value]
+    if isinstance(value, str) and str(key) != "script":
+        return _URL_LOGIN.sub(r"\1***@", value)
+    return value
+
+
+def _value_changes(prefix, key, old, new):
+    field = "%s.%s" % (prefix, key) if prefix else str(key)
+    if old == new:
+        return []
+    if _SECRET_KEY.search(str(key)):
+        return [{"field": field, "changed": True}]
+    if isinstance(old, dict) and isinstance(new, dict):
+        rows = []
+        for sub in sorted(set(old) | set(new), key=str):
+            rows += _value_changes(field, sub, old.get(sub), new.get(sub))
+        return rows
+    return [{"field": field, "old": _log_value(key, old), "new": _log_value(key, new)}]
+
+
+def _script_field(script, part):
+    return 'script "%s": %s' % (script.get("name", ""), part)
+
+
+def own_script_changes(old_scripts, new_scripts):
+    """Per changed part of each own script, matched by id. A script added or removed is
+    one row with its whole text."""
+    old = {s["id"]: s for s in normalize_extra_scripts(old_scripts)}
+    new = {s["id"]: s for s in normalize_extra_scripts(new_scripts)}
+    rows = []
+    for key, script in old.items():
+        if key not in new:
+            rows.append({"field": _script_field(script, "removed"),
+                         "old": script.get("script", ""), "new": ""})
+            continue
+        for part in ("name", "script", "wait", "wait_port", "enabled"):
+            if script.get(part) != new[key].get(part):
+                rows.append({"field": _script_field(new[key], part),
+                             "old": script.get(part), "new": new[key].get(part)})
+    for key, script in new.items():
+        if key not in old:
+            rows.append({"field": _script_field(script, "added"), "old": "",
+                         "new": script.get("script", "")})
+    return rows
+
+
+def config_field_changes(old, new):
+    """What differs between two versions of a config, field by field, for the edit log.
+    A password-type field, at any depth, gives only ``{"field", "changed": True}``:
+    its value is never written, neither old nor new."""
+    a, b = normalize_config(old), normalize_config(new)
+    rows = []
+    for key in sorted(set(a) | set(b)):
+        if key in _CONFIG_LOG_SKIP:
+            continue
+        if key == EXTRA_SCRIPTS_KEY:
+            rows += own_script_changes(a.get(key), b.get(key))
+            continue
+        rows += _value_changes("", key, a.get(key), b.get(key))
+    return rows
+
+
+def record_config_change(action, config_name, researcher, changes, when=None, path=None):
+    """Append ONE line to config_history.jsonl. Never raises and never blocks a save:
+    returns "" when written (or there was nothing to record), else the warning the
+    face must show."""
+    if not changes:
+        return ""
+    try:
+        entry = {"timestamp": when or now_iso(), "action": str(action),
+                 "config": str(config_name or ""), "researcher": str(researcher or ""),
+                 "changes": changes}
+        target = path or config_history_path()
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        return ""
+    except Exception as error:  # noqa: BLE001 - a log must never block a save
+        return CONFIG_LOG_WARNING % error
+
+
+def read_config_history(limit=200, path=None):
+    """The edit log, newest first. Fail-soft: no file = [], a broken line is skipped."""
+    entries = []
+    try:
+        with open(path or config_history_path(), "r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except (OSError, UnicodeError):
+        return []
+    entries.reverse()
+    return entries if limit is None else entries[:max(0, int(limit))]
+
+
+def _change_text(change, part):
+    if change.get("changed"):
+        return CONFIG_HISTORY_HIDDEN
+    value = change.get(part)
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def config_history_rows(limit=200, path=None):
+    """The edit log as flat rows for both faces' viewers, one per changed field."""
+    rows = []
+    for entry in read_config_history(limit, path):
+        action = str(entry.get("action", ""))
+        for change in (entry.get("changes") or []):
+            if not isinstance(change, dict):
+                continue
+            rows.append({
+                "timestamp": str(entry.get("timestamp", "")),
+                "config": str(entry.get("config", "")),
+                "action": CONFIG_ACTION_LABELS.get(action, action),
+                "researcher": str(entry.get("researcher", "")),
+                "field": str(change.get("field", "")),
+                "old": _change_text(change, "old"),
+                "new": _change_text(change, "new"),
+            })
+    return rows
+
+
+# -- deleted configs: a copy of each in deleted_configs.json, recoverable from Settings ---
+
+DELETED_CONFIGS_FILENAME = "deleted_configs.json"
+DELETED_CONFIGS_LABEL = "Deleted configs"
+DELETED_CONFIGS_EMPTY = "No deleted configs."
+DELETED_RECOVER_LABEL = "Recover"
+DELETE_CONFIRM_TEXT = ("This removes it from your configs. You can find it under Deleted "
+                       "configs in the settings.")
+DELETE_COPY_FAILED = "Not deleted: could not keep a copy of it. %s"
+REPLACE_COPY_FAILED = "Not replaced: could not keep a copy of the old version. %s"
+DELETED_REASON_DELETED = "deleted"
+DELETED_REASON_REPLACED = "replaced"
+RECOVER_GONE = "That deleted config is no longer in the list."
+RECOVER_FAILED = "Could not recover: %s"
+RECOVERED_TEXT = 'Recovered "%s".'
+RECOVERED_RENAMED_TEXT = 'Recovered as "%s", because "%s" already exists.'
+RECOVER_LIST_WARNING = "Recovered, but it could not be taken off the deleted list: %s"
+CONFIG_ACTION_DELETE = "delete"
+CONFIG_ACTION_RECOVER = "recover"
+CONFIG_ACTION_LABELS.update({CONFIG_ACTION_DELETE: "Deleted", CONFIG_ACTION_RECOVER: "Recovered"})
+
+
+def deleted_configs_path():
+    return os.path.join(data_dir(), DELETED_CONFIGS_FILENAME)
+
+
+def _read_deleted_entries():
+    """The stored entries, oldest first. Under the lock when it is about to be written.
+    A malformed file is set aside (like saved_configs.json), so it is neither lost nor
+    allowed to stop every delete; a file from a newer launcher raises NewerSchemaError."""
+    path = deleted_configs_path()
+    refuse_newer_schema(path)
+    status, data = _read_json(path)
+    if status == "malformed":
+        try:
+            shutil.copy2(path, path + ".broken-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        except OSError:
+            pass
+    raw = data.get("deleted") if isinstance(data, dict) else None
+    return [e for e in (raw if isinstance(raw, list) else [])
+            if isinstance(e, dict) and isinstance(e.get("config"), dict)]
+
+
+def _write_deleted_entries(entries):
+    write_json_atomic(deleted_configs_path(),
+                      {"schema_version": SCHEMA_VERSION, "deleted": entries},
+                      prefix=".deleted_configs-")
+
+
+def _change_deleted_entries(change):
+    """One locked read-change-write of the file. ``change`` edits the list in place."""
+    folder = os.path.dirname(deleted_configs_path())
+    os.makedirs(folder, exist_ok=True)
+    with exclusive_file_lock(lock_path("deleted_configs", folder)):
+        entries = _read_deleted_entries()
+        result = change(entries)
+        _write_deleted_entries(entries)
+    return result
+
+
+def _keep_deleted_copy(preset, reason, when=None):
+    """Write a full copy to the deleted list, with why and when. Returns its id. Raises
+    when it cannot be written: the caller then does not go on."""
+    entry = {"id": "del-" + secrets.token_hex(6), "deleted_at": when or now_iso(),
+             "reason": reason, "config": copy.deepcopy(config_for_storage(preset))}
+    _change_deleted_entries(lambda entries: entries.append(entry))
+    return entry["id"]
+
+
+def _drop_deleted_copy(entry_id):
+    """Take a copy out again after the store write failed. An extra copy loses nothing,
+    so a failure here is not said."""
+    if not entry_id:
+        return
+    try:
+        _change_deleted_entries(lambda entries: entries.__setitem__(
+            slice(None), [e for e in entries if e.get("id") != entry_id]))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def delete_config_keeping_copy(host, name, when=None):
+    """Delete a saved config, first keeping a full copy (passwords included, like
+    saved_configs.json; owner-only). No copy written = no delete, and the reason comes
+    back. A store write that then fails takes the copy out again, so the config is in
+    exactly one place. ``host`` as in save_config_choice.
+
+    Returns ``{"ok", "message", "warning", "preset"}``."""
+    wanted = str(name or "").strip()
+    state = {"preset": None, "before": None, "id": ""}
+
+    def apply():
+        preset = saved_config_named(wanted, host.presets)
+        if preset is None:
+            return 'No config called "%s".' % wanted
+        try:
+            state["id"] = _keep_deleted_copy(preset, DELETED_REASON_DELETED, when)
+        except Exception as error:  # noqa: BLE001 - said to the user; nothing was deleted
+            return DELETE_COPY_FAILED % error
+        state["preset"], state["before"] = preset, host.presets
+        host.presets = [p for p in host.presets if p is not preset]
+        return ""
+
+    try:
+        problem = host._mutate_store(apply)
+    except Exception as error:  # noqa: BLE001 - the store write failed: put everything back
+        if state["before"] is not None:
+            host.presets = state["before"]
+        _drop_deleted_copy(state["id"])
+        return {"ok": False, "message": SAVE_FAILED % error, "warning": "", "preset": None}
+    if problem:
+        return {"ok": False, "message": problem, "warning": "", "preset": None}
+    preset = state["preset"]
+    warning = record_config_change(CONFIG_ACTION_DELETE, wanted, preset.get("author", ""), [
+        {"field": "config", "old": "saved", "new": "deleted"}])
+    return {"ok": True, "message": "", "warning": warning, "preset": preset}
+
+
+def config_is_in_deleted_list(name):
+    """Is ``name`` in the deleted list? For the one-click box: a missing or damaged file
+    just means no, and reading it here never writes or sets anything aside."""
+    wanted = str(name or "").strip()
+    try:
+        status, data = _read_json(deleted_configs_path())
+        if status != "ok" or not isinstance(data, dict):
+            return False
+        return any(isinstance(e, dict) and isinstance(e.get("config"), dict)
+                   and str(e["config"].get("name", "")).strip() == wanted
+                   for e in (data.get("deleted") or []))
+    except Exception:  # noqa: BLE001 - this box must never fail on a log-like file
+        return False
+
+
+def recovered_config_name(name, presets):
+    """``name`` when free, else "<name>-RECOVERED", "<name>-RECOVERED-2", ..."""
+    clean = str(name or "").strip() or "Unnamed config"
+    if unique_name(clean, presets):
+        return clean
+    candidate = clean + "-RECOVERED"
+    number = 2
+    while not unique_name(candidate, presets):
+        candidate = "%s-RECOVERED-%d" % (clean, number)
+        number += 1
+    return candidate
+
+
+def recover_deleted_config(host, entry_id, keep_order=False):
+    """Put a deleted config back in the saved list, with its own fields, author and
+    last_run, then take it off the deleted list. The store write comes first: a failure
+    between the two leaves it in both lists, never in neither. Never touches the form.
+
+    Returns ``{"ok", "message", "warning", "name", "renamed", "preset"}``."""
+    state = {"preset": None, "before": None, "renamed": False, "old_name": ""}
+
+    def apply():
+        entries = _read_deleted_entries()
+        entry = next((e for e in entries if e.get("id") == entry_id), None)
+        if entry is None:
+            return RECOVER_GONE
+        preset = copy.deepcopy(entry["config"])
+        state["old_name"] = str(preset.get("name", ""))
+        preset["name"] = recovered_config_name(state["old_name"], host.presets)
+        preset["builtin"] = False
+        state["renamed"] = preset["name"] != state["old_name"].strip()
+        state["before"] = host.presets
+        host.presets = list(host.presets) + [preset]
+        if not keep_order:
+            host.presets = order_presets_for_display(host.presets)
+        state["preset"] = preset
+        return ""
+
+    failure = {"ok": False, "warning": "", "name": "", "renamed": False, "preset": None}
+    try:
+        problem = host._mutate_store(apply)
+    except Exception as error:  # noqa: BLE001 - said to the user, nothing claimed
+        if state["before"] is not None:
+            host.presets = state["before"]
+        return dict(failure, message=RECOVER_FAILED % error)
+    if problem:
+        return dict(failure, message=problem)
+    preset = state["preset"]
+    warning = ""
+    try:
+        _change_deleted_entries(lambda entries: entries.__setitem__(
+            slice(None), [e for e in entries if e.get("id") != entry_id]))
+    except Exception as error:  # noqa: BLE001 - the config is back; only the list is stale
+        warning = RECOVER_LIST_WARNING % error
+    name = preset["name"]
+    logged = record_config_change(CONFIG_ACTION_RECOVER, name, preset.get("author", ""), [
+        {"field": "config", "old": "deleted", "new": "recovered as %s" % name}])
+    message = (RECOVERED_RENAMED_TEXT % (name, state["old_name"]) if state["renamed"]
+               else RECOVERED_TEXT % name)
+    return {"ok": True, "message": message, "warning": warning or logged, "name": name,
+            "renamed": state["renamed"], "preset": preset}
+
+
+def _deleted_config_details(config, lab_presets=None):
+    """What a deleted config holds, for reading: never a password or a database URL."""
+    c = normalize_config(config)
+    presets = _presets_or_default(lab_presets)
+    lab = find_lab_preset(c["lab"], presets)
+    try:
+        scripts = [r["name"] for r in _launch_script_rows(c, presets) if r["selected"]]
+    except Exception:  # noqa: BLE001 - a list to read must not fail on an old entry
+        scripts = [s.get("name", "") for s in normalize_extra_scripts(config.get(EXTRA_SCRIPTS_KEY))]
+    return [["Study folder", c["project_path"]],
+            ["Lab", (lab or {}).get("name") or c["lab"]],
+            ["Room", c["room_name"]],
+            ["Database", _session_database_label(c)],
+            ["Scripts", ", ".join(scripts) if scripts else "None"]]
+
+
+def _deleted_when(stamp):
+    """ "4 Nov 15:42" """
+    try:
+        when = _dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return str(stamp or "")
+    return "%d %s" % (when.day, when.strftime("%b %H:%M"))
+
+
+def deleted_config_rows(lab_presets=None):
+    """The Deleted configs popup, newest first. Fail-soft: no file or a bad one = []."""
+    try:
+        entries = _read_deleted_entries()
+    except Exception:  # noqa: BLE001 - e.g. a newer launcher's file: nothing to offer here
+        return []
+    rows = []
+    for entry in reversed(entries):
+        config = entry["config"]
+        reason = (DELETED_REASON_REPLACED if entry.get("reason") == DELETED_REASON_REPLACED
+                  else DELETED_REASON_DELETED)
+        name = str(config.get("name", ""))
+        stamp = str(entry.get("deleted_at", ""))
+        rows.append({"id": str(entry.get("id", "")), "name": name, "reason": reason,
+                     "line": "%s, %s %s" % (name, reason, _deleted_when(stamp)),
+                     "researcher": str(config.get("author", "") or ""),
+                     "deleted_at": stamp,
+                     "details": _deleted_config_details(config, lab_presets)})
+    return sorted(rows, key=lambda r: r["deleted_at"], reverse=True)
 
 
 def split_lead_sentence(text):

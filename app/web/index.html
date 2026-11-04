@@ -780,8 +780,20 @@ input::placeholder{color:var(--faint)}
 .tl-wait{font-size:11.5px;color:var(--muted)}
 .tl-wait-sel{font-size:11.5px;padding:1px 4px;max-width:190px}
 .tl-del{margin-left:auto}
+.tl-acts{margin-left:auto;display:inline-flex;gap:4px;align-items:center;align-self:center}
+.tl-avail-toggle{display:flex;margin-top:8px;padding-top:4px}
+.tl-avail-toggle[hidden]{display:none}
+.tl-add-buttons{display:flex;gap:6px;flex-wrap:wrap}
+.tl-add-form{margin-top:8px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
+.tl-add-form textarea{width:100%;box-sizing:border-box;min-height:62px;margin:6px 0 0;font-family:var(--mono,monospace);font-size:12px}
+.tl-add-form .svc-in-name{flex:0 0 30%!important}
+.tl-add-acts{display:flex;gap:6px;margin-top:6px}
 .tl-detail{flex-basis:100%;margin:2px 0 0 23px;font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint);overflow-wrap:anywhere}
-pre.tl-detail{white-space:pre-wrap;max-height:62px;overflow:auto;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px;color:var(--text)}
+/* Script text, wherever it is shown: at most core.SCRIPT_TEXT_MAX_LINES (6) lines, scrolls
+   inside itself, long lines wrap. A short script takes only what it needs. */
+pre.tl-detail,pre.bl-script{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.4;box-sizing:border-box;
+  max-height:calc(6 * 1.4em + 10px);overflow:auto;overscroll-behavior:contain;max-width:100%}
+pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px;color:var(--text)}
 .tl-add{margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft)}
 .tl-add-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .tl-add-row input[type=text]{min-width:0;flex:1 1 120px}
@@ -797,7 +809,7 @@ pre.tl-detail{white-space:pre-wrap;max-height:62px;overflow:auto;background:var(
 .bl-run-row{padding:4px 0}
 .bl-run-num{display:inline-block;min-width:20px;color:var(--faint)}
 .bl-run-wait{margin-left:6px;font-size:11.5px;color:var(--muted)}
-pre.bl-script{margin:3px 0 0 20px;white-space:pre-wrap;max-height:76px;overflow:auto;font-family:var(--mono,monospace);font-size:11.5px;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px}
+pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--mono,monospace);font-size:11.5px;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px}
 .bl-report{margin:10px 0 6px}
 .bl-report-line{margin:4px 0 8px;font-size:13px;color:var(--text)}
 .bl-report-row{padding:3px 0;font-size:13px}
@@ -1050,6 +1062,43 @@ pre.bl-script{margin:3px 0 0 20px;white-space:pre-wrap;max-height:76px;overflow:
 .modal-card.wide{max-width:660px}
 /* Large variant for the full activity log: ~80vw x ~70vh, capped on big
    screens, a flex column so the scrollable log body fills the remaining space. */
+/* A popup that holds a table (History, Studies cloned): as wide as its table needs, up
+   to the window; the table scrolls inside itself and the buttons stay in view. The
+   plain sizes above are for forms: at 660px a table ran out of the card, and its buttons
+   ended up below thousands of pixels of rows. */
+.modal-card.table-modal{width:fit-content;min-width:min(560px,100%);max-width:min(1240px,100%);
+  display:flex;flex-direction:column;overflow:hidden}
+.modal-card.table-modal>.modal-title{flex:0 0 auto}
+.modal-card.table-modal>.modal-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.modal-card.table-modal .table-scroll{flex:1 1 auto;min-height:80px;overflow:auto;overscroll-behavior:contain;
+  background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:0 12px 8px}
+.modal-card.table-modal .presets-table{margin-top:0;min-width:560px}
+.modal-card.table-modal .presets-table th{position:sticky;top:0;z-index:1;background:var(--bg-deep);white-space:nowrap}
+.modal-card.table-modal .presets-table td{overflow-wrap:break-word}
+.modal-card.table-modal .presets-table td.when{white-space:nowrap;overflow-wrap:normal}
+.modal-card.table-modal .cta{flex:0 0 auto}
+.del-detail{flex:0 0 auto;margin:10px 0 0;padding:9px 12px;border:1px solid var(--line-soft);border-radius:var(--r-md);font-size:12.5px;overflow-wrap:anywhere;max-height:30vh;overflow:auto}
+.del-detail .k{display:inline-block;min-width:92px;color:var(--muted)}
+.hist-tabs{flex:0 0 auto;display:flex;align-items:center;gap:8px;margin:0 0 10px;flex-wrap:wrap}
+.hist-tabs .btn[aria-pressed="true"]{font-weight:700;color:var(--text-strong);border-color:var(--accent)}
+.hist-note{flex:0 0 auto;font-size:11.5px;color:var(--faint);margin:0 0 8px}
+.hist-old,.hist-new{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-height:7.5em;overflow:auto;min-width:120px;max-width:340px;overflow-wrap:anywhere}
+/* The save row of Before you launch, and the Save dialog's Replace button. */
+.bl-save{border:1px solid var(--line-soft);border-radius:var(--r-md);padding:11px 14px;margin:12px 0 0;font-size:13px}
+.bl-save-same{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.bl-save-line{color:var(--text-strong);font-weight:700;margin:0 0 7px}
+.bl-save-row{display:flex;align-items:center;gap:8px;margin:6px 0 0;flex-wrap:wrap}
+.bl-save-row>label.who{min-width:70px;font-size:12.5px;color:var(--muted)}
+.bl-save-row input[type=text]{flex:1 1 200px;min-width:0}
+.bl-save-tick{display:inline-flex;align-items:center;gap:6px;font-weight:600;color:var(--text)}
+.bl-save-note{font-size:12px;color:var(--muted);margin:7px 0 0}
+.bl-save-note.strong{font-weight:700;color:var(--text-strong)}
+.bl-save-note a,#saveAsBack{color:var(--accent);font-weight:600}
+.bl-save-reason{font-size:12px;color:var(--warn);font-weight:600;margin:7px 0 0}
+.bl-save .modal-err{display:block}
+.save-name-row{display:flex;gap:8px;align-items:center;min-width:0}
+.save-name-row input{flex:1 1 auto;min-width:0}
+.save-lead{font-weight:700;color:var(--text-strong);margin:0 0 8px}
 .modal-card.huge{max-width:min(1100px,80vw);width:80vw;height:70vh;max-height:70vh;
   display:flex;flex-direction:column;padding:20px 22px}
 .modal-card.huge .modal-title{flex:0 0 auto}
@@ -1141,6 +1190,7 @@ pre.bl-script{margin:3px 0 0 20px;white-space:pre-wrap;max-height:76px;overflow:
 .modal-ready .cta.ready-cta .btn{padding:11px 22px;font-size:13.5px;border-radius:var(--r-md)}
 .modal-ready #getReadyInfo{margin:14px 0 0}
 .mfield{display:grid;grid-template-columns:150px 1fr;align-items:center;gap:10px 12px;margin:11px 0}
+.mfield[hidden]{display:none}
 .mfield > label{font-size:12.5px;color:var(--muted)}
 
 /* room picker */
@@ -1550,7 +1600,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
         <button class="btn ghost" id="shortcutBtn" onclick="onExport()">Save one-click shortcut</button>
         <span class="info-tip" role="tooltip" id="shortcutTip"></span>
       </span>
-      <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save as new config...</button>
+      <button class="btn" id="saveAsBtn" onclick="onSaveAs()">Save config...</button>
     </div>
 
     <div class="content">
@@ -1707,23 +1757,32 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             <div class="svc-head tl-head"><b id="svcTitle">What happens on launch</b><span id="svcTip"></span>
               <button type="button" class="btn tiny tl-reorder" id="tlReorder" aria-pressed="false" onclick="toggleReorder()">Reorder</button></div>
             <div id="tlRows"></div>
-            <div class="svc-group" id="tlAvailTitle">Not selected</div>
-            <div id="tlAvail"></div>
+            <!-- Collapsed on every start; nothing about it is remembered. -->
+            <button type="button" class="db-details-toggle tl-avail-toggle" id="tlAvailToggle" aria-expanded="false" onclick="toggleNotSelected()" hidden><span class="arw" id="tlAvailArw">&#9656;</span><span id="tlAvailTitle">Not selected</span></button>
+            <div id="tlAvail" hidden></div>
             <!-- The state of the "oTree admin page" row: the config's open_browser field. -->
             <input type="checkbox" id="open_browser" checked hidden>
-            <div class="tl-add">
+            <div class="tl-add tl-add-buttons">
+              <button type="button" class="btn tiny" id="scrAddOpen" onclick="addFormOpen('script')">Add your own script</button>
+              <button type="button" class="btn tiny" id="svcAddOpen" onclick="addFormOpen('website')">Add your own website</button>
+            </div>
+            <div class="tl-add-form" id="scrAddForm" hidden>
               <div class="tl-add-row">
                 <input type="text" id="scrNewName" placeholder="Script name">
                 <select id="scrNewWait" class="tl-wait-sel" onchange="scrNewWaitChanged()"></select>
                 <input type="text" class="tl-port" id="scrNewPort" placeholder="Port" hidden>
               </div>
               <textarea id="scrNewText" spellcheck="false" placeholder="cd some/folder&#10;python server.py"></textarea>
-              <button type="button" class="btn tiny" id="scrAddBtn" onclick="addOwnScript()">Add your own script</button>
+              <div class="tl-add-acts"><button type="button" class="btn tiny accent" onclick="addOwnScript()" id="scrAddBtn">Add script</button>
+              <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
             </div>
-            <div class="svc-add tl-add">
-              <input type="text" class="svc-in-name" id="svcNewName" placeholder="Name" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
-              <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
-              <button type="button" class="btn tiny" id="svcAddBtn" onclick="addOwnService()">Add your own website</button>
+            <div class="tl-add-form" id="svcAddForm" hidden>
+              <div class="tl-add-row">
+                <input type="text" class="svc-in-name" id="svcNewName" placeholder="Name" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+                <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+              </div>
+              <div class="tl-add-acts"><button type="button" class="btn tiny accent" id="svcAddBtn" onclick="addOwnService()">Add website</button>
+              <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
             </div>
             <div class="svc-msg" id="svcMsg" hidden></div>
           </div>
@@ -2149,6 +2208,7 @@ var UI_TEXT={
   timeline_title:"What happens on launch",timeline_reorder:"Reorder",timeline_reorder_done:"Done",
   timeline_available:"Not selected",timeline_available_none:"Nothing else to add.",
   scripts_card:"Launch scripts",script_add:"Add script",script_add_own:"Add your own script",
+  script_add:"Add script",website_add:"Add website",script_show:"Show script",script_hide:"Hide script",timeline_copy_link:"Copy link",
   website_add_own:"Add your own website",script_include:"Include by default",script_hidden:"Hidden",
   script_hidden_short:"hidden",script_text:"Script",script_position:"Default position",script_wait:"Then",script_port:"Port",
   script_positions:[["before","Before oTree"],["after","After oTree"]],
@@ -2207,9 +2267,27 @@ var UI_TEXT={
   quit_launcher_note:"Closes the launcher. A launched study keeps running.",
   launch_history:"Launch history",
   launch_history_button:"History",
+  deleted_configs:"Deleted configs",
+  deleted_configs_empty:"No deleted configs.",
+  deleted_recover:"Recover",
+  delete_confirm:"This removes it from your configs. You can find it under Deleted configs in the settings.",
   view_block_link:"View settings.py block",
   unsaved_changes:"Unsaved changes",
   unsaved_settings:"Unsaved settings",
+  save_config_label:"Save config...",
+  save_as_new_label:"Save as new config...",
+  save_and_launch:"Save and launch",
+  save_and_launch_anyway:"Save and launch anyway",
+  launch_plain:"Launch",
+  launch_anyway:"Launch anyway",
+  save_needs_researcher:"Type a researcher to save, or untick to launch without saving.",
+  save_name_label:"Config name",
+  save_researcher_label:"Researcher",
+  save_replace_hint:"Goes in the edit log. The config keeps its own author.",
+  shortcut_needs_save:"A shortcut needs a saved config.",
+  config_history:"Config edits",
+  config_history_note:"A helpful record, not proof of who did it.",
+  config_history_empty:"No config has been replaced or edited yet. Each Replace and each script Edit adds lines here.",
   github_login_note:"Saved in this computer's own credential store (Windows Credential Manager or the macOS Keychain), never in a launcher file. A computer can hold several tokens (the lab's read-only token, a researcher's own token); a clone uses the first one that can open the study. Make the lab token with the lab account, a member of the organisation.",
   github_login_prompt:"Say who is adding the token, paste it, then Save.",
   github_login_missing:"Paste the token.",
@@ -2248,9 +2326,8 @@ function fillStaticTips(){
   var phn=el("portHint");if(phn)phn.textContent=UI_TEXT.port_hint;
   var prs=el("portReset");if(prs)prs.textContent=UI_TEXT.port_reset;
   var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.timeline_title;
-  [["tlAvailTitle","timeline_available"],["scrAddBtn","script_add_own"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
+  [["scrAddOpen","script_add_own"],["svcAddOpen","website_add_own"],["scrAddBtn","script_add"],["svcAddBtn","website_add"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
   var nw=el("scrNewWait");if(nw)nw.innerHTML=waitOptionsHtml("carry_on");
-  var sa=el("svcAddBtn");if(sa)sa.textContent=UI_TEXT.website_add_own;
 }
 /* A TRAILING "See the activity log." in a message. Mirror of
    core.ACTIVITY_LOG_HINT_PATTERN / core.split_activity_log_hint. */
@@ -2373,6 +2450,7 @@ var FOLDER_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strok
 var GITHUB_SVG='<svg class="gh-mark" viewBox="0 0 16 16" role="img" aria-label="GitHub">'+
   '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
 /* The History button of the Settings footer: a clock with a turn-back arrow. */
+var DELETED_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11"/><path d="M6 4V2.5h4V4"/><path d="M4 4l.7 9.5h6.6L12 4"/><path d="M6.7 6.8v4"/><path d="M9.3 6.8v4"/></svg>';
 var HISTORY_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
   '<path d="M2.7 8a5.4 5.4 0 1 0 1.5-3.8L2.5 5.9"/><path d="M2.5 2.9v3h3"/><path d="M8 5v3.2l2.1 1.3"/></svg>';
 var PERSON_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">'+
@@ -2408,7 +2486,7 @@ function renderConfigList(configs,selected){
   configs.forEach(function(c){
     var b=document.createElement("button");
     b.className="cfg-row"+(c.name===selected?" sel":"");
-    b.onclick=function(){selectConfig(c.name,b);};
+    b.onclick=function(){withUnsavedCheck(function(){selectConfig(c.name,b);});};
     var nm=document.createElement("span");nm.className="nm";nm.textContent=configDisplay(c);b.appendChild(nm);
     var meta=document.createElement("span");meta.className="meta";
     // The built-in Lab default has NEITHER a folder NOR an author (it only
@@ -3512,16 +3590,45 @@ function tlRowHtml(r,selected){
   /* Own scripts change their wait rule through Edit: one place, saved at once. */
   var waitHtml=(r.kind==="script")?'<span class="tl-wait">'+escapeHtml(r.wait_text||"")+'</span>':'';
   var editing=(OWN_EDIT&&OWN_EDIT.id===r.id);
+  /* Short by default: a script's text and a website's address are one hover (title) or one
+     click away. Show script because a hover is no use on a keyboard or for a long script. */
+  var isScript=(r.kind==="script"),isSite=(r.kind==="page"&&!!r.detail);
+  var tip=isScript?' title="'+escapeHtml(r.tip||"")+'"':isSite?' title="'+escapeHtml(r.detail)+'"':'';
+  var shown=isScript&&!!SCRIPT_SHOWN[r.id];
+  var acts=(isScript&&!editing?'<button type="button" class="btn tiny tl-show" aria-expanded="'+shown+'" onclick="toggleScriptText('+id+')">'+escapeHtml(shown?UI_TEXT.script_hide:UI_TEXT.script_show)+'</button>':'')+
+    (isSite?'<button type="button" class="btn tiny tl-copy" data-url="'+escapeHtml(r.detail)+'" onclick="blCopyOpensLink(this)">'+escapeHtml(UI_TEXT.timeline_copy_link)+'</button>':'')+
+    (r.can_edit?'<button type="button" class="btn tiny" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
+    (r.can_delete?'<button type="button" class="btn tiny" onclick="tlDelete('+id+')">Delete</button>':'');
   return '<div class="tl-row'+(fixed?' tl-row--fixed':'')+'" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+arrows+
-    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.name)+'</span>':'<label class="chk">'+mark+' <span class="tl-name">'+escapeHtml(r.name)+'</span></label>')+
+    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.name)+'</span>':'<label class="chk"'+tip+'>'+mark+' <span class="tl-name">'+escapeHtml(r.name)+'</span></label>')+
     (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
     (r.can_reset?'<button type="button" class="svc-reset" onclick="tlReset('+id+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
     waitHtml+
-    (r.can_edit?'<button type="button" class="btn tiny tl-del" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
-    (r.can_delete?'<button type="button" class="btn tiny'+(r.can_edit?'':' tl-del')+'" onclick="tlDelete('+id+')">Delete</button>':'')+
-    (editing?ownEditHtml():r.kind==="script"?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':
-      (r.detail?'<span class="tl-detail">'+escapeHtml(r.detail)+'</span>':''))+
+    (acts?'<span class="tl-acts">'+acts+'</span>':'')+
+    (editing?ownEditHtml():shown?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':'')+
     '</div>';
+}
+var SCRIPT_SHOWN={};   /* rows with their text open; nothing is remembered between starts */
+function toggleScriptText(id){SCRIPT_SHOWN[id]=!SCRIPT_SHOWN[id];renderTimeline(TL_DATA,null);}
+var NOT_SELECTED_OPEN=false;
+function toggleNotSelected(){NOT_SELECTED_OPEN=!NOT_SELECTED_OPEN;renderNotSelectedCaption();}
+function renderNotSelectedCaption(){
+  var n=(TL_DATA.available||[]).length,box=el("tlAvail"),t=el("tlAvailToggle");if(!t||!box)return;
+  t.hidden=!n;box.hidden=!(n&&NOT_SELECTED_OPEN);
+  t.setAttribute("aria-expanded",NOT_SELECTED_OPEN?"true":"false");
+  el("tlAvailArw").innerHTML=NOT_SELECTED_OPEN?"&#9662;":"&#9656;";
+  el("tlAvailTitle").textContent=UI_TEXT.timeline_available+" ("+n+")";
+}
+/* ---- the two Add forms: one open at a time; Cancel and a successful add clear them ---- */
+function addFormClear(){
+  ["scrNewName","scrNewText","scrNewPort","svcNewName","svcNewUrl"].forEach(function(i){el(i).value="";});
+  el("scrNewWait").value="carry_on";scrNewWaitChanged();serviceMessage("");
+}
+function addFormClose(){el("scrAddForm").hidden=true;el("svcAddForm").hidden=true;addFormClear();}
+function addFormOpen(kind){
+  addFormClose();
+  el(kind==="script"?"scrAddForm":"svcAddForm").hidden=false;
+  var f=el(kind==="script"?"scrNewName":"svcNewName");if(f)f.focus();
 }
 /* ---- Edit an own script: on a saved config it is written straight into that config,
    only this script (core.save_own_script_edit). Other unsaved edits stay unsaved. ---- */
@@ -3577,7 +3684,7 @@ function ownEditSave(){
     });
     if(r.saved)patchCleanSnapshot(r.script);
     OWN_EDIT=null;
-    serviceMessage(r.message,!!r.saved);
+    serviceMessage(r.warning||r.message,!!r.saved&&!r.warning);
     timelineChanged();
   });
 }
@@ -3586,9 +3693,8 @@ function renderTimeline(data,caption){
   var cap=el("advCaption");if(cap&&caption!==null)cap.textContent=caption?(" · "+caption):"";
   var top=el("tlRows");if(!top)return;
   top.innerHTML=(data.timeline||[]).map(function(r){return tlRowHtml(r,true);}).join("");
-  var avail=data.available||[];
-  el("tlAvail").innerHTML=avail.length?avail.map(function(r){return tlRowHtml(r,false);}).join(""):
-    '<p class="svc-none">'+escapeHtml(UI_TEXT.timeline_available_none)+'</p>';
+  el("tlAvail").innerHTML=(data.available||[]).map(function(r){return tlRowHtml(r,false);}).join("");
+  renderNotSelectedCaption();
   var rb=el("tlReorder");if(rb){rb.textContent=reorderMode?UI_TEXT.timeline_reorder_done:UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed",reorderMode?"true":"false");}
 }
 function tlFind(id){
@@ -3631,7 +3737,7 @@ function addOwnScript(){
   API.validate_script(val("scrNewName"),el("scrNewText").value,val("scrNewWait"),val("scrNewPort")).then(function(r){
     if(!(r&&r.ok&&r.script)){serviceMessage((r&&r.message)||"Could not add the script.");return;}
     currentExtraScripts.push(copyOwnScript(r.script));
-    el("scrNewName").value="";el("scrNewText").value="";el("scrNewPort").value="";el("scrNewWait").value="carry_on";scrNewWaitChanged();serviceMessage("");
+    addFormClose();
     timelineChanged();
   });
 }
@@ -3639,7 +3745,7 @@ function addOwnService(){
   var name=(val("svcNewName")||"").trim(),url=(val("svcNewUrl")||"").trim();
   var take=function(service){
     currentExtraServices.push({name:service.name,url:service.url,enabled:true});
-    el("svcNewName").value="";el("svcNewUrl").value="";serviceMessage("");
+    addFormClose();
     timelineChanged();
   };
   if(!NATIVE||!API||!API.validate_service){
@@ -3794,6 +3900,8 @@ function isFormDirty(){return (cleanSnapshot!==null&&formSnapshot()!==cleanSnaps
 function updateDirtyState(){
   var b=el("saveAsBtn");if(!b)return;
   b.classList.toggle("dirty",isFormDirty());
+  var row=currentConfigRow();
+  b.textContent=(row&&!row.builtin)?UI_TEXT.save_as_new_label:UI_TEXT.save_config_label;
   renderConfigSubline();   /* the amber dot + "Unsaved changes" in the header */
   _adminSummaryLater();
 }
@@ -4328,54 +4436,100 @@ document.addEventListener("keydown",function(e){
 });
 
 /* ---------------------------- Save as ---------------------------- */
-function onSaveAs(){
-  /* The Researcher/author field is a SELECT-OR-TYPE control (datalist), the same
-     shared roster the create-database dialog uses (core.list_researchers), so
-     one canonical spelling per person and no near-duplicate misspellings. A name
-     typed here is added to the roster when the config is saved. */
+/* The Save dialog (core.save_dialog_state decides all of it). ``then`` runs only after a
+   successful save: the pending action of Save / Discard / Cancel, or the shortcut. */
+var SAVE_DLG=null;
+function onSaveAs(then,lead){
+  var after=(typeof then==="function")?then:null;
   if(NATIVE&&API){
-    /* Prefilled with whoever added this folder through the GitHub dialog, else
-       the last author (core.suggested_author). */
-    API.list_researchers(currentProjectPath||"").then(function(r){
-      renderSaveAs((r&&r.researchers)||[],(r&&r.suggested)||defaultAuthor||"");});
+    API.save_dialog_state(gatherFields(),currentConfigName||"",lead||"").then(function(st){renderSaveAs(st||{},after);});
   }else{
-    renderSaveAs((RESEARCHERS.length?RESEARCHERS:PREVIEW_RESEARCHERS),defaultAuthor||"");
+    renderSaveAs({title:"Save config",kind:"unsaved",name:"",researcher:defaultAuthor||"",researchers:RESEARCHERS.length?RESEARCHERS:PREVIEW_RESEARCHERS,lead:lead||""},after);
   }
 }
-function renderSaveAs(roster,suggestedAuthor){
-  var suggested=currentConfigName?currentConfigName+" copy":"";
-  var opts=(roster||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
-  openModal("Save as new config",
-    '<div class="mfield"><label for="saveAsName">Config name</label><input id="saveAsName" type="text" value="'+escapeHtml(suggested)+'"></div>'+
-    '<div class="mfield"><label for="saveAsAuthor">Researcher</label>'+
-      '<input id="saveAsAuthor" type="text" list="saveAsRosterList" autocomplete="off" value="'+escapeHtml(suggestedAuthor||"")+'">'+
+function renderSaveAs(st,then){
+  SAVE_DLG={state:st,mode:"new",then:then||null};
+  var opts=(st.researchers||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
+  var replaceBtn=st.replace_target?'<button type="button" class="btn tiny" id="saveAsReplace" onclick="saveAsMode(\'replace\')">'+escapeHtml(st.replace_label)+'</button>':'';
+  openModal(st.title||"Save config",
+    (st.lead?'<p class="save-lead">'+escapeHtml(st.lead)+'</p>':'')+
+    (st.same_line?'<p class="bl-save-same">'+escapeHtml(st.same_line)+'</p>':'')+
+    '<div class="mfield" id="saveAsNameRow"><label for="saveAsName">'+escapeHtml(UI_TEXT.save_name_label)+'</label><div class="save-name-row"><input id="saveAsName" type="text" value="'+escapeHtml(st.name||"")+'">'+replaceBtn+'</div></div>'+
+    '<div id="saveAsReplaceNote" hidden><p class="bl-save-note strong">'+escapeHtml(st.replace_note||"")+'</p>'+
+      '<p><a href="#" id="saveAsBack" onclick="saveAsMode(\'new\');return false;">'+escapeHtml(st.back_label||"")+'</a></p></div>'+
+    '<div class="mfield"><label for="saveAsAuthor">'+escapeHtml(UI_TEXT.save_researcher_label)+'</label>'+
+      '<input id="saveAsAuthor" type="text" list="saveAsRosterList" autocomplete="off" value="'+escapeHtml(st.researcher||"")+'">'+
       '<datalist id="saveAsRosterList">'+opts+'</datalist></div>'+
+    '<p class="bl-save-note" id="saveAsHint" hidden>'+escapeHtml(UI_TEXT.save_replace_hint)+'</p>'+
     '<div class="modal-err" id="saveAsErr"></div>'+
     '<div class="cta"><button class="btn" onclick="closeModal()">Cancel</button>'+
-    '<button class="btn accent" onclick="doSaveAs()">Save</button></div>');
+    '<button class="btn accent" id="saveAsGo" onclick="doSaveAs()">Save</button></div>');
   /* Focus + select the name for a fast rename; Enter-to-save is handled by the
      central modal keydown handler (no per-dialog listener, so no double submit). */
   modalTitleTip("save_as");
   setTimeout(function(){var i=el("saveAsName");if(i){i.focus();i.select();}},30);
 }
+function saveAsMode(mode){
+  if(!SAVE_DLG)return;
+  SAVE_DLG.mode=mode;var st=SAVE_DLG.state,rep=(mode==="replace");
+  el("saveAsNameRow").hidden=rep;el("saveAsReplaceNote").hidden=!rep;el("saveAsHint").hidden=!rep;
+  el("saveAsGo").textContent=rep?st.replace_label:"Save";
+  var who=el("saveAsAuthor");
+  if(rep&&!who.value.trim())who.value=st.replace_researcher||"";
+  saveAsError("");
+}
+function saveAsError(text){var e=el("saveAsErr");if(e){e.style.display=text?"block":"none";e.textContent=text;}}
 function doSaveAs(){
-  var name=(val("saveAsName")||"").trim();if(!name)return;var author=(val("saveAsAuthor")||"").trim();
+  if(!SAVE_DLG)return;
+  var dlg=SAVE_DLG,name=val("saveAsName")||"",author=(val("saveAsAuthor")||"").trim();
   if(!NATIVE){closeModal();window.pywStatus("","Saved (preview only).");return;}
-  API.save_config_as(name,gatherFields(),author).then(function(r){applyLog(r);
-    if(r&&r.ok){closeModal();if(author){defaultAuthor=author;
-        if(RESEARCHERS.indexOf(author)<0)RESEARCHERS.push(author);}
+  API.save_config_as(name,gatherFields(),author,dlg.mode,dlg.state.replace_target||"").then(function(r){applyLog(r);
+    if(r&&r.ok){closeModal();
+      if(author&&dlg.mode==="new"){defaultAuthor=author;if(RESEARCHERS.indexOf(author)<0)RESEARCHERS.push(author);}
       renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
-      markFormClean();window.pywStatus("ok","Saved “"+r.selected+"”.");}
-    else{var e=el("saveAsErr");if(e){e.style.display="block";e.textContent=(r&&r.message)||"Could not save.";}}});
+      markFormClean();
+      if(r.warning)window.pywStatus("warn",r.warning);else window.pywStatus("ok",(r.mode==="replace"?"Replaced “":"Saved “")+r.selected+"”.");
+      if(dlg.then)dlg.then();}
+    else saveAsError((r&&r.message)||"Could not save.");});
+}
+/* ---- ask before losing work: Save / Discard / Cancel ----
+   Python decides whether the form has unsaved work (core.unsaved_work_question); a clean
+   form or an untouched Lab default goes straight on. Save opens the dialog above and then
+   resumes; cancelling it, or a failed save, keeps the form. One question at a time, so a
+   double click cannot stack two. */
+var _unsavedAsking=false,_unsavedResume=null;
+function withUnsavedCheck(resume){
+  if(!NATIVE||!API||!API.unsaved_question){resume();return;}
+  if(_unsavedAsking)return;
+  _unsavedAsking=true;
+  API.unsaved_question(gatherFields(),currentConfigName||"").then(function(q){
+    _unsavedAsking=false;
+    if(!q||!q.ask){resume();return;}
+    _unsavedResume=resume;
+    openModal(q.title,'<p class="save-lead" id="unsavedLine">'+escapeHtml(q.line)+'</p><p class="modal-desc">'+escapeHtml(q.note)+'</p>'+
+      '<div class="cta"><button class="btn" id="unsavedCancel" onclick="unsavedAnswer(\'cancel\')">'+escapeHtml(q.cancel)+'</button>'+
+      '<button class="btn" id="unsavedDiscard" onclick="unsavedAnswer(\'discard\')">'+escapeHtml(q.discard)+'</button>'+
+      '<button class="btn accent" id="unsavedSave" onclick="unsavedAnswer(\'save\')"><b>'+escapeHtml(q.save)+'</b></button></div>');
+  });
+}
+function unsavedAnswer(choice){
+  var resume=_unsavedResume;_unsavedResume=null;
+  if(choice==="cancel"||!resume){closeModal();return;}
+  if(choice==="discard"){closeModal();resume();return;}
+  onSaveAs(resume);
 }
 function deleteConfig(name){
   if(!NATIVE||!API){window.pywStatus("","Delete works in the app, not the static preview.");return;}
-  pendingDelete=name;
-  confirmDelete("Delete config",'Delete the config <strong>'+escapeHtml(name)+'</strong>? This cannot be undone.',doDelete);
+  /* A delete reloads the form from the next config, so unsaved work is asked about first. */
+  withUnsavedCheck(function(){
+    pendingDelete=name;
+    confirmDelete("Delete config",'Delete the config <strong>'+escapeHtml(name)+'</strong>? '+escapeHtml(UI_TEXT.delete_confirm),doDelete);
+  });
 }
 function doDelete(){var name=pendingDelete;if(!name||!NATIVE||!API){closeModal();return;}
   API.delete_config(name).then(function(r){closeModal();pendingDelete=null;
     if(r&&r.ok){renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
+      if(r.warning)window.pywStatus("warn",r.warning);
       if(r.selected)API.select_config(r.selected).then(function(s){if(s&&s.ok){applyFields(s.fields);applyProject(s.project);applySettings(s.settings);}});
       window.pywStatus("ok","Deleted “"+name+"”.");}
     else window.pywStatus("err",(r&&r.message)||"Could not delete this config.");});
@@ -5004,6 +5158,7 @@ function openLabSettings(openCard){
       '<div class="ls-foot-bar">'+
         '<div class="ls-foot-left">'+
           '<button type="button" class="btn tiny ls-foot-btn" id="lsHistoryBtn" onclick="openLaunchHistory()" aria-label="'+escapeHtml(UI_TEXT.launch_history)+'" title="'+escapeHtml(UI_TEXT.launch_history)+'">'+HISTORY_SVG+'<span>'+escapeHtml(UI_TEXT.launch_history_button)+'</span></button>'+
+          '<button type="button" class="btn tiny ls-foot-btn" id="lsDeletedBtn" onclick="openDeletedConfigs()" title="'+escapeHtml(UI_TEXT.deleted_configs)+'">'+DELETED_SVG+'<span>'+escapeHtml(UI_TEXT.deleted_configs)+'</span></button>'+
           /* Quit (S5, 2026-10-08): out of the launch bar, here at the bottom of
              Settings. Only a short native tooltip (core.QUIT_LAUNCHER_NOTE). */
           '<button type="button" class="btn tiny ls-foot-btn ls-foot-quit" id="lsQuitBtn" onclick="quitLauncher()" title="'+escapeHtml(UI_TEXT.quit_launcher_note)+'">'+escapeHtml(UI_TEXT.quit_launcher)+'</button>'+
@@ -5284,6 +5439,17 @@ function updateDoneHTML(output,restoredNote){
    triggers when the tab is closed. */
 function quitLauncher(){
   if(!NATIVE||!API||!API.quit){window.pywStatus("","Quit works in the app, not the static preview.");return;}
+  withUnsavedCheck(quitNow);
+}
+/* The window's own close box (pywebview): Python cancels the first close and asks here,
+   so it takes the same path as Quit (Api._on_window_closing). */
+window.pywCloseRequested=function(){
+  if(API&&API.close_request_seen)API.close_request_seen();
+  quitLauncher();
+};
+var _leavingForGood=false;
+function quitNow(){
+  _leavingForGood=true;
   API.quit();
   try{window.close();}catch(e){}
   openModal("Launcher closed",
@@ -5320,16 +5486,27 @@ function startHeartbeat(){
      per-run token rides in the query string (the server also accepts it there for
      this beacon). This stops the launcher's OWN server at once; it never touches
      any oTree/experiment process. */
-  var quitBeacon=function(){
+  var beacon=function(path,json){
     try{
       if(navigator.sendBeacon){
-        var body=new Blob(["[]"],{type:"application/json"});
-        navigator.sendBeacon("/api/quit?token="+encodeURIComponent(window.__LAUNCHER_TOKEN__||""),body);
+        var body=new Blob([json],{type:"application/json"});
+        navigator.sendBeacon(path+"?token="+encodeURIComponent(window.__LAUNCHER_TOKEN__||""),body);
       }
     }catch(e){}
   };
-  window.addEventListener("pagehide",quitBeacon);
-  window.addEventListener("beforeunload",quitBeacon);
+  /* ONLY on pagehide, which fires when the page really goes. beforeunload may still be
+     cancelled by the person, and a beacon from there would stop the launcher under a page
+     they chose to stay on. */
+  window.addEventListener("pagehide",function(){beacon("/api/quit","[]");});
+  /* A tab cannot show our own box: unsaved work gets the browser's own "Leave site?"
+     prompt, nothing more (its wording is the browser's; see app/web/README.md). Timers stop
+     while that prompt is up, so the beat says "hidden" first, or the watchdog could stop the
+     launcher under an open prompt. The next regular beat after staying says visible again. */
+  window.addEventListener("beforeunload",function(e){
+    if(_leavingForGood||!isFormDirty())return;
+    beacon("/api/heartbeat","[true]");
+    e.preventDefault();e.returnValue="";
+  });
 }
 /* ON-DEMAND update check, run from the subtle "Update?" text-link in the Lab
    Settings footer. The auto-check only runs on Settings open, at most once a day;
@@ -5368,8 +5545,9 @@ function checkForUpdateNow(){
 var CLONE_ROWS=[];
 function openCloneHistory(){
   var title=UI_TEXT.clone_history_link.replace("%s",GITHUB_ORG||"GitHub");
-  openModal(title,'<div class="ls-card"><div id="cloneHistBody">Loading…</div></div>'+
+  openModal(title,'<div class="table-scroll" id="cloneHistBody">Loading…</div>'+
     '<div class="cta"><button class="btn" onclick="openLabSettings(\'github\')">Back to Settings</button><button class="btn" onclick="closeModal()">Close</button></div>',true);
+  el("infoCard").classList.add("table-modal");
   if(!NATIVE||!API||!API.clone_history){el("cloneHistBody").textContent="The clone log is available in the app, not the static preview.";return;}
   API.clone_history().then(function(r){CLONE_ROWS=(r&&r.rows)||[];renderCloneHistory();});
 }
@@ -5394,11 +5572,69 @@ function cloneHistUse(i){
   var r=CLONE_ROWS[i];if(!r)return;
   useExistingClone(r.folder);   /* same path as "Use that folder" */
 }
+/* Launch history and the config edit log, one popup with two views. table-modal: see CSS. */
+function historyPopup(title,tab,bodyId,note){
+  openModal(title,
+    '<div class="hist-tabs"><button type="button" class="btn tiny" id="histTabLaunch" aria-pressed="'+(tab==="launch")+'" onclick="openLaunchHistory()">'+escapeHtml(UI_TEXT.launch_history)+'</button>'+
+    '<button type="button" class="btn tiny" id="histTabEdits" aria-pressed="'+(tab==="edits")+'" onclick="openConfigHistory()">'+escapeHtml(UI_TEXT.config_history)+'</button></div>'+
+    (note?'<p class="hist-note" id="histNote">'+escapeHtml(note)+'</p>':'')+
+    '<div class="table-scroll" id="'+bodyId+'">Loading…</div>'+
+    '<div class="cta"><button class="btn" onclick="openLabSettings()">Back to Settings</button><button class="btn" id="histClose" onclick="closeModal()">Close</button></div>',true);
+  el("infoCard").classList.add("table-modal");
+}
 function openLaunchHistory(){
-  openModal("Launch history",'<div class="ls-card"><div id="histBody">Loading…</div></div>'+
-    '<div class="cta"><button class="btn" onclick="openLabSettings()">Back to Settings</button><button class="btn" onclick="closeModal()">Close</button></div>',true);
+  historyPopup(UI_TEXT.launch_history,"launch","histBody","");
   if(!NATIVE||!API||!API.launch_history){el("histBody").textContent="Launch history is available in the app, not the static preview.";return;}
   API.launch_history(200).then(function(r){renderLaunchHistory((r&&r.entries)||[]);});
+}
+function openConfigHistory(){
+  historyPopup(UI_TEXT.config_history,"edits","editsBody",UI_TEXT.config_history_note);
+  if(!NATIVE||!API||!API.config_history){el("editsBody").textContent="The edit log is available in the app, not the static preview.";return;}
+  API.config_history(200).then(function(r){renderConfigHistory((r&&r.rows)||[]);});
+}
+function renderConfigHistory(rows){
+  var body=el("editsBody");if(!body)return;
+  if(!rows.length){body.innerHTML='<p class="d">'+escapeHtml(UI_TEXT.config_history_empty)+'</p>';return;}
+  body.innerHTML='<table class="presets-table"><thead><tr><th>When</th><th>Config</th><th>What</th><th>Researcher</th><th>Field</th><th>Was</th><th>Now</th></tr></thead><tbody>'+
+    rows.map(function(r){
+      return '<tr><td class="when">'+escapeHtml(histTime(r.timestamp))+'</td><td>'+escapeHtml(r.config)+'</td><td>'+escapeHtml(r.action)+'</td><td>'+escapeHtml(r.researcher)+
+        '</td><td>'+escapeHtml(r.field)+'</td><td><div class="hist-old">'+escapeHtml(r.old)+'</div></td><td><div class="hist-new">'+escapeHtml(r.new)+'</div></td></tr>';
+    }).join("")+'</tbody></table>';
+}
+/* Deleted configs (core.deleted_config_rows): pick a row to see what is in it, Recover
+   puts it back. Recovering refreshes the sidebar only: the form is not touched. */
+var DELETED_ROWS=[],DELETED_PICK=-1;
+function openDeletedConfigs(){
+  openModal(UI_TEXT.deleted_configs,'<div class="table-scroll" id="delBody">Loading…</div>'+
+    '<div class="del-detail" id="delDetail" hidden></div><div class="hist-note" id="delMsg" hidden></div>'+
+    '<div class="cta"><button class="btn" onclick="openLabSettings()">Back to Settings</button><button class="btn" id="delClose" onclick="closeModal()">Close</button></div>',true);
+  el("infoCard").classList.add("table-modal");
+  if(!NATIVE||!API||!API.deleted_configs){el("delBody").textContent="Deleted configs are available in the app, not the static preview.";return;}
+  API.deleted_configs().then(function(r){DELETED_ROWS=(r&&r.rows)||[];DELETED_PICK=DELETED_ROWS.length?0:-1;renderDeletedConfigs();});
+}
+function renderDeletedConfigs(){
+  var body=el("delBody");if(!body)return;
+  var detail=el("delDetail");
+  if(!DELETED_ROWS.length){body.innerHTML='<p class="d">'+escapeHtml(UI_TEXT.deleted_configs_empty)+'</p>';detail.hidden=true;return;}
+  body.innerHTML='<table class="presets-table"><thead><tr><th>Config</th><th>Researcher</th><th></th></tr></thead><tbody>'+
+    DELETED_ROWS.map(function(r,i){
+      return '<tr class="'+(i===DELETED_PICK?"sel":"")+'" data-del="'+i+'" data-reason="'+escapeHtml(r.reason)+'" onclick="deletedPick('+i+')"><td>'+escapeHtml(r.line)+'</td><td>'+escapeHtml(r.researcher)+
+        '</td><td class="c"><button type="button" class="btn tiny accent" onclick="event.stopPropagation();recoverDeleted('+i+')"><b>'+escapeHtml(UI_TEXT.deleted_recover)+'</b></button></td></tr>';
+    }).join("")+'</tbody></table>';
+  var pick=DELETED_ROWS[DELETED_PICK];
+  detail.hidden=!pick;
+  if(pick)detail.innerHTML=pick.details.map(function(d){return '<div><span class="k">'+escapeHtml(d[0])+'</span> '+escapeHtml(d[1])+'</div>';}).join("");
+}
+function deletedPick(i){DELETED_PICK=i;renderDeletedConfigs();}
+function recoverDeleted(i){
+  var row=DELETED_ROWS[i];if(!row||!API||!API.recover_config)return;
+  API.recover_config(row.id).then(function(r){
+    var m=el("delMsg");
+    if(m){m.hidden=false;m.textContent=(r&&(r.warning||r.message))||"Could not recover.";}
+    if(!r||!r.ok)return;
+    renderConfigList(r.configs,currentConfigName);renderConfigSubline();
+    API.deleted_configs().then(function(d){DELETED_ROWS=(d&&d.rows)||[];DELETED_PICK=DELETED_ROWS.length?0:-1;renderDeletedConfigs();});
+  });
 }
 function renderLaunchHistory(entries){
   var body=el("histBody");if(!body)return;
@@ -5409,7 +5645,7 @@ function renderLaunchHistory(entries){
        a compact "DB reset" badge when the database was wiped, a subtle "kept"
        otherwise, so it reads at a glance. */
     var db=e.resetdb?'<span class="hist-reset">DB reset</span>':'<span class="hist-kept">kept</span>';
-    return '<tr><td>'+escapeHtml(histTime(e.timestamp))+'</td><td>'+escapeHtml(e.config||"(unsaved)")+
+    return '<tr><td class="when">'+escapeHtml(histTime(e.timestamp))+'</td><td>'+escapeHtml(e.config_label||e.config||"(unsaved)")+
       '</td><td>'+escapeHtml((e.lab||"")+" / "+(e.room||""))+'</td><td>'+escapeHtml(e.database||"")+
       '</td><td class="mono">'+escapeHtml(e.version_label||"")+
       '</td><td class="c">'+db+'</td><td class="c">'+escapeHtml(e.seats==null?"":e.seats)+'</td><td class="c">'+out+'</td></tr>';
@@ -5753,14 +5989,17 @@ function showBeforeLaunch(b,issues){
   window._blBriefing=b||{};window._blIssues=window._blChecking?[]:(issues||[]);
   window._blInfoOpen=false;window._blCredsOpen=false;   /* both reveals start collapsed */
   window._linkCheckPending=null;
+  window._blSave=null;   /* a new popup starts from a new offer: ticked, nothing typed */
   /* Order: what needs action first (must-fix, then warnings), then what will
      launch, then the sticky bottom bar. */
   var html='<div id="blIssues"></div>'+
     '<div id="blSummary">'+briefingSummaryHtml(window._blBriefing)+'</div>'+
+    '<div id="blSave"></div>'+
     '<div class="cta bl-cta" id="blActions"></div>';
   openModal("Before you launch",html,true);
   renderBlIssues(window._blIssues);
   renderBlActions(window._blIssues);
+  blLoadSaveOffer();
 }
 function fillBeforeLaunchIssues(issues){
   /* The preflight finished: leave the checking state and render the real issues
@@ -5911,6 +6150,78 @@ function blAddRoom(room){
     blRecheck();
   });
 }
+/* ---- the save row (core.launch_save_offer decides; this only renders) ----
+   Typed values survive a re-check as long as the kind of offer stays the same. */
+window._blSave=null;
+function blLoadSaveOffer(){
+  if(!NATIVE||!API||!API.launch_save_offer)return;
+  API.launch_save_offer(gatherFields(),currentConfigName||"").then(function(r){
+    var offer=(r&&r.offer)||null,old=window._blSave;
+    if(old&&offer&&old.offer.kind===offer.kind)old.offer=offer;
+    else window._blSave=offer?{offer:offer,mode:"new",ticked:true,name:offer.name||"",who:offer.researcher||"",error:""}:null;
+    renderBlSave();renderBlActions(window._blIssues);
+  });
+}
+function blSaving(){var st=window._blSave;return !!(st&&st.offer.kind!=="same");}
+/* Mirror of core.launch_save_action; a test holds the two equal. */
+function blSaveAction(mode,ticked,who,warnings){
+  if(!mode||!ticked)return {label:warnings?UI_TEXT.launch_anyway:UI_TEXT.launch_plain,enabled:true,reason:""};
+  var label=warnings?UI_TEXT.save_and_launch_anyway:UI_TEXT.save_and_launch;
+  if(mode==="new"&&!String(who||"").trim())return {label:label,enabled:false,reason:UI_TEXT.save_needs_researcher};
+  return {label:label,enabled:true,reason:""};
+}
+function blCurrentAction(warnings){
+  var st=window._blSave;
+  if(!blSaving())return blSaveAction(null,false,"",warnings);
+  return blSaveAction(st.mode,st.ticked,st.who,warnings);
+}
+function renderBlSave(){
+  var box=el("blSave");if(!box)return;
+  var st=window._blSave;
+  if(!st){box.innerHTML="";return;}
+  var o=st.offer;
+  if(o.kind==="same"){box.innerHTML='<p class="bl-save-same" id="blSaveSame">'+escapeHtml(o.line)+'</p>';return;}
+  var rep=(st.mode==="replace");
+  var h='<div class="bl-save"><div class="bl-save-line" id="blSaveLine">'+escapeHtml(o.line)+'</div>';
+  h+='<div class="bl-save-row"><label class="bl-save-tick"><input type="checkbox" id="blSaveTick"'+(st.ticked?" checked":"")+' onchange="blSaveTick(this.checked)"> <span>'+escapeHtml(rep?o.replace_label:o.tick_label)+'</span></label>';
+  if(st.ticked&&!rep){
+    h+='<input type="text" id="blSaveName" value="'+escapeHtml(st.name)+'" oninput="blSaveInput()" aria-label="'+escapeHtml(UI_TEXT.save_name_label)+'">';
+    if(o.replace_target)h+='<button type="button" class="btn tiny" id="blSaveReplace" onclick="blSaveMode(\'replace\')">'+escapeHtml(o.replace_label)+'</button>';
+  }
+  h+='</div>';
+  if(st.ticked){
+    if(rep)h+='<p class="bl-save-note strong" id="blSaveReplaceNote">'+escapeHtml(o.replace_note)+' <a href="#" id="blSaveBack" onclick="blSaveMode(\'new\');return false;">'+escapeHtml(o.back_label)+'</a></p>';
+    h+='<div class="bl-save-row"><label class="who" for="blSaveWho">'+escapeHtml(UI_TEXT.save_researcher_label)+'</label>'+
+      '<input type="text" id="blSaveWho" list="blSaveRoster" autocomplete="off" value="'+escapeHtml(st.who)+'" oninput="blSaveInput()">'+
+      '<datalist id="blSaveRoster">'+(o.researchers||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("")+'</datalist></div>';
+    if(rep)h+='<p class="bl-save-note">'+escapeHtml(UI_TEXT.save_replace_hint)+'</p>';
+    h+='<p class="bl-save-reason" id="blSaveReason" hidden></p>';
+  }else if(o.skip_note){
+    h+='<p class="bl-save-note" id="blSaveSkip">'+escapeHtml(o.skip_note)+'</p>';
+  }
+  if(st.error)h+='<div class="modal-err" id="blSaveErr">'+escapeHtml(st.error)+'</div>';
+  box.innerHTML=h+'</div>';
+  blSaveReason();
+}
+function blSaveReason(){
+  var r=el("blSaveReason"),nWarn=(window._blIssues||[]).filter(function(i){return i.level==="warn";}).length;
+  if(!r)return;
+  var text=blCurrentAction(nWarn>0).reason;r.textContent=text;r.hidden=!text;
+}
+function blSaveInput(){
+  var st=window._blSave;if(!st)return;
+  if(el("blSaveName"))st.name=el("blSaveName").value;
+  if(el("blSaveWho"))st.who=el("blSaveWho").value;
+  st.error="";var e=el("blSaveErr");if(e)e.remove();
+  blSaveReason();renderBlActions(window._blIssues);
+}
+function blSaveTick(on){var st=window._blSave;if(!st)return;st.ticked=!!on;st.error="";renderBlSave();renderBlActions(window._blIssues);}
+function blSaveMode(mode){
+  var st=window._blSave;if(!st)return;
+  blSaveInput();st.mode=mode;
+  if(mode==="replace"&&!st.who.trim())st.who=st.offer.replace_researcher||"";
+  renderBlSave();renderBlActions(window._blIssues);
+}
 function renderBlActions(issues){
   var box=el("blActions");if(!box)return;issues=issues||[];
   if(window._blChecking){
@@ -5932,11 +6243,13 @@ function renderBlActions(issues){
     h+='<span class="bl-blocknote">Fix the '+(nBlock===1?"must-fix item":nBlock+" must-fix items")+' above to launch.</span>'+
        '<button class="btn bl-primary bl-launch-off" disabled aria-disabled="true" title="Fix the must-fix items first">Launch</button>';
   }else if(nWarn){
+    var aw=blCurrentAction(true);
     h+='<span class="bl-callout"><span class="ic">&#9888;</span><span class="n">'+nWarn+' warning'+(nWarn===1?"":"s")+'</span>'+
-       '<button class="btn bl-primary bl-anyway" onclick="blProceed()">Launch anyway</button></span>';
+       '<button class="btn bl-primary bl-anyway" id="blGo"'+(aw.enabled?'':' disabled aria-disabled="true"')+' onclick="blProceed()">'+escapeHtml(aw.label)+'</button></span>';
   }else{
+    var ac=blCurrentAction(false);
     h+='<span class="bl-ready"><span class="bl-ic ok">&#10003;</span>Ready to launch</span>'+
-       '<button class="btn accent bl-primary" onclick="blProceed()">Launch</button>';
+       '<button class="btn accent bl-primary" id="blGo"'+(ac.enabled?'':' disabled aria-disabled="true"')+' onclick="blProceed()">'+escapeHtml(ac.label)+'</button>';
   }
   box.innerHTML=h;
 }
@@ -5960,6 +6273,7 @@ function blRecheck(){
     window._blBriefing=b;window._blIssues=is;
     var sum=el("blSummary");if(sum)sum.innerHTML=briefingSummaryHtml(b);
     renderBlIssues(is);renderBlActions(is);
+    blLoadSaveOffer();
   });
 }
 function blProceed(){
@@ -5974,10 +6288,15 @@ function blProceed(){
      the handoff banner in place. */
   /* The live status sits at the TOP of the card (where the issues were), so the
      result -- running or failed -- is the first thing read, not the last. */
+  var nWarn=(window._blIssues||[]).filter(function(i){return i.level==="warn";}).length;
+  if(!blCurrentAction(nWarn>0).enabled)return;
+  var st=window._blSave,save=null;
+  if(blSaving()&&st.ticked)save={mode:st.mode,name:st.name,researcher:st.who,target:st.offer.replace_target||""};
   var is=el("blIssues");if(is)is.innerHTML='<p class="handoff-note" id="takeoverStatus">Starting the server… this popup will confirm when it is up.</p>';
   var act=el("blActions");if(act)act.innerHTML="";
+  var sv=el("blSave");if(sv)sv.innerHTML="";
   el("modalTitle").textContent="Launching…";
-  doLaunch(true);
+  doLaunch(true,save);
 }
 function copyVal(id){try{navigator.clipboard.writeText(val(id));}catch(e){}}
 function togglePw2(id,btn){var i=el(id);if(i.type==="password"){i.type="text";btn.textContent="Hide";}else{i.type="password";btn.textContent="Show";}}
@@ -5985,14 +6304,29 @@ var launchDashboardUrl="";
 /* Run the launch. force=true skips the backend preflight gate (the consolidated
    screen already surfaced everything). The handoff banner is NOT set to success
    here: it stays "launching" until the real result arrives via pywOnLaunchResult. */
-function doLaunch(force){
+function doLaunch(force,save){
   if(!NATIVE||!API)return;
-  /* Pass the SELECTED config name so a server-ready launch stamps last_run on
-     that config by identity, even if its room (or any field) was edited
-     on-screen and never saved back to the preset. */
-  API.launch(gatherFields(),!!force,currentConfigName||"").then(handleLaunchResponse);
+  /* Pass the SELECTED config name: Python decides what the launch runs as, and saves
+     these same fields first when the save row asks for it. */
+  window._launchResultSeen=false;
+  API.launch(gatherFields(),!!force,currentConfigName||"",save||null).then(handleLaunchResponse);
+}
+/* A failed save: back to the popup as it was, the reason on the row, nothing launched. */
+function blSaveFailed(text){
+  var st=window._blSave;if(st)st.error=text;
+  el("modalTitle").textContent="Before you launch";
+  renderBlIssues(window._blIssues);renderBlSave();renderBlActions(window._blIssues);
 }
 function handleLaunchResponse(r){
+  if(r&&r.save_error){blSaveFailed(r.save_error);return;}
+  if(r&&r.ok&&r.selected){
+    /* Saved first, or these settings ARE another saved config: the form now matches
+       that config. A result already in carries the newer rows, so keep those. */
+    currentConfigName=r.selected;
+    if(r.configs&&!window._launchResultSeen)renderConfigList(r.configs,r.selected);
+    markFormClean();
+    if(r.warning)window.pywStatus("warn",r.warning);
+  }
   if(r&&r.ok&&r.launching){enterLaunchingState();return;}   /* wait for pywOnLaunchResult */
   if(r&&!r.ok){var m=(r.message)||"Launch could not start.";showHandoffFailure(m);window.pywStatus("err",m);return;}
 }
@@ -6005,6 +6339,7 @@ function enterLaunchingState(){
    success shows "dashboard sent" + a working link; a failure shows a clear
    failure state and no dead "Click here". */
 window.pywOnLaunchResult=function(res){
+  window._launchResultSeen=true;
   if(res&&res.ok){
     /* Bug E: a READY success carries the refreshed config rows so the sidebar
        shows the just-launched config's new run time and its updated recency
@@ -6137,13 +6472,16 @@ function showBlock(text){
   window._blockText=text;
 }
 function copyBlockText(){try{navigator.clipboard.writeText(window._blockText||"");}catch(e){}}
-function onExport(){
+function onExport(afterSave){
   if(!NATIVE){window.pywStatus("","Save one-click shortcut is a placeholder in the preview.");return;}
   /* The shortcut runs a SAVED config by name (so no password lands in the file),
      so it needs a saved, unmodified config. Python is the source of truth and
      refuses otherwise with needs_save; surface that message as a hint. */
   API.save_shortcut(currentConfigName||"",gatherFields()).then(function(r){
-    if(r&&r.needs_save){window.pywStatus("warn",r.message||"Save these settings as a named config first, then create the one-click shortcut.");return;}
+    /* Python still refuses; here that opens the Save dialog and carries on afterwards. */
+    if(r&&r.needs_save){
+      if(afterSave===true){window.pywStatus("warn",r.message||UI_TEXT.shortcut_needs_save);return;}
+      onSaveAs(function(){onExport(true);},UI_TEXT.shortcut_needs_save);return;}
     /* Browser mode: pywebview's native Save dialog is unavailable, but the
        browser-mode server runs LOCALLY, so it pops a real Save-as dialog on the
        server machine (POST /api/save_file_dialog) and writes the SAME content

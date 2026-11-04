@@ -2442,7 +2442,8 @@ class LauncherApp(object):
         self.new_button = tk.Label(head, text="＋", bg=COLORS["sidebar"], fg=COLORS["muted"],
                                    font=self.fonts.small_bold, cursor="hand2")
         self.new_button.pack(side="right", padx=(6, 0))
-        self.new_button.bind("<Button-1>", lambda _e: self.new_blank())
+        self.new_button.bind("<Button-1>",
+                             lambda _e: self._ask_before_losing_work(self.new_blank))
         Tooltip(self.new_button, lambda: "New / blank config").attach(self.new_button)
         self.count_label = tk.Label(head, text="", bg=COLORS["sidebar"], fg=COLORS["faint"],
                                     font=self.fonts.small, anchor="e")
@@ -2578,7 +2579,8 @@ class LauncherApp(object):
             for holder in (folder, author):
                 widgets.extend(getattr(holder, "parts", ()))
             for widget in widgets:
-                widget.bind("<Button-1>", lambda _e, i=index: self.select_preset(i))
+                widget.bind("<Button-1>", lambda _e, i=index: self._ask_before_losing_work(
+                    lambda: self.select_preset(i)))
 
             # A small delete x, revealed on hover, on every deletable row.
             if not is_builtin(preset):
@@ -2699,7 +2701,7 @@ class LauncherApp(object):
         # to save. Same font in both states: colour only, never a size change.
         self._button_fill_ok = (self.root.tk.call("tk", "windowingsystem") != "aqua")
         self.banner = tk.Button(
-            title_row, text="Save as new config...", command=self.save_as_new,
+            title_row, text=core.SAVE_CONFIG_LABEL, command=self.save_as_new,
             font=self.fonts.small, relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
             highlightthickness=1, highlightbackground=COLORS["card_line"],
             bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["hover"],
@@ -3070,13 +3072,32 @@ class LauncherApp(object):
         # removing moves it back down (core.launch_timeline decides both lists).
         self.timeline_frame = tk.Frame(body, bg=COLORS["card"])
         self.timeline_frame.pack(fill="x", pady=(4, 0))
-        tk.Label(body, text=core.TIMELINE_AVAILABLE_TITLE.upper(), bg=COLORS["card"],
-                 fg=COLORS["faint"], font=fonts.small_bold, anchor="w").pack(fill="x", pady=(10, 0))
-        self.available_frame = tk.Frame(body, bg=COLORS["card"])
-        self.available_frame.pack(fill="x", pady=(2, 0))
+        # Not selected: collapsed on every start, nothing about it is remembered.
+        self.available_open = False
+        self.script_shown = set()
+        self.available_box = tk.Frame(body, bg=COLORS["card"])
+        self.available_box.pack(fill="x", pady=(8, 0))
+        self.available_toggle = tk.Label(self.available_box, text="", bg=COLORS["card"],
+                                         fg=COLORS["muted"], font=fonts.small_bold, anchor="w",
+                                         cursor="hand2")
+        self.available_toggle.bind("<Button-1>", self._toggle_not_selected)
+        self.available_frame = tk.Frame(self.available_box, bg=COLORS["card"])
 
-        add_script = tk.Frame(body, bg=COLORS["card"])
-        add_script.pack(fill="x", pady=(10, 0))
+        # Two buttons; each opens its form. One at a time.
+        add_buttons = tk.Frame(body, bg=COLORS["card"])
+        add_buttons.pack(fill="x", pady=(8, 0))
+        self.script_open_button = ttk.Button(add_buttons, text=core.SCRIPT_ADD_OWN_LABEL,
+                                             style="Slim.TButton",
+                                             command=lambda: self._open_add_form("script"))
+        self.script_open_button.pack(side="left")
+        self.service_open_button = ttk.Button(add_buttons, text=core.WEBSITE_ADD_OWN_LABEL,
+                                              style="Slim.TButton",
+                                              command=lambda: self._open_add_form("website"))
+        self.service_open_button.pack(side="left", padx=(6, 0))
+        self.add_forms = tk.Frame(body, bg=COLORS["card"])
+        self.add_forms.pack(fill="x")
+
+        add_script = self.script_form = tk.Frame(self.add_forms, bg=COLORS["card"])
         add_script.columnconfigure(0, weight=1)
         self.script_new_name = tk.StringVar(self.root, value="")
         self.script_new_wait = tk.StringVar(self.root, value=core.SCRIPT_WAIT_OPTIONS[0][1])
@@ -3085,39 +3106,49 @@ class LauncherApp(object):
         ttk.Combobox(add_script, textvariable=self.script_new_wait, state="readonly", width=24,
                      values=[label for _value, label in core.SCRIPT_WAIT_OPTIONS]).grid(
             row=0, column=1, padx=(6, 0))
-        ttk.Entry(add_script, textvariable=self.script_new_port, width=6).grid(row=0, column=2,
-                                                                               padx=(6, 0))
+        self.script_port_entry = ttk.Entry(add_script, textvariable=self.script_new_port, width=6)
+        self.script_port_entry.grid(row=0, column=2, padx=(6, 0))
         tk.Label(add_script, text="Script name", bg=COLORS["card"], fg=COLORS["faint"],
                  font=fonts.small).grid(row=1, column=0, sticky="w")
         tk.Label(add_script, text=core.SCRIPT_WAIT_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
                  font=fonts.small).grid(row=1, column=1, sticky="w", padx=(6, 0))
-        tk.Label(add_script, text=core.SCRIPT_PORT_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
-                 font=fonts.small).grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self.script_port_label = tk.Label(add_script, text=core.SCRIPT_PORT_LABEL, bg=COLORS["card"],
+                                          fg=COLORS["faint"], font=fonts.small)
+        self.script_port_label.grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self.script_new_wait.trace_add("write", lambda *_a: self._script_port_visible())
+        self._script_port_visible()
         self.script_new_text = _script_text_box(add_script, fonts, height=3)
         self.script_new_text.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        self.script_add_button = ttk.Button(add_script, text=core.SCRIPT_ADD_OWN_LABEL,
+        script_acts = tk.Frame(add_script, bg=COLORS["card"])
+        script_acts.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.script_add_button = ttk.Button(script_acts, text=core.SCRIPT_ADD_LABEL,
                                             command=self._add_own_script)
-        self.script_add_button.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.script_add_button.pack(side="left")
+        ttk.Button(script_acts, text=core.ADD_FORM_CANCEL_LABEL,
+                   command=self._close_add_forms).pack(side="left", padx=(6, 0))
 
-        add = tk.Frame(body, bg=COLORS["card"])
-        add.pack(fill="x", pady=(10, 0))
+        add = self.service_form = tk.Frame(self.add_forms, bg=COLORS["card"])
         add.columnconfigure(1, weight=1)
         self.service_new_name = tk.StringVar(self.root, value="")
         self.service_new_url = tk.StringVar(self.root, value="")
         name_entry = ttk.Entry(add, textvariable=self.service_new_name, width=14)
         name_entry.grid(row=0, column=0, sticky="w")
         url_entry = ttk.Entry(add, textvariable=self.service_new_url)
-        url_entry.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+        url_entry.grid(row=0, column=1, sticky="ew", padx=(6, 0))
         for entry in (name_entry, url_entry):
             entry.bind("<Return>", lambda _e: self._add_own_service())
-        self.service_add_button = ttk.Button(add, text=core.WEBSITE_ADD_OWN_LABEL,
-                                             command=self._add_own_service)
-        self.service_add_button.grid(row=0, column=2, sticky="e")
         tk.Label(add, text="Name", bg=COLORS["card"], fg=COLORS["faint"],
                  font=fonts.small).grid(row=1, column=0, sticky="w")
         tk.Label(add, text="Web address (http:// or https://)", bg=COLORS["card"],
                  fg=COLORS["faint"], font=fonts.small).grid(row=1, column=1, sticky="w",
                                                            padx=(6, 0))
+        service_acts = tk.Frame(add, bg=COLORS["card"])
+        service_acts.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.service_add_button = ttk.Button(service_acts, text=core.WEBSITE_ADD_LABEL,
+                                             command=self._add_own_service)
+        self.service_add_button.pack(side="left")
+        ttk.Button(service_acts, text=core.ADD_FORM_CANCEL_LABEL,
+                   command=self._close_add_forms).pack(side="left", padx=(6, 0))
         self.services_msg = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["warn"],
                                      font=fonts.small, anchor="w", justify="left",
                                      wraplength=420)
@@ -3127,6 +3158,7 @@ class LauncherApp(object):
         self.timeline_reset_links = {}
         self.timeline_arrows = {}
         self.timeline_edit_buttons = {}
+        self.timeline_show_buttons, self.timeline_details, self.timeline_copy_buttons = {}, {}, {}
         self.service_checks = {}
         self.service_tags = {}
         self.service_reset_links = {}
@@ -3268,13 +3300,89 @@ class LauncherApp(object):
                                 wait=result["script"]["wait"],
                                 wait_port=result["script"]["wait_port"])
             self.var["extra_scripts"].set(json.dumps(scripts))
-            self.services_msg.configure(text=result["message"],
-                                        fg=COLORS["ok"] if result["saved"] else COLORS["warn"])
+            warning = result.get("warning", "")
+            self.services_msg.configure(
+                text=warning or result["message"],
+                fg=COLORS["ok"] if result["saved"] and not warning else COLORS["warn"])
             return True, ""
         self.own_script_dialog = ScriptEditDialog(
             self.root, self.fonts, core.OWN_SCRIPT_EDIT_TITLE, script, on_save, own=True,
             note="" if stored else core.OWN_SCRIPT_UNSAVED_NOTE)
         return self.own_script_dialog
+
+    def _script_port_visible(self):
+        """The port box only for the port rule."""
+        wait = dict((text, key) for key, text in core.SCRIPT_WAIT_OPTIONS).get(
+            self.script_new_wait.get(), core.SCRIPT_WAIT_CARRY_ON)
+        for widget in (self.script_port_entry, self.script_port_label):
+            if wait == core.SCRIPT_WAIT_PORT:
+                widget.grid()
+            else:
+                widget.grid_remove()
+
+    def _close_add_forms(self):
+        """Cancel and a successful add: collapse and clear. A failed add never comes here."""
+        self.script_form.pack_forget()
+        self.service_form.pack_forget()
+        self.script_new_name.set("")
+        self.script_new_port.set("")
+        self.script_new_wait.set(core.SCRIPT_WAIT_OPTIONS[0][1])
+        self.script_new_text.delete("1.0", "end")
+        self.service_new_name.set("")
+        self.service_new_url.set("")
+        self.services_msg.configure(text="")
+
+    def _open_add_form(self, kind):
+        self._close_add_forms()
+        (self.script_form if kind == "script" else self.service_form).pack(fill="x", pady=(8, 0))
+
+    def _toggle_not_selected(self, _event=None):
+        self.available_open = not self.available_open
+        self._render_not_selected()
+
+    def _render_not_selected(self, count=None):
+        if count is not None:
+            self._available_count = count
+        count = getattr(self, "_available_count", 0)
+        if not count:
+            self.available_toggle.pack_forget()
+            self.available_frame.pack_forget()
+            return
+        self.available_toggle.configure(
+            text=("▾  " if self.available_open else "▸  ")
+            + core.timeline_available_caption(count).upper())
+        self.available_toggle.pack(fill="x")
+        if self.available_open:
+            self.available_frame.pack(fill="x", pady=(2, 0))
+        else:
+            self.available_frame.pack_forget()
+
+    def _toggle_script_text(self, script_id, label, button):
+        """Show script: a hover is no use on a keyboard or for a long script."""
+        if script_id in self.script_shown:
+            self.script_shown.discard(script_id)
+            label.pack_forget()
+            button.configure(text=core.SCRIPT_SHOW_LABEL)
+        else:
+            self.script_shown.add(script_id)
+            label.pack(fill="x", padx=(24, 0))
+            button.configure(text=core.SCRIPT_HIDE_LABEL)
+
+    def _copy_row_link(self, button, url):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            button.configure(text="Copied")
+        except tk.TclError:
+            return
+
+        def _restore():
+            try:
+                if button.winfo_exists():
+                    button.configure(text=core.TIMELINE_COPY_LINK_LABEL)
+            except tk.TclError:
+                pass
+        self.root.after(1200, _restore)
 
     def _add_own_script(self):
         wait = dict((text, key) for key, text in core.SCRIPT_WAIT_OPTIONS).get(
@@ -3289,10 +3397,7 @@ class LauncherApp(object):
         scripts = self._extra_scripts()
         entry["id"] = core.new_script_id("own-", [s["id"] for s in scripts])
         entry["enabled"] = True
-        self.script_new_name.set("")
-        self.script_new_port.set("")
-        self.script_new_wait.set(core.SCRIPT_WAIT_OPTIONS[0][1])
-        self.script_new_text.delete("1.0", "end")
+        self._close_add_forms()
         self.var["extra_scripts"].set(json.dumps(scripts + [entry]))
 
     def _add_own_service(self):
@@ -3303,8 +3408,7 @@ class LauncherApp(object):
             return
         self.services_msg.configure(text="")
         extras = self._extra_services() + [entry]
-        self.service_new_name.set("")
-        self.service_new_url.set("")
+        self._close_add_forms()
         self.var["extra_services"].set(json.dumps(extras))
 
     def _on_own_service_tick(self, index, var):
@@ -3341,6 +3445,7 @@ class LauncherApp(object):
         self.timeline_rows, self.timeline_checks = {}, {}
         self.timeline_reset_links, self.timeline_arrows = {}, {}
         self.timeline_edit_buttons = {}
+        self.timeline_show_buttons, self.timeline_details, self.timeline_copy_buttons = {}, {}, {}
         self.service_checks, self.service_tags, self.service_reset_links = {}, {}, {}
         self.own_service_rows, self.own_service_checks = [], []
         self.open_browser_check = None
@@ -3348,9 +3453,7 @@ class LauncherApp(object):
             self._timeline_row(self.timeline_frame, row, True)
         for row in data["available"]:
             self._timeline_row(self.available_frame, row, False)
-        if not data["available"]:
-            tk.Label(self.available_frame, text=core.TIMELINE_AVAILABLE_NONE, bg=COLORS["card"],
-                     fg=COLORS["muted"], font=self.fonts.small, anchor="w").pack(fill="x")
+        self._render_not_selected(len(data["available"]))
 
     def _timeline_row(self, parent, row, selected):
         fonts = self.fonts
@@ -3408,10 +3511,10 @@ class LauncherApp(object):
             if row["kind"] == "page":
                 self.service_reset_links[row["service_id"]] = reset
         if row["can_delete"]:
-            ttk.Button(line, text="Delete", style="Slim.TButton",
+            ttk.Button(line, text="Delete", style="Slim.TButton", width=6,
                        command=lambda r=row: self._timeline_delete(r)).pack(side="right")
         if row.get("can_edit"):
-            edit = ttk.Button(line, text="Edit", style="Slim.TButton",
+            edit = ttk.Button(line, text="Edit", style="Slim.TButton", width=4,
                               command=lambda i=row["id"]: self._edit_own_script(i))
             edit.pack(side="right", padx=(0, 4))
             self.timeline_edit_buttons[row["id"]] = edit
@@ -3419,13 +3522,30 @@ class LauncherApp(object):
             # Own scripts change their wait rule through Edit: one place, saved at once.
             tk.Label(line, text=row["wait_text"], bg=COLORS["card"], fg=COLORS["muted"],
                      font=fonts.small).pack(side="left", padx=(8, 0))
-            lines = row["detail"].splitlines()
-            shown = "\n".join(lines[:3]) + ("\n..." if len(lines) > 3 else "")
-            tk.Label(holder, text=shown, bg=COLORS["card"], fg=COLORS["faint"],
-                     font=fonts.mono_small, anchor="w", justify="left").pack(fill="x", padx=(24, 0))
-        elif row["detail"]:
-            tk.Label(holder, text=row["detail"], bg=COLORS["card"], fg=COLORS["faint"],
-                     font=fonts.mono_small, anchor="w").pack(fill="x", padx=(24, 0))
+            # Short by default: the text is a hover or one click away. The click because a
+            # hover is no use on a keyboard or for a long script.
+            detail = _capped_script_view(holder, fonts, row["detail"])
+            opened = row["id"] in self.script_shown
+            show = ttk.Button(line, style="Slim.TButton", width=10,
+                              text=core.SCRIPT_HIDE_LABEL if opened else core.SCRIPT_SHOW_LABEL)
+            show.configure(command=lambda i=row["id"], d=detail, b=show:
+                           self._toggle_script_text(i, d, b))
+            show.pack(side="right", padx=(0, 4))
+            self.timeline_show_buttons[row["id"]] = show
+            self.timeline_details[row["id"]] = detail
+            if opened:
+                detail.pack(fill="x", padx=(24, 0))
+            Tooltip(check, lambda text=row["tip"]: text).attach(check)
+        elif row["kind"] == "page" and row["detail"]:
+            # The address stays off the screen: a hover shows it, Copy link copies it.
+            copy_link = ttk.Button(line, text=core.TIMELINE_COPY_LINK_LABEL, style="Slim.TButton",
+                                   width=9)
+            copy_link.configure(command=lambda b=copy_link, u=row["detail"]:
+                                self._copy_row_link(b, u))
+            copy_link.copy_url = row["detail"]
+            copy_link.pack(side="right", padx=(0, 4))
+            self.timeline_copy_buttons[row["id"]] = copy_link
+            Tooltip(check, lambda text=row["detail"]: text).attach(check)
 
     def _card_database(self, parent):
         card = Card(parent, "2.  Database")
@@ -4855,6 +4975,7 @@ class LauncherApp(object):
         if not hasattr(self, "banner"):
             return
         needs = self._needs_save()
+        self.banner.configure(text=core.save_button_label(self._selected_preset()))
         if self._button_fill_ok:
             if needs:
                 self.banner.configure(
@@ -5652,52 +5773,94 @@ class LauncherApp(object):
         if (project_path or "").strip() != self._git_result_path:
             self._clear_git_result()
 
-    def save_as_new(self, on_success=None):
-        """Save the on-screen settings as a new config. ``on_success`` (used by
-        the save-and-launch flow) is called only after a successful save."""
+    def save_as_new(self, on_success=None, lead=""):
+        """The Save dialog: a new config, or over the edited one. ``on_success`` runs only
+        after a successful save (the shortcut, or what Save / Discard / Cancel was asked
+        for); cancelling or a failed write keeps the form and does not run it. The rules
+        are core's, shared with the launch row and the web face."""
         port_problem = core.launch_port_problem(self.form_values()["port"])
         if port_problem:
             self.log(port_problem, "err")
             self.inline_status.set("error", port_problem)
             return
-        suggestion = ""
-        # Prefill the Researcher field with whoever added the chosen project
-        # folder through the GitHub dialog (the clone log), else the last author
-        # used on this machine (store_extra), else the OS username
-        # (core.suggested_author; the web Save-as uses the same rule).
-        author = core.suggested_author(self.store_extra, self.var["project_path"].get(),
-                                       default_author())
-        if self.selected_index is not None:
-            suggestion = self.presets[self.selected_index].get("name", "") + " (copy)"
-        dialog = NameDialog(self.root, self.fonts, suggestion,
-                            lambda name: unique_name(name, self.presets), author=author,
-                            researchers=core.list_researchers(self.store_extra, self.presets))
-        name = dialog.result
-        if not name:
+        cfg = self.form_values()
+        state = core.save_dialog_state(cfg, self._selected_name(), self.presets, self.store_extra,
+                                       self.lab_presets, default_author(), lead)
+        dialog = NameDialog(self.root, self.fonts, state["name"],
+                            lambda name: unique_name(name, self.presets), author=state["researcher"],
+                            researchers=state["researchers"], state=state)
+        if not dialog.result:
             return
-        preset = preset_from_fields(name, self.form_values(), author=dialog.author,
-                                    lab_presets=self.lab_presets)
-        # Hold the store lock across the in-memory mutation AND the save, so a
-        # background last_run stamp cannot interleave and clobber this new config
-        # (or vice versa). _persist re-acquires the same re-entrant lock.
+        result = self._save_choice(getattr(dialog, "mode", core.SAVE_MODE_NEW), dialog.result,
+                                   dialog.author, cfg, state["replace_target"])
+        if not result["ok"]:
+            messagebox.showerror("Could not save", result["message"], parent=self.root)
+            self.log(result["message"], "err")
+            return
+        if on_success is not None:
+            on_success()
+
+    def _selected_name(self):
+        preset = self._selected_preset()
+        return str(preset.get("name", "")) if preset else ""
+
+    def _save_choice(self, mode, name, researcher, cfg, target=""):
+        """Write through core and select what was saved. On failure nothing changed."""
         with self._store_lock:
-            self.presets.append(preset)
-            # Remember the author for next time (JSON-serialisable; unknown keys
-            # in store_extra are preserved by save_store). The author also joins
-            # the shared researcher roster (also used by the create-db dialog).
-            if preset.get("author"):
-                self.store_extra["last_author"] = preset["author"]
-                core.add_researcher(self.store_extra, preset["author"])
-            if not self._persist():
-                self.presets.remove(preset)
-                return
-        self.selected_index = self._index_of(preset)
+            result = core.save_config_choice(self, mode, name, researcher, cfg, target=target,
+                                             lab_presets=self.lab_presets, keep_order=True)
+        if not result["ok"]:
+            return result
+        self.selected_index = self._index_of(result["preset"])
         self.dirty = False
         self.refresh_dirty()
         self.refresh_sidebar()
-        self.log('Saved a new config "%s". Existing configs were not changed.' % name, "ok")
-        if on_success is not None:
-            on_success()
+        if result["mode"] == core.SAVE_MODE_REPLACE:
+            self.log('Replaced the config "%s".' % result["name"], "ok")
+        else:
+            self.log('Saved a new config "%s". Existing configs were not changed.'
+                     % result["name"], "ok")
+        if result["warning"]:
+            self.log(result["warning"], "warn")
+            self.inline_status.set("warn", result["warning"])
+        return result
+
+    def recover_config(self, entry_id):
+        """Back in the saved list: the sidebar updates, the form is left alone."""
+        selected = self._selected_preset()
+        with self._store_lock:
+            result = core.recover_deleted_config(self, entry_id, keep_order=True)
+            if result["ok"] and selected is not None:
+                self.selected_index = self._index_of(selected)
+        if result["ok"]:
+            self.refresh_sidebar()
+            self.log(result["message"], "ok")
+            if result["warning"]:
+                self.log(result["warning"], "warn")
+        return result
+
+    def _ask_before_losing_work(self, resume):
+        """Run ``resume`` now when the form holds nothing unsaved; otherwise ask Save /
+        Discard / Cancel. Save goes through the Save dialog and resumes after a successful
+        save; cancelling it or a failed write keeps the form. One question at a time, so a
+        double click cannot stack two boxes. The one path for a sidebar click, New, Quit
+        and the window's close box."""
+        if getattr(self, "_unsaved_asking", False):
+            return
+        question = core.unsaved_work_question(self.form_values(), self._selected_name(),
+                                              self.presets, self.lab_presets)
+        if not question["ask"]:
+            resume()
+            return
+        self._unsaved_asking = True
+        try:
+            choice = UnsavedWorkDialog(self.root, self.fonts, question).choice
+        finally:
+            self._unsaved_asking = False
+        if choice == "discard":
+            resume()
+        elif choice == "save":
+            self.save_as_new(on_success=resume)
 
     def delete_selected(self):
         if self.selected_index is None:
@@ -5717,22 +5880,27 @@ class LauncherApp(object):
             return
         if not messagebox.askyesno(
             "Delete config",
-            'Delete the config "%s"?\n\nThis cannot be undone. The fields stay on screen, '
-            "so you can save them again under another name." % name,
+            'Delete the config "%s"?\n\n%s The fields stay on screen, so you can save them '
+            "again under another name." % (name, core.DELETE_CONFIRM_TEXT),
             parent=self.root, icon="warning", default="no",
         ):
             return
         selected_preset = (self.presets[self.selected_index]
                            if self.selected_index is not None else None)
-        # Mutate + save under the store lock so a background stamp cannot race it.
+        # Keeps a copy first (no copy, no delete), then mutates + saves under the store
+        # lock so a background stamp cannot race it.
         with self._store_lock:
-            self.presets = [p for p in self.presets if p is not preset]
+            result = core.delete_config_keeping_copy(self, name)
+            if not result["ok"]:
+                messagebox.showerror("Could not delete", result["message"], parent=self.root)
+                self.log(result["message"], "err")
+                return
             if selected_preset is preset or selected_preset is None:
                 self.selected_index = None
             else:
                 self.selected_index = self._index_of(selected_preset)
-            if not self._persist():
-                return
+        if result["warning"]:
+            self.log(result["warning"], "warn")
         if selected_preset is preset:
             self.dirty = False
             self._apply_header()
@@ -6011,25 +6179,23 @@ class LauncherApp(object):
 
     # -- one-click shortcut ------------------------------------------------
 
-    def save_shortcut(self):
+    def save_shortcut(self, _after_save=False):
         """Save a LIVE one-click shortcut for the current SAVED config.
 
         The shortcut calls the launcher headlessly (``otree_lab_launcher.py
         --run "<name>"``) so it always reflects the latest saved settings and
         the DB password is NOT baked into a loose file -- the secret stays in
         saved_configs.json. It therefore requires a saved, unmodified config; if the
-        current setup is unsaved or edited, the user is asked to save it first.
+        current setup is unsaved or edited, the Save dialog opens first.
         Windows gets a no-console ``.vbs`` (pythonw); macOS a ``.command``."""
-        if self.selected_index is None or self.dirty:
-            messagebox.showinfo(
-                "Save the config first",
-                "A one-click shortcut runs a saved config by name, so the "
-                "password never has to be written into the shortcut file.\n\n"
-                "Save these settings as a named config first (Save as new), then "
-                "create the shortcut.",
-                parent=self.root)
-            self.log("Save these settings as a named config first, then create the "
-                     "one-click shortcut.", "warn")
+        if self.selected_index is None or self._needs_save():
+            # Not a refusal any more: the Save dialog, then carry on to the shortcut. The
+            # check above stays the source of truth, so it is not asked twice in a row.
+            if _after_save:
+                self.log(core.SHORTCUT_NEEDS_SAVE_LEAD, "warn")
+                return
+            self.save_as_new(on_success=lambda: self.save_shortcut(_after_save=True),
+                             lead=core.SHORTCUT_NEEDS_SAVE_LEAD)
             return
         name = self.presets[self.selected_index].get("name", "config")
         # Record the oTree a launch from here runs (and this Python), so the
@@ -6592,8 +6758,11 @@ class LauncherApp(object):
             self.root, self.fonts, get_briefing,
             on_okay=lambda: self._begin_launch(cfg),
             gather_issues=lambda: self.gather_launch_issues(cfg),
-            needs_save=self._needs_save,
-            on_save=self.save_as_new,
+            save_offer=lambda: core.launch_save_offer(
+                cfg, self._selected_name(), self.presets, self.store_extra, self.lab_presets,
+                default_author()),
+            on_save_launch=lambda choice: self._save_choice(
+                choice["mode"], choice["name"], choice["researcher"], cfg, choice["target"]),
             on_view_block=self.show_block,
             admin_username=cfg["admin_username"],
             admin_password=cfg["admin_password"],
@@ -6604,6 +6773,12 @@ class LauncherApp(object):
     def _begin_launch(self, cfg):
         if self.running:
             return
+        # Settings equal to another saved config ARE that config: it gets the run stamp.
+        run_as = core.launch_run_name(cfg, self._selected_name(), self.presets, self.lab_presets)
+        if run_as != self._selected_name():
+            self.selected_index = self._index_of(core.saved_config_named(run_as, self.presets))
+            self.refresh_dirty()
+            self.refresh_sidebar()
         self.inline_status.set("muted", "Launching...")
         self.running = True
         self._expand_log_for_launch()
@@ -7056,18 +7231,21 @@ class LauncherApp(object):
         The author is the selected config's saved author when there is one.
         """
         author = ""
+        changed = False
         if self.selected_index is not None:
-            author = self.presets[self.selected_index].get("author", "")
+            preset = self.presets[self.selected_index]
+            author = preset.get("author", "")
+            changed = core.launch_differs_from_config(cfg, preset, self.lab_presets)
         core.record_session(
             cfg, config_name=config_name, author=author, outcome=outcome,
-            server_ready_seconds=ready_seconds, lab_presets=self.lab_presets)
+            server_ready_seconds=ready_seconds, lab_presets=self.lab_presets,
+            config_changed=changed)
 
     def _stamp_last_run(self, cfg):
-        # Stamp the SELECTED config by identity (its index), even if its room (or
-        # any field) was edited on-screen and never saved -- otherwise a launch
-        # after a "(lab default)" room change would leave the config showing
-        # "never run" (parity with the web _mark_run identity stamp). Only a
-        # brand-new unsaved scratch (no selection) has nothing to stamp.
+        # Stamp the SELECTED config by identity (its index), but not when it was edited
+        # and launched without saving: "Last run" next to a saved config says those saved
+        # settings ran (PRINCIPLES 14; parity with the web _mark_run). The launch history
+        # says "<name> (changed)". A brand-new unsaved scratch has nothing to stamp.
         if self.selected_index is None:
             self.log("These settings are not a saved config, so no config was stamped. "
                      "Use Save as new to keep them.", "muted")
@@ -7080,6 +7258,10 @@ class LauncherApp(object):
             self.log("The Lab default is a launch template, so nothing was stamped. "
                      "Use Save as new to keep these settings.", "muted")
             return
+        if core.launch_differs_from_config(cfg, preset, self.lab_presets):
+            self.log('"%s" ran with unsaved changes, so its saved settings were not marked '
+                     "as run." % preset.get("name", ""), "muted")
+            return
         # Runs on the launch WORKER thread, so stamp + save go through the store
         # lock: a UI-thread "save as new" cannot interleave and lose either change.
         try:
@@ -7091,7 +7273,9 @@ class LauncherApp(object):
         self._on_main(self.refresh_sidebar)
 
     def on_close(self):
-        self.root.destroy()
+        """The window's close box and Quit (Settings) share this one path. A launched
+        study keeps running either way."""
+        self._ask_before_losing_work(self.root.destroy)
 
 
 def _build_credentials_block(parent, fonts, username, password, pre_auth):
@@ -8007,15 +8191,22 @@ class CloneHistoryDialog(object):
 
 
 class NameDialog(object):
-    """Ask for the name of a new config, and explain why a new one is needed."""
+    """The Save dialog: the name of a new config and its researcher, or (with
+    ``state["replace_target"]``) a switch to replacing the edited config. Everything shown
+    comes from core.save_dialog_state."""
 
-    def __init__(self, parent, fonts, suggestion, is_free, author=None, researchers=None):
+    def __init__(self, parent, fonts, suggestion, is_free, author=None, researchers=None,
+                 state=None):
         self.result = None
         self.author = None
+        self.mode = core.SAVE_MODE_NEW
         self.is_free = is_free
+        self.state = state or {}
         self._researchers = list(researchers or [])
+        self._fonts = fonts
+        title = self.state.get("title") or core.SAVE_AS_NEW_TITLE
         top = self.top = tk.Toplevel(parent)
-        top.title("Save as new config")
+        top.title(title)
         top.configure(bg=COLORS["card"])
         _attach_shade(parent, top)
         top.transient(parent)
@@ -8025,25 +8216,54 @@ class NameDialog(object):
         body.pack(fill="both", expand=True, padx=18, pady=16)
         head = tk.Frame(body, bg=COLORS["card"])
         head.pack(fill="x", pady=(0, 10))
-        tk.Label(head, text="Save as new config",
+        tk.Label(head, text=title,
                  bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold, anchor="w").pack(side="left")
         info_tip(head, core.ui_tip("save_as"), font=fonts.small).pack(side="left")
+        if self.state.get("lead"):
+            tk.Label(body, text=self.state["lead"], bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 8))
+        if self.state.get("same_line"):
+            tk.Label(body, text=self.state["same_line"], bg=COLORS["card"], fg=COLORS["muted"],
+                     font=fonts.small, anchor="w").pack(fill="x", pady=(0, 8))
 
-        tk.Label(body, text="Config name", bg=COLORS["card"], fg=COLORS["muted"],
+        self.name_box = tk.Frame(body, bg=COLORS["card"])
+        self.name_box.pack(fill="x")
+        tk.Label(self.name_box, text=core.SAVE_NAME_LABEL, bg=COLORS["card"], fg=COLORS["muted"],
                  font=fonts.small, anchor="w").pack(fill="x")
         self.var = tk.StringVar(top, value=suggestion)
-        entry = ttk.Entry(body, textvariable=self.var, width=44)
-        entry.pack(fill="x", pady=(2, 0))
+        row = tk.Frame(self.name_box, bg=COLORS["card"])
+        row.pack(fill="x", pady=(2, 0))
+        entry = ttk.Entry(row, textvariable=self.var, width=44)
+        entry.pack(side="left", fill="x", expand=True)
+        self.replace_button = None
+        if self.state.get("replace_target"):
+            self.replace_button = ttk.Button(row, text=self.state["replace_label"],
+                                             command=lambda: self.set_mode(core.SAVE_MODE_REPLACE))
+            self.replace_button.pack(side="left", padx=(8, 0))
 
-        tk.Label(body, text="Researcher", bg=COLORS["card"], fg=COLORS["muted"],
-                 font=fonts.small, anchor="w").pack(fill="x", pady=(10, 0))
+        self.replace_box = tk.Frame(body, bg=COLORS["card"])
+        if self.state.get("replace_target"):
+            tk.Label(self.replace_box, text=self.state["replace_note"], bg=COLORS["card"],
+                     fg=COLORS["text"], font=fonts.bold, anchor="w", justify="left",
+                     wraplength=420).pack(fill="x")
+            self.back_link = tk.Label(self.replace_box, text=self.state["back_label"],
+                                      bg=COLORS["card"], fg=COLORS["accent"], font=fonts.small_bold,
+                                      cursor="hand2", anchor="w")
+            self.back_link.pack(fill="x", pady=(4, 0))
+            self.back_link.bind("<Button-1>", lambda _e: self.set_mode(core.SAVE_MODE_NEW))
+
+        self.who_label = tk.Label(body, text=core.SAVE_RESEARCHER_LABEL, bg=COLORS["card"],
+                                  fg=COLORS["muted"], font=fonts.small, anchor="w")
+        self.who_label.pack(fill="x", pady=(10, 0))
         # The shared researcher roster: type a new name or pick a saved one. The
         # chosen name feeds the same roster the create-database dialog uses.
         self.author_var = tk.StringVar(
             top, value=default_author() if author is None else author)
-        author_entry = ttk.Combobox(body, textvariable=self.author_var, width=42,
-                                    values=self._researchers)
-        author_entry.pack(fill="x", pady=(2, 0))
+        self.author_entry = ttk.Combobox(body, textvariable=self.author_var, width=42,
+                                         values=self._researchers)
+        self.author_entry.pack(fill="x", pady=(2, 0))
+        self.who_hint = tk.Label(body, text=core.SAVE_REPLACE_RESEARCHER_HINT, bg=COLORS["card"],
+                                 fg=COLORS["muted"], font=fonts.small, anchor="w")
 
         self.error = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["error"],
                               font=fonts.small, anchor="w", justify="left", wraplength=380)
@@ -8052,7 +8272,8 @@ class NameDialog(object):
         buttons = tk.Frame(body, bg=COLORS["card"])
         buttons.pack(fill="x", pady=(14, 0))
         ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="right")
-        ttk.Button(buttons, text="Save", command=self.confirm).pack(side="right", padx=(0, 8))
+        self.save_button = ttk.Button(buttons, text="Save", command=self.confirm)
+        self.save_button.pack(side="right", padx=(0, 8))
 
         top.bind("<Return>", lambda _e: self.confirm())
         top.bind("<Escape>", lambda _e: self.cancel())
@@ -8065,22 +8286,94 @@ class NameDialog(object):
         _grab_modal(top)
         parent.wait_window(top)
 
+    def set_mode(self, mode):
+        """Replace <name> / Save as new: visibly a different thing to happen."""
+        self.mode = mode
+        self.error.configure(text="")
+        if mode == core.SAVE_MODE_REPLACE:
+            self.name_box.pack_forget()
+            self.replace_box.pack(fill="x", before=self.who_label)
+            self.who_hint.pack(fill="x", before=self.error)
+            self.save_button.configure(text=self.state["replace_label"])
+            if not self.author_var.get().strip():
+                self.author_var.set(self.state.get("replace_researcher", ""))
+        else:
+            self.replace_box.pack_forget()
+            self.who_hint.pack_forget()
+            self.name_box.pack(fill="x", before=self.who_label)
+            self.save_button.configure(text="Save")
+
     def confirm(self):
         name = self.var.get().strip()
+        who = self.author_var.get().strip()
+        if self.mode == core.SAVE_MODE_REPLACE:
+            self.result = self.state["replace_target"]
+            self.author = who
+            self.top.destroy()
+            return
         if not name:
             self.error.configure(text="Type a name for this config.")
             return
         if not self.is_free(name):
             self.error.configure(
-                text='There is already a config called "%s". Pick another name; existing '
-                     "configs are never overwritten." % name)
+                text='There is already a config called "%s". Pick another name.' % name)
+            return
+        if not who:
+            self.error.configure(text=core.SAVE_DIALOG_NEEDS_RESEARCHER)
             return
         self.result = name
-        self.author = self.author_var.get().strip()
+        self.author = who
         self.top.destroy()
 
     def cancel(self):
         self.result = None
+        self.top.destroy()
+
+
+class UnsavedWorkDialog(object):
+    """Save / Discard / Cancel before the form is replaced (core.unsaved_work_question).
+
+    Called from the window's close box and Quit too, so the root may not be on screen: a
+    transient of a withdrawn root never maps on macOS and would hold an unreachable grab
+    (see _grab_modal), so it is only made transient when the root is viewable."""
+
+    def __init__(self, parent, fonts, question):
+        self.choice = "cancel"
+        top = self.top = tk.Toplevel(parent)
+        top.title(question["title"])
+        top.configure(bg=COLORS["card"])
+        top.resizable(False, False)
+        try:
+            viewable = bool(parent.winfo_viewable())
+        except tk.TclError:
+            viewable = False
+        if viewable:
+            top.transient(parent)
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(body, text=question["line"], bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").pack(fill="x")
+        tk.Label(body, text=question["note"], bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.small, anchor="w").pack(fill="x", pady=(4, 0))
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text=question["cancel"],
+                   command=lambda: self._answer("cancel")).pack(side="right")
+        ttk.Button(buttons, text=question["discard"],
+                   command=lambda: self._answer("discard")).pack(side="right", padx=(0, 8))
+        self.save_button = ttk.Button(buttons, text=question["save"],
+                                      command=lambda: self._answer("save"))
+        self.save_button.pack(side="right", padx=(0, 8))
+        top.protocol("WM_DELETE_WINDOW", lambda: self._answer("cancel"))
+        top.bind("<Escape>", lambda _e: self._answer("cancel"))
+        self.save_button.focus_set()
+        if viewable:
+            _center_on(parent, top)
+        _grab_modal(top)
+        parent.wait_window(top)
+
+    def _answer(self, choice):
+        self.choice = choice
         self.top.destroy()
 
 
@@ -8413,15 +8706,19 @@ class LaunchBriefingDialog(object):
     def __init__(self, parent, fonts, briefing, on_okay,
                  gather_issues=None, needs_save=None, on_save=None, on_view_block=None,
                  admin_username="", admin_password="", pre_auth=False, takeover_url="",
-                 on_open_dashboard=None, on_show_log=None):
+                 on_open_dashboard=None, on_show_log=None, save_offer=None, on_save_launch=None):
         # ``briefing`` is either a static dict or a zero-arg callable returning a
         # fresh briefing. The callable form lets an inline fix (Change to SQLite,
         # pick a room) rebuild the caution bar and per-seat link in place.
         self.get_briefing = briefing if callable(briefing) else (lambda: briefing)
         self.on_okay = on_okay
         self.gather_issues = gather_issues or (lambda: [])
-        self.needs_save = needs_save or (lambda: False)
-        self.on_save = on_save
+        # ``save_offer()`` = core.launch_save_offer for the launched settings;
+        # ``on_save_launch(choice)`` saves them first. (needs_save / on_save are the old
+        # one-line save hint, no longer drawn; left in the signature for its callers.)
+        self.save_offer = save_offer or (lambda: None)
+        self.on_save_launch = on_save_launch
+        self._save_state = None
         self.on_view_block = on_view_block
         self.parent = parent
         self.fonts = fonts
@@ -8525,6 +8822,7 @@ class LaunchBriefingDialog(object):
 
         self._render_summary()
         self._render_issues()
+        self._load_save_state()
         self._render_save()
         self._render_action()
 
@@ -8823,15 +9121,10 @@ class LaunchBriefingDialog(object):
         tk.Frame(summary, bg=COLORS["card"], height=6).grid(row=sr, column=0)
 
     def _script_view(self, box, text):
-        """A script's text: a short read-only box that scrolls with the wheel."""
-        lines = text.count("\n") + 1
-        view = tk.Text(box, height=min(lines, 4), width=52, wrap="none", font=self.fonts.mono_small,
-                       bg=COLORS["card"], fg=COLORS["muted"], bd=0, highlightthickness=1,
-                       highlightbackground=COLORS["card_line"])
-        view.insert("1.0", text)
-        view.configure(state="disabled")
-        view.pack(fill="x", padx=(16, 0), pady=(1, 4))
-        return view
+        """A script's text (see _capped_script_view)."""
+        frame = _capped_script_view(box, self.fonts, text)
+        frame.pack(fill="x", padx=(16, 0), pady=(1, 4))
+        return frame.view
 
     def _render_report(self, box, report, headline=None):
         """The launch report (core.launch_report). A mark claims only what was
@@ -9246,19 +9539,143 @@ class LaunchBriefingDialog(object):
             self._fix_button(actions, "Add %s room" % add_room,
                              lambda: self._run_fix(add_room_fix)).pack(side="left", padx=(6, 0))
 
+    def _load_save_state(self):
+        """Read the offer again (an inline fix may have changed the settings). Typed values
+        survive as long as the kind of offer stays the same."""
+        offer = self.save_offer()
+        old = self._save_state
+        if old and offer and old["offer"]["kind"] == offer["kind"]:
+            old["offer"] = offer
+        elif offer:
+            self._save_state = {"offer": offer, "mode": core.SAVE_MODE_NEW, "error": "",
+                                "ticked": tk.BooleanVar(self.top, value=True),
+                                "name": tk.StringVar(self.top, value=offer.get("name", "")),
+                                "who": tk.StringVar(self.top, value=offer.get("researcher", ""))}
+            self._save_state["who"].trace_add("write", lambda *_a: self._save_typed())
+        else:
+            self._save_state = None
+
+    def _saving(self):
+        state = self._save_state
+        return bool(state and state["offer"]["kind"] != core.SAVE_OFFER_SAME)
+
+    def _save_action(self, warnings=False):
+        if not self._saving():
+            return core.launch_save_action(None, False, "", warnings)
+        state = self._save_state
+        return core.launch_save_action(state["mode"], state["ticked"].get(), state["who"].get(),
+                                       warnings)
+
+    def _save_typed(self):
+        """Typing only updates the button and the reason, so the field keeps its focus."""
+        action = self._save_action(any(i.get("level") == "warn" for i in self._issues))
+        reason = getattr(self, "_save_reason", None)
+        try:
+            if reason is not None and reason.winfo_exists():
+                reason.configure(text=action["reason"])
+            button = getattr(self, "launch_button", None)
+            if button is not None and button.winfo_exists():
+                button.configure(text=action["label"],
+                                 state="normal" if action["enabled"] else "disabled")
+        except tk.TclError:
+            pass
+
+    def _save_set_mode(self, mode):
+        state = self._save_state
+        state["mode"] = mode
+        state["error"] = ""
+        if mode == core.SAVE_MODE_REPLACE and not state["who"].get().strip():
+            state["who"].set(state["offer"].get("replace_researcher", ""))
+        self._render_save()
+        self._render_action()
+
+    def _save_toggle(self):
+        self._save_state["error"] = ""
+        self._render_save()
+        self._render_action()
+
     def _render_save(self):
+        """The save row: only when something is unsaved (PRINCIPLES 13). Everything it says
+        comes from core.launch_save_offer."""
         for child in list(self.save_frame.winfo_children()):
             child.destroy()
-        if self._launching or not self.needs_save():
+        self._save_reason = None
+        state = self._save_state
+        if self._launching or not state:
             return
-        line = tk.Frame(self.save_frame, bg=COLORS["card"])
-        line.grid(row=0, column=0, sticky="w", pady=(2, 4))
-        tk.Label(line, text="These settings aren’t saved as a config yet.",
-                 bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
-        link = tk.Label(line, text="Save as a new config", bg=COLORS["card"],
-                        fg=COLORS["accent"], font=self.fonts.small_bold, cursor="hand2")
-        link.pack(side="left", padx=(6, 0))
-        link.bind("<Button-1>", lambda _e: self._do_save())
+        offer = state["offer"]
+        card = COLORS["card"]
+        if offer["kind"] == core.SAVE_OFFER_SAME:
+            tk.Label(self.save_frame, text=offer["line"], bg=card, fg=COLORS["muted"],
+                     font=self.fonts.small, anchor="w").grid(row=0, column=0, sticky="w", pady=(8, 2))
+            return
+        replacing = state["mode"] == core.SAVE_MODE_REPLACE
+        ticked = state["ticked"].get()
+        box = tk.Frame(self.save_frame, bg=card, highlightthickness=1,
+                       highlightbackground=COLORS["card_line"])
+        box.grid(row=0, column=0, sticky="ew", pady=(10, 4))
+        box.columnconfigure(1, weight=1)
+        tk.Label(box, text=offer["line"], bg=card, fg=COLORS["text"], font=self.fonts.bold,
+                 anchor="w").grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
+        tick = tk.Checkbutton(box, variable=state["ticked"], command=self._save_toggle,
+                              text=offer["replace_label"] if replacing else offer["tick_label"],
+                              bg=card, fg=COLORS["text"], activebackground=card,
+                              activeforeground=COLORS["text"], selectcolor=COLORS["card"],
+                              font=self.fonts.small_bold, bd=0, highlightthickness=0)
+        tick.grid(row=1, column=0, sticky="w", padx=(10, 6))
+        self.save_tick = tick
+        row = 2
+        if ticked and not replacing:
+            self.save_name = ttk.Entry(box, textvariable=state["name"])
+            self.save_name.grid(row=1, column=1, sticky="ew", padx=(0, 6))
+            if offer.get("replace_target"):
+                self.save_replace = ttk.Button(
+                    box, text=offer["replace_label"], style="Slim.TButton",
+                    command=lambda: self._save_set_mode(core.SAVE_MODE_REPLACE))
+                self.save_replace.grid(row=1, column=2, sticky="e", padx=(0, 10))
+        if ticked and replacing:
+            note = tk.Frame(box, bg=card)
+            note.grid(row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 0))
+            tk.Label(note, text=offer["replace_note"], bg=card, fg=COLORS["text"],
+                     font=self.fonts.small_bold, anchor="w", justify="left",
+                     wraplength=self.WRAP - 40).pack(fill="x")
+            self.save_back = tk.Label(note, text=offer["back_label"], bg=card, fg=COLORS["accent"],
+                                      font=self.fonts.small_bold, cursor="hand2", anchor="w")
+            self.save_back.pack(fill="x", pady=(2, 0))
+            self.save_back.bind("<Button-1>", lambda _e: self._save_set_mode(core.SAVE_MODE_NEW))
+            row += 1
+        if ticked:
+            tk.Label(box, text=core.SAVE_RESEARCHER_LABEL, bg=card, fg=COLORS["muted"],
+                     font=self.fonts.small, anchor="w").grid(row=row, column=0, sticky="w",
+                                                             padx=(10, 6), pady=(6, 0))
+            self.save_who = ttk.Combobox(box, textvariable=state["who"],
+                                         values=offer.get("researchers", []))
+            self.save_who.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=(6, 0))
+            row += 1
+            if replacing:
+                tk.Label(box, text=core.SAVE_REPLACE_RESEARCHER_HINT, bg=card, fg=COLORS["muted"],
+                         font=self.fonts.small, anchor="w").grid(row=row, column=0, columnspan=3,
+                                                                 sticky="w", padx=10, pady=(2, 0))
+                row += 1
+            self._save_reason = tk.Label(box, text="", bg=card, fg=COLORS["warn"],
+                                         font=self.fonts.small_bold, anchor="w")
+            self._save_reason.grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(2, 0))
+            row += 1
+        elif offer.get("skip_note"):
+            self.save_skip = tk.Label(box, text=offer["skip_note"], bg=card, fg=COLORS["muted"],
+                                      font=self.fonts.small, anchor="w", justify="left",
+                                      wraplength=self.WRAP - 40)
+            self.save_skip.grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 0))
+            row += 1
+        self.save_error = None
+        if state["error"]:
+            self.save_error = tk.Label(box, text=state["error"], bg=card, fg=COLORS["error"],
+                                       font=self.fonts.small_bold, anchor="w", justify="left",
+                                       wraplength=self.WRAP - 40)
+            self.save_error.grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 0))
+            row += 1
+        tk.Frame(box, bg=card, height=6).grid(row=row, column=0)
+        self._save_typed()
 
     def _render_action(self):
         """The state-dependent bottom bar, the ONLY place a launch is offered:
@@ -9322,7 +9739,9 @@ class LaunchBriefingDialog(object):
             tk.Label(callout, text="%d warning%s" % (n_warn, "" if n_warn == 1 else "s"),
                      bg=COLORS["warn_soft"], fg=COLORS["warn"],
                      font=self.fonts.bold).pack(side="left", padx=(6, 12), pady=7)
-            okay = tk.Button(callout, text="Launch anyway", command=self._okay,
+            action = self._save_action(True)
+            okay = tk.Button(callout, text=action["label"], command=self._okay,
+                             state="normal" if action["enabled"] else "disabled",
                              font=self.fonts.bold, bg=COLORS["warn"], fg="#ffffff",
                              activebackground=COLORS["warn"], activeforeground="#ffffff",
                              relief="flat", bd=0, padx=16, pady=6, cursor="hand2")
@@ -9334,7 +9753,9 @@ class LaunchBriefingDialog(object):
                      font=self.fonts.bold).pack(side="left")
             tk.Label(ready, text="Ready to launch", bg=COLORS["card"], fg=COLORS["ok"],
                      font=self.fonts.bold).pack(side="left", padx=(5, 0))
-            okay = tk.Button(self.action, text="Launch", command=self._okay,
+            action = self._save_action(False)
+            okay = tk.Button(self.action, text=action["label"], command=self._okay,
+                             state="normal" if action["enabled"] else "disabled",
                              font=self.fonts.bold, bg=COLORS["accent"], fg="#ffffff",
                              activebackground=COLORS["accent_dark"], activeforeground="#ffffff",
                              relief="flat", bd=0, padx=20, pady=6, cursor="hand2")
@@ -9371,6 +9792,7 @@ class LaunchBriefingDialog(object):
     def _rerender(self):
         self._render_summary()
         self._render_issues()
+        self._load_save_state()
         self._render_save()
         self._render_action()
         try:
@@ -9417,6 +9839,20 @@ class LaunchBriefingDialog(object):
         # disabled in that state, but Return could otherwise reach here).
         if any(i.get("level") == "block" for i in self._issues):
             return
+        n_warn = any(i.get("level") == "warn" for i in self._issues)
+        if not self._save_action(n_warn)["enabled"]:
+            return
+        state = self._save_state
+        if self._saving() and state["ticked"].get() and self.on_save_launch is not None:
+            # Save first. A failed save says why on the row and does NOT launch.
+            result = self.on_save_launch({
+                "mode": state["mode"], "name": state["name"].get(),
+                "researcher": state["who"].get(),
+                "target": state["offer"].get("replace_target", "")})
+            if not result["ok"]:
+                state["error"] = result["message"]
+                self._render_save()
+                return
         self._launching = True
         self.on_okay()
         self._enter_launching()
@@ -10666,6 +11102,40 @@ class LabPresetEditDialog(object):
         _modal_close(self.top)
 
 
+def _capped_script_view(parent, fonts, text):
+    """Script text, wherever it is shown: read-only, long lines wrap, at most
+    core.SCRIPT_TEXT_MAX_LINES lines and then it scrolls inside itself. A short script
+    takes only what it needs. Returns the frame (``frame.view`` = the text widget)."""
+    frame = tk.Frame(parent, bg=COLORS["card"], highlightthickness=1,
+                     highlightbackground=COLORS["card_line"])
+    view = tk.Text(frame, width=40, wrap="char", font=fonts.mono_small, bg=COLORS["card"],
+                   fg=COLORS["muted"], bd=0, highlightthickness=0,
+                   height=min(max(1, str(text).count("\n") + 1), core.SCRIPT_TEXT_MAX_LINES))
+    bar = ttk.Scrollbar(frame, orient="vertical", command=view.yview)
+    view.configure(yscrollcommand=bar.set)
+    view.insert("1.0", text)
+    view.configure(state="disabled")
+    view.pack(side="left", fill="both", expand=True)
+
+    def fit(_event=None):
+        try:
+            lines = int(view.tk.call(view._w, "count", "-displaylines", "1.0", "end"))
+        except (tk.TclError, ValueError):
+            return
+        height = min(max(1, lines), core.SCRIPT_TEXT_MAX_LINES)
+        if int(view.cget("height")) != height:
+            view.configure(height=height)
+        scrolls = lines > core.SCRIPT_TEXT_MAX_LINES
+        if scrolls and not bar.winfo_manager():
+            bar.pack(side="right", fill="y", before=view)
+        elif not scrolls and bar.winfo_manager():
+            bar.pack_forget()
+    view.bind("<Configure>", fit)
+    frame.view = view
+    frame.bar = bar
+    return frame
+
+
 def _script_text_box(parent, fonts, height=4, width=46):
     """A multi-line box for a script's text. Enter types a new line."""
     return tk.Text(parent, height=height, width=width, wrap="none", font=fonts.mono_small,
@@ -10852,28 +11322,58 @@ class ServiceEditDialog(object):
 
 
 class LaunchHistoryDialog(object):
-    """A read-only viewer for the launch history log (fable review F).
+    """A read-only viewer: the launch history log and the config edit log.
 
-    Lists the most recent launches (newest first) from data/sessions.jsonl:
-    time, config, lab/room, database, seats and outcome. It is a passive VIEWER
-    -- it never manages or re-runs anything (mission: a launcher, not a data
-    platform); the log is written fail-soft by core.record_session on each launch.
-    """
+    A passive VIEWER, it never manages or re-runs anything (mission: a launcher, not a
+    data platform). Both logs are written fail-soft by core.
+
+    The footer is packed FIRST and the tables live in their own frames, each scrolling
+    inside itself: packing the footer after a left-packed table gave it only what the
+    table left over, which was nothing, so Close could not be reached."""
+
+    LAUNCH_COLUMNS = (("time", "When", 110, "w"),
+                      ("config", "Config", 320, "w"),
+                      ("labroom", "Lab / room", 170, "w"),
+                      ("database", "Database", 190, "w"),
+                      ("version", "Study version", 150, "w"),
+                      ("seats", "Seats", 50, "center"),
+                      ("outcome", "Outcome", 70, "center"))
+    EDIT_COLUMNS = (("time", "When", 110, "w"),
+                    ("config", "Config", 170, "w"),
+                    ("action", "What", 100, "w"),
+                    ("researcher", "Researcher", 110, "w"),
+                    ("field", "Field", 170, "w"),
+                    ("old", "Was", 170, "w"),
+                    ("new", "Now", 170, "w"))
 
     def __init__(self, parent, fonts):
         self.fonts = fonts
         top = self.top = tk.Toplevel(parent)
-        top.title("Launch history")
+        top.title(core.LAUNCH_HISTORY_LABEL)
         top.configure(bg=COLORS["window"])
         _attach_shade(parent, top)
         top.transient(parent)
-        top.geometry("780x560")
+        # As wide as the table needs, up to the screen; a narrower window scrolls the table.
+        wanted = max(sum(c[2] for c in self.LAUNCH_COLUMNS),
+                     sum(c[2] for c in self.EDIT_COLUMNS)) + 60
+        width = min(wanted, max(520, top.winfo_screenwidth() - 80))
+        height = min(560, max(420, top.winfo_screenheight() - 120))
+        top.geometry("%dx%d" % (width, height))
         top.minsize(520, 420)
 
+        footer = tk.Frame(top, bg=COLORS["window"])
+        footer.pack(side="bottom", fill="x", padx=16, pady=(0, 12))
+        self.close_button = ttk.Button(footer, text="Close", command=top.destroy)
+        self.close_button.pack(side="right")
+
         header = tk.Frame(top, bg=COLORS["window"])
-        header.pack(fill="x", padx=16, pady=(14, 4))
-        tk.Label(header, text="Recent launches", bg=COLORS["window"], fg=COLORS["text"],
-                 font=fonts.bold, anchor="w").pack(side="left")
+        header.pack(side="top", fill="x", padx=16, pady=(14, 4))
+        self.launch_tab = ttk.Button(header, text=core.LAUNCH_HISTORY_LABEL,
+                                     command=lambda: self.show("launch"))
+        self.launch_tab.pack(side="left")
+        self.edits_tab = ttk.Button(header, text=core.CONFIG_HISTORY_LABEL,
+                                    command=lambda: self.show("edits"))
+        self.edits_tab.pack(side="left", padx=(8, 0))
 
         try:
             ttk.Style(top).configure(
@@ -10881,57 +11381,95 @@ class LaunchHistoryDialog(object):
                 rowheight=int(fonts.body.metrics("linespace")) + 8)
         except tk.TclError:
             pass
-        cols = ("time", "config", "labroom", "database", "version", "seats", "outcome")
-        tree = self.tree = ttk.Treeview(top, columns=cols, show="headings",
-                                        style="History.Treeview")
-        for key, label, width, anchor in (
-                ("time", "When", 130, "w"),
-                ("config", "Config", 120, "w"),
-                ("labroom", "Lab / room", 130, "w"),
-                ("database", "Database", 150, "w"),
-                ("version", "Study version", 150, "w"),
-                ("seats", "Seats", 50, "center"),
-                ("outcome", "Outcome", 70, "center")):
-            tree.heading(key, text=label)
-            tree.column(key, width=width, anchor=anchor)
-        scroll = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True, padx=(16, 0), pady=(4, 12))
-        scroll.pack(side="left", fill="y", padx=(0, 8), pady=(4, 12))
-
+        self.launch_view, self.tree = self._table(top, self.LAUNCH_COLUMNS)
+        self.edits_view = tk.Frame(top, bg=COLORS["window"])
+        self.edits_note = tk.Label(self.edits_view, text=core.CONFIG_HISTORY_NOTE,
+                                   bg=COLORS["window"], fg=COLORS["muted"], font=fonts.small,
+                                   anchor="w")
+        self.edits_note.pack(side="top", fill="x", padx=16)
+        self.edit_detail = tk.Text(self.edits_view, height=6, wrap="word", bg=COLORS["card"],
+                                   fg=COLORS["text"], font=fonts.small, relief="flat",
+                                   state="disabled")
+        self.edit_detail.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
+        holder, self.edits_tree = self._table(self.edits_view, self.EDIT_COLUMNS)
+        holder.pack(side="top", fill="both", expand=True)
+        self.edits_tree.bind("<<TreeviewSelect>>", self._show_edit_detail)
         self.empty = tk.Label(top, text="", bg=COLORS["window"], fg=COLORS["muted"],
                               font=fonts.small)
-
-        footer = tk.Frame(top, bg=COLORS["window"])
-        footer.pack(fill="x", padx=16, pady=(0, 12))
-        ttk.Button(footer, text="Close", command=top.destroy).pack(side="right")
-
+        self.edit_rows = []
         self._load()
+        self.show("launch")
         _center_on(parent, top, divisor=6)
         try:
             _grab_modal(top)
         except tk.TclError:
             pass
 
+    def _table(self, master, columns):
+        """A table scrolling inside its own frame, both ways."""
+        frame = tk.Frame(master, bg=COLORS["window"])
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        tree = ttk.Treeview(frame, columns=[c[0] for c in columns], show="headings",
+                            style="History.Treeview", height=6)
+        for key, label, width, anchor in columns:
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=40, anchor=anchor, stretch=False)
+        down = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        across = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=down.set, xscrollcommand=across.set)
+        tree.grid(row=0, column=0, sticky="nsew", padx=(16, 0), pady=(4, 0))
+        down.grid(row=0, column=1, sticky="ns", padx=(0, 16), pady=(4, 0))
+        across.grid(row=1, column=0, sticky="ew", padx=(16, 0), pady=(0, 10))
+        return frame, tree
+
+    def show(self, view):
+        for part in (self.launch_view, self.edits_view, self.empty):
+            part.pack_forget()
+        text = ""
+        if view == "edits":
+            self.top.title(core.CONFIG_HISTORY_LABEL)
+            if self.edit_rows:
+                self.edits_view.pack(side="top", fill="both", expand=True)
+            else:
+                text = core.CONFIG_HISTORY_EMPTY
+        else:
+            self.top.title(core.LAUNCH_HISTORY_LABEL)
+            if self.tree.get_children():
+                self.launch_view.pack(side="top", fill="both", expand=True)
+            else:
+                text = "No launches have been logged yet. Each launch adds a line here."
+        if text:
+            self.empty.configure(text=text)
+            self.empty.pack(side="top", fill="both", expand=True, padx=16, pady=24)
+
     def _load(self):
-        entries = core.read_sessions(limit=200)
-        if not entries:
-            self.tree.pack_forget()
-            self.empty.configure(
-                text="No launches have been logged yet. Each launch adds a line here.")
-            self.empty.pack(fill="both", expand=True, padx=16, pady=24)
-            return
-        for entry in entries:
+        for entry in core.read_sessions(limit=200):
             lab_room = "%s / %s" % (entry.get("lab", ""), entry.get("room", ""))
             outcome = "OK" if entry.get("outcome") == "ok" else "Failed"
             self.tree.insert("", "end", values=(
                 self._fmt_time(entry.get("timestamp", "")),
-                entry.get("config", "") or "(unsaved)",
+                core.session_config_label(entry),
                 lab_room,
                 entry.get("database", ""),
                 core.study_version_label(entry.get("study_version")),
                 entry.get("seats", ""),
                 outcome))
+        self.edit_rows = core.config_history_rows(200)
+        for index, row in enumerate(self.edit_rows):
+            self.edits_tree.insert("", "end", iid=str(index), values=(
+                self._fmt_time(row["timestamp"]), row["config"], row["action"], row["researcher"],
+                row["field"], row["old"].replace("\n", " "), row["new"].replace("\n", " ")))
+
+    def _show_edit_detail(self, _event=None):
+        chosen = self.edits_tree.selection()
+        if not chosen:
+            return
+        row = self.edit_rows[int(chosen[0])]
+        self.edit_detail.configure(state="normal")
+        self.edit_detail.delete("1.0", "end")
+        self.edit_detail.insert("1.0", "%s\nWas: %s\nNow: %s" % (row["field"], row["old"], row["new"]))
+        self.edit_detail.configure(state="disabled")
 
     @staticmethod
     def _fmt_time(stamp):
@@ -10940,6 +11478,105 @@ class LaunchHistoryDialog(object):
         except (TypeError, ValueError):
             return str(stamp)
         return when.strftime("%d %b %H:%M")
+
+
+class DeletedConfigsDialog(object):
+    """Deleted configs, newest first (core.deleted_config_rows). Choose a row to see what
+    is in it; Recover acts on the chosen row and names it (a ttk table cannot hold a button
+    per row). Footer packed first, the table scrolls inside itself, as in the history."""
+
+    COLUMNS = (("line", "Config", 400, "w"), ("researcher", "Researcher", 150, "w"))
+
+    def __init__(self, parent, fonts, app):
+        self.app = app
+        self.rows = []
+        top = self.top = tk.Toplevel(parent)
+        top.title(core.DELETED_CONFIGS_LABEL)
+        top.configure(bg=COLORS["window"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.geometry("%dx%d" % (min(640, max(520, top.winfo_screenwidth() - 80)),
+                                min(480, max(380, top.winfo_screenheight() - 120))))
+        top.minsize(460, 340)
+        footer = tk.Frame(top, bg=COLORS["window"])
+        footer.pack(side="bottom", fill="x", padx=16, pady=(0, 12))
+        self.close_button = ttk.Button(footer, text="Close", command=top.destroy)
+        self.close_button.pack(side="right")
+        self.recover_button = ttk.Button(footer, text=core.DELETED_RECOVER_LABEL,
+                                         command=self.recover)
+        self.recover_button.pack(side="left")
+        self.message = tk.Label(top, text="", bg=COLORS["window"], fg=COLORS["muted"],
+                                font=fonts.small, anchor="w", justify="left", wraplength=560)
+        self.message.pack(side="bottom", fill="x", padx=16, pady=(0, 6))
+        self.detail = tk.Text(top, height=5, wrap="word", bg=COLORS["card"], fg=COLORS["text"],
+                              font=fonts.small, relief="flat", state="disabled")
+        self.detail.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
+        self.table = tk.Frame(top, bg=COLORS["window"])
+        self.table.rowconfigure(0, weight=1)
+        self.table.columnconfigure(0, weight=1)
+        self.tree = ttk.Treeview(self.table, columns=[c[0] for c in self.COLUMNS], show="headings",
+                                 selectmode="browse", height=4)
+        for key, label, width, anchor in self.COLUMNS:
+            self.tree.heading(key, text=label)
+            self.tree.column(key, width=width, minwidth=40, anchor=anchor, stretch=False)
+        down = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview)
+        across = ttk.Scrollbar(self.table, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=down.set, xscrollcommand=across.set)
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=(16, 0), pady=(12, 0))
+        down.grid(row=0, column=1, sticky="ns", padx=(0, 16), pady=(12, 0))
+        across.grid(row=1, column=0, sticky="ew", padx=(16, 0), pady=(0, 8))
+        self.tree.bind("<<TreeviewSelect>>", self._show_detail)
+        self.empty = tk.Label(top, text=core.DELETED_CONFIGS_EMPTY, bg=COLORS["window"],
+                              fg=COLORS["muted"], font=fonts.small)
+        self._load()
+        _center_on(parent, top, divisor=6)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+
+    def _load(self):
+        self.tree.delete(*self.tree.get_children())
+        self.table.pack_forget()
+        self.empty.pack_forget()
+        self.rows = core.deleted_config_rows(self.app.lab_presets)
+        for index, row in enumerate(self.rows):
+            self.tree.insert("", "end", iid=str(index), values=(row["line"], row["researcher"]))
+        if self.rows:
+            self.table.pack(side="top", fill="both", expand=True)
+            self.tree.selection_set("0")
+            self._show_detail()
+            self.recover_button.pack(side="left")
+            self.detail.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
+        else:
+            self.empty.pack(side="top", fill="both", expand=True, padx=16, pady=24)
+            self.recover_button.pack_forget()
+            self.detail.pack_forget()
+
+    def _chosen(self):
+        chosen = self.tree.selection()
+        return self.rows[int(chosen[0])] if chosen else None
+
+    def _show_detail(self, _event=None):
+        row = self._chosen()
+        if row is None:
+            return
+        self.recover_button.configure(text="%s %s" % (core.DELETED_RECOVER_LABEL, row["name"]))
+        self.detail.configure(state="normal")
+        self.detail.delete("1.0", "end")
+        self.detail.insert("1.0", "\n".join("%s: %s" % (k, v) for k, v in row["details"]))
+        self.detail.configure(state="disabled")
+
+    def recover(self):
+        row = self._chosen()
+        if row is None:
+            return
+        result = self.app.recover_config(row["id"])
+        self.message.configure(text=result["warning"] or result["message"],
+                               fg=COLORS["warn"] if result["warning"] or not result["ok"]
+                               else COLORS["muted"])
+        if result["ok"]:
+            self._load()
 
 
 class SettingsCard(tk.Frame):
@@ -11037,6 +11674,10 @@ class LabSettingsDialog(object):
                                          command=self._open_history)
         self.history_button.pack(side="left")
         Tooltip(self.history_button, lambda: core.LAUNCH_HISTORY_LABEL).attach(self.history_button)
+        self.deleted_button = ttk.Button(
+            bottom, text=glyph_or_fallback("\U0001F5D1", "").replace("\U0001F5D1", "\U0001F5D1 ")
+            + core.DELETED_CONFIGS_LABEL, command=self._open_deleted)
+        self.deleted_button.pack(side="left", padx=(8, 0))
         self.quit_button = ttk.Button(bottom, text=core.QUIT_LAUNCHER_LABEL,
                                       command=self._quit_launcher)
         self.quit_button.pack(side="left", padx=(8, 0))
@@ -11285,8 +11926,7 @@ class LabSettingsDialog(object):
                     tags.insert(0, core.SCRIPT_HIDDEN_SHORT)
                 tk.Label(head, text=", ".join(tags), bg=COLORS["card"], fg=COLORS["muted"],
                          font=fonts.small).pack(side="left", padx=(6, 0))
-                tk.Label(text, text=script["script"], bg=COLORS["card"], fg=COLORS["faint"],
-                         font=fonts.mono_small, anchor="w", justify="left").pack(fill="x")
+                _capped_script_view(text, fonts, script["script"]).pack(fill="x", pady=(2, 0))
                 delete = ttk.Button(line, text="Delete", style="Slim.TButton",
                                     command=lambda l=lab["id"], sid=script["id"]:
                                     self._delete_script(l, sid))
@@ -11963,6 +12603,9 @@ class LabSettingsDialog(object):
 
     def _open_history(self):
         LaunchHistoryDialog(self.top, self.fonts)
+
+    def _open_deleted(self):
+        DeletedConfigsDialog(self.top, self.fonts, self.app)
 
     # -- labs ---------------------------------------------------------------
 

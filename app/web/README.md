@@ -47,7 +47,11 @@ extra.
 | Config dropdown | `select_config` | loads that saved config's fields |
 | Browse (project) | `pick_project_folder` | native folder dialog → validate → show apps |
 | Browse (participant file) | `pick_participant_file` | native file dialog |
-| Save as new… | `save_config_as` | writes to `saved_configs.json` |
+| Save config... / Save as new config... | `save_dialog_state`, `save_config_as` | the same rules as the launch row (`core.save_config_choice`): new, or Replace (old version to Deleted configs) |
+| Before you launch, save row | `launch_save_offer`, `launch(save=...)` | saves those fields first, then launches them; a failed save does not launch |
+| Sidebar click, delete, Quit, window close | `unsaved_question` | Save / Discard / Cancel when the form has unsaved work |
+| History > Config edits | `config_history` | read-only edit log |
+| Settings > Deleted configs | `deleted_configs`, `recover_config` | the list; Recover refreshes the sidebar and leaves the form alone |
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
 | Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `machine.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
@@ -90,3 +94,15 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
   browser-mode server.
 - Design spec: the full design spec that bossman keeps outside this repo (ask
   bossman for the path).
+
+## Closing with unsaved work
+
+- **Quit and the pywebview window's close box** get the real Save / Discard / Cancel. The
+  close event runs on the GUI thread and waits, so asking the page from inside it would deadlock:
+  the first close is cancelled and the page asked from a worker (`Api._on_window_closing`); if the
+  page does not answer in 4 s the window closes anyway.
+- **A plain browser tab cannot show a custom box.** With unsaved work it gets only the browser's
+  own "Leave site?" prompt (browsers fix its wording, and may skip it if the page never had a
+  click), with no Save choice. The quit beacon fires on `pagehide` only, never `beforeunload`, so
+  staying on the page does not stop the launcher. The beat says "hidden" while that prompt is up,
+  so the heartbeat watchdog cannot stop the launcher under it.

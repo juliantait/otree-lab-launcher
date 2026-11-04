@@ -203,7 +203,7 @@ takes the setup.
      (always the launcher's git-ignored `local/` folder, each time the dialog
      opens); **Change…** picks another for that one study. On success the dialog
      closes and the new folder is selected, with *added by <your name>* after its
-     name (hover it for the repository and date), and **Save as new config** is
+     name (hover it for the repository and date), and the Save dialog is
      prefilled with that name. If something is wrong the dialog **stays open**, says what to
      do in bold, and the button becomes **Retry**: *Check the name, or use
      another GitHub login* (GitHub answers the same way for a repository that
@@ -407,18 +407,48 @@ use](github_org_sync.md).)
    the lab copy. `git pull` still comes from your own copy.
 
 **(ii) Save or pick a config.** A config is your study's saved settings (folder,
-lab, database, seats). Saving one with **Save as new config...** (top right)
+lab, database, seats). Saving one with **Save config...** (top right)
 writes it so you can relaunch that exact study in one click later — pick it from
 the config list on the left instead of setting everything up again. Right next
 to it, **Save one-click shortcut** saves a desktop shortcut for a saved config:
 double-clicking it starts that config and opens the oTree monitor straight away,
-without opening the launcher window. The header names the config on screen;
+without opening the launcher window. On a setup that is not saved yet it opens the Save
+dialog first, then carries on to the shortcut. The header names the config on screen;
 an amber dot after the name and "Unsaved changes" under it mean the screen
-differs from what is saved, and **Save as new config...** turns pink. Each
+differs from what is saved, and the Save button turns pink. Each
 config in the list on the left shows its folder, who saved it and when it was
 last launched ("Never run" until then).
 
-**Quitting.** **Quit** is at the bottom of Settings (the gear), next to
+**Saving when you are ready.** The Save button at the top stays visible. It reads **Save
+config...** until a saved config is on screen, then **Save as new config...**. It works the
+same as the save row in **Before you launch**, which appears only when something is unsaved:
+
+- Nothing saved yet: **"This isn't saved yet. It will be saved as:"**, ticked, named after the
+  study folder. A config needs a **researcher**: type one or pick one from the list. The button
+  then reads **Save and launch**. Untick to launch without saving; it then reads **Launch**.
+- A saved config with edits: **Save as new** with the next version ("Dictator study v2"), or
+  **Replace <name>**, which runs these settings from its one-click shortcut too and sends the
+  old version to Deleted configs. Untick to launch without saving: the shortcut and the next
+  session keep the saved version, and the launch history says "<name> (changed)".
+- Settings identical to another saved config: one line, "Same as <name>", and the launch runs
+  as that config.
+
+A failed save says why on the row and does not launch. If you switch config, delete, start a
+new one, quit or close the window with unsaved changes, the launcher asks **Save / Discard /
+Cancel** first. A launched study keeps running either way. In a plain browser tab a page cannot
+show its own box, so closing the tab with unsaved changes gives only your browser's own "Leave
+site?" question, without a Save choice; staying leaves everything as it was.
+
+**Deleted configs and Config edits.** A deleted config is kept with its full contents, and so is
+the old version when you Replace. Settings > **Deleted configs** lists them, newest first, marked
+"deleted" or "replaced" with the date. Choose one to see what was in it (passwords are never
+shown) and click **Recover**. It comes back in the list without changing what is on your screen.
+If the name is taken it comes back as "<name>-RECOVERED", then "<name>-RECOVERED-2". The list
+is never cleaned up automatically. **History** also has **Config edits**: each Replace, script
+Edit, delete and recover, with the old and new value per field, passwords only as "changed".
+It is a helpful record, not proof of who did it.
+
+**Quitting.** **Quit** is at the bottom of Settings (the gear), next to **Deleted configs** and
 **History**, which opens the launch history. Quit only closes the launcher: a
 study you already launched keeps running.
 
@@ -473,7 +503,10 @@ stops for the things that matter:
 words** (the exit code and the log file are only a small "Details" line at the
 end). The shortcut runs a config **by its name**, so if that config was
 **renamed or deleted** the box says "No saved config named ..." and lists the
-configs that are saved on this computer. Its buttons: **Open the launcher**
+configs that are saved on this computer. If that name is in Deleted configs, the box says
+so and that it can be recovered there in the launcher's Settings; recovered under its own
+name the shortcut works again. A config that came back as "<name>-RECOVERED" has a
+different name, so the old shortcut does not run it: make a new shortcut. Its buttons: **Open the launcher**
 (pick a config, or save one again under the old name, and click **Save
 one-click shortcut** to make a new shortcut), **Delete this shortcut** and
 **Close**. On Windows the buttons read *Yes* / *No* / *Cancel* and the text
@@ -520,11 +553,16 @@ your scripts, **Reset database** when it is ticked (always directly before oTree
 and it moves with it; its tick stays on the Database card), **Launch oTree server**,
 then the browser pages, which always come last. Below it is everything **Not selected**.
 
+- The card is short by default: names and marks. **Not selected (3)** opens when you click it.
+  A script's text is behind **Show script** (and a hover, which shows the first lines); wherever
+  script text is shown it stops at about six lines and scrolls inside itself. A website's address
+  is behind a hover and **Copy link**.
 - **Select or clear the tick** on a row to move it between the two lists. That covers
   the oTree admin page, the lab's scripts and websites, and your own.
 - **Reorder** shows arrows for the scripts and the oTree row.
-- **Add your own script** or **Add your own website** at the bottom. **Delete** removes
-  your own.
+- **Add your own script** or **Add your own website** at the bottom opens a small form; **Add
+  script** or **Add website** adds it, Cancel closes and clears. A problem keeps the form open with
+  what you typed. **Delete** removes your own.
 - **Edit** on your own script changes its name, text, wait rule and port. On a saved config
   the edit is saved to the config straight away, with no Save and no new config; it keeps its
   place and tick, and any other unsaved change on the form stays unsaved. On the Lab default or
