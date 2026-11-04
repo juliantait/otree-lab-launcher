@@ -615,7 +615,7 @@ html[data-webmode="browser"] #browseFileBtn{display:none!important}
 .study{margin-top:2px}
 
 /* selects + inputs */
-select,input[type=text],input[type=password],input[type=number]{
+select,input[type=text],input[type=password],input[type=number],textarea{
   width:100%;font-family:inherit;font-size:13px;color:var(--text);
   background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;
   transition:border-color .14s,background .14s,box-shadow .14s;
@@ -730,8 +730,8 @@ input::placeholder{color:var(--faint)}
 .db-details-toggle .arw{font-size:10px;color:var(--faint)}
 .db-details-toggle:hover{color:var(--text)}
 /* Advanced (2026-10-30): a slim card that is ONE caption line while collapsed
-   (the same disclosure style), with a muted count of the services that will
-   open. Inside: "Additional services on launch". */
+   (the same disclosure style), with a muted count of what will happen. Inside: the
+   launch timeline (2026-11-04). */
 .card--adv{padding-top:10px;padding-bottom:10px}
 .card--adv .db-details-toggle{padding-top:0}
 .adv-cap{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint)}
@@ -766,6 +766,55 @@ input::placeholder{color:var(--faint)}
 .svc-form{margin:8px 0;padding:10px 12px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
 .svc-form .mfield{grid-template-columns:90px 1fr;margin:6px 0}
 .svc-form .cta{margin-top:8px}
+/* Advanced: the launch timeline (2026-11-04). Top = what will happen, in run order;
+   bottom = what is not selected. */
+.tl-head{justify-content:flex-start}
+.tl-head .tl-reorder{margin-left:auto}
+.tl-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:5px 0;border-bottom:1px solid var(--line-soft)}
+.tl-row:last-child{border-bottom:0}
+.tl-mark{display:inline-block;width:16px;text-align:center;color:var(--ok);font-weight:700}
+.tl-name{font-weight:600;color:var(--text-strong)}
+.tl-row--fixed .tl-name{font-weight:700}
+.tl-arrows{display:inline-flex;gap:2px}
+.tl-arrows .btn{min-width:24px;padding:0 4px}
+.tl-wait{font-size:11.5px;color:var(--muted)}
+.tl-wait-sel{font-size:11.5px;padding:1px 4px;max-width:190px}
+.tl-del{margin-left:auto}
+.tl-detail{flex-basis:100%;margin:2px 0 0 23px;font-family:var(--mono,monospace);font-size:11.5px;color:var(--faint);overflow-wrap:anywhere}
+pre.tl-detail{white-space:pre-wrap;max-height:62px;overflow:auto;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px;color:var(--text)}
+.tl-add{margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.tl-add-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tl-add-row input[type=text]{min-width:0;flex:1 1 120px}
+.tl-add textarea,.svc-form textarea{width:100%;box-sizing:border-box;min-height:62px;margin:6px 0;font-family:var(--mono,monospace);font-size:12px;resize:vertical}
+.tl-port{width:72px;flex:none!important}
+.tl-edit-form{flex-basis:100%;margin:6px 0 2px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
+.tl-edit-form textarea{width:100%;box-sizing:border-box;min-height:62px;margin:6px 0;font-family:var(--mono,monospace);font-size:12px;resize:vertical}
+.tl-edit-note{font-size:12px;color:var(--warn);margin:0 0 6px}
+.tl-edit-form .cta{margin-top:6px}
+.svc-msg.ok{color:var(--ok)}
+/* The launch popup: run list before launch, report after. */
+.bl-scripts{margin:12px 0 6px}
+.bl-run-row{padding:4px 0}
+.bl-run-num{display:inline-block;min-width:20px;color:var(--faint)}
+.bl-run-wait{margin-left:6px;font-size:11.5px;color:var(--muted)}
+pre.bl-script{margin:3px 0 0 20px;white-space:pre-wrap;max-height:76px;overflow:auto;font-family:var(--mono,monospace);font-size:11.5px;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;padding:4px 7px}
+.bl-report{margin:10px 0 6px}
+.bl-report-line{margin:4px 0 8px;font-size:13px;color:var(--text)}
+.bl-report-row{padding:3px 0;font-size:13px}
+.rp-mark{display:inline-block;width:18px;font-weight:700;text-align:center}
+.rp-ok .rp-mark{color:var(--ok)}
+.rp-neutral .rp-mark{color:var(--muted)}
+.rp-failed .rp-mark{color:var(--err)}
+.rp-warn .rp-mark{color:var(--warn)}
+.rp-not_run{color:var(--muted)}
+.rp-not_run .rp-mark{color:var(--faint)}
+.rp-name{font-weight:600}
+.rp-text{color:var(--muted);margin-left:4px}
+.rp-failed{background:var(--err-soft);border-radius:6px;padding:7px 9px;margin:0 0 6px}
+.rp-failed .rp-name,.rp-failed .rp-text{color:var(--err);font-weight:700}
+.rp-facts{margin:4px 0 0 18px;font-size:12px;color:var(--text)}
+.rp-facts div{padding:1px 0}
+.rp-copy{margin-left:6px}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -1648,26 +1697,33 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           </div>
         </section>
 
-        <!-- Advanced (2026-10-30): collapsed to one caption line. Inside, the
-             additional services that open in the browser once the server is
-             ready: one tick box per lab service (core.config_service_rows says
-             what is ticked and whether that is the lab default or this config's
-             own choice) and the config's own services. -->
+        <!-- Advanced (2026-10-30): collapsed to one caption line. -->
         <section class="card card--adv" id="advCard">
           <button type="button" class="db-details-toggle" id="advToggle" aria-expanded="false" onclick="toggleAdvanced()"><span class="arw" id="advArw">&#9656;</span><span id="advLabel">Advanced</span><span class="adv-cap" id="advCaption"></span></button>
           <div class="adv-body" id="advBody" hidden>
-            <div class="svc-head"><b id="svcTitle">Opens in your browser on launch</b><span id="svcTip"></span></div>
-            <!-- ONE list in three groups (Julian, 2026-10-30); every item has its
-                 own tick and opens on its own once the server is ready. -->
-            <div class="svc-row"><label class="chk"><input type="checkbox" id="open_browser" checked onchange="updateDirtyState();refreshServices()"> <span class="svc-name" id="svcAdminName">oTree admin page</span></label></div>
-            <div class="svc-group" id="svcGroupLab">From the lab settings</div>
-            <div id="svcRows"></div>
-            <div class="svc-group" id="svcGroupOwn">Added for this config</div>
-            <div id="svcOwn"></div>
-            <div class="svc-add">
+            <!-- The launch timeline (Julian, 2026-11-04): everything selected in run
+                 order; below it, what is not selected. Selecting moves a row up, removing
+                 moves it back. Core decides the rows; the page keeps only the choices. -->
+            <div class="svc-head tl-head"><b id="svcTitle">What happens on launch</b><span id="svcTip"></span>
+              <button type="button" class="btn tiny tl-reorder" id="tlReorder" aria-pressed="false" onclick="toggleReorder()">Reorder</button></div>
+            <div id="tlRows"></div>
+            <div class="svc-group" id="tlAvailTitle">Not selected</div>
+            <div id="tlAvail"></div>
+            <!-- The state of the "oTree admin page" row: the config's open_browser field. -->
+            <input type="checkbox" id="open_browser" checked hidden>
+            <div class="tl-add">
+              <div class="tl-add-row">
+                <input type="text" id="scrNewName" placeholder="Script name">
+                <select id="scrNewWait" class="tl-wait-sel" onchange="scrNewWaitChanged()"></select>
+                <input type="text" class="tl-port" id="scrNewPort" placeholder="Port" hidden>
+              </div>
+              <textarea id="scrNewText" spellcheck="false" placeholder="cd some/folder&#10;python server.py"></textarea>
+              <button type="button" class="btn tiny" id="scrAddBtn" onclick="addOwnScript()">Add your own script</button>
+            </div>
+            <div class="svc-add tl-add">
               <input type="text" class="svc-in-name" id="svcNewName" placeholder="Name" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
               <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
-              <button type="button" class="btn tiny" id="svcAddBtn" onclick="addOwnService()">Add your own</button>
+              <button type="button" class="btn tiny" id="svcAddBtn" onclick="addOwnService()">Add your own website</button>
             </div>
             <div class="svc-msg" id="svcMsg" hidden></div>
           </div>
@@ -2090,6 +2146,17 @@ function openLogModal(){
    here keep the static preview identical -- a test compares them to core). */
 var UI_TEXT={
   services_card:"Additional services",
+  timeline_title:"What happens on launch",timeline_reorder:"Reorder",timeline_reorder_done:"Done",
+  timeline_available:"Not selected",timeline_available_none:"Nothing else to add.",
+  scripts_card:"Launch scripts",script_add:"Add script",script_add_own:"Add your own script",
+  website_add_own:"Add your own website",script_include:"Include by default",script_hidden:"Hidden",
+  script_hidden_short:"hidden",script_text:"Script",script_position:"Default position",script_wait:"Then",script_port:"Port",
+  script_positions:[["before","Before oTree"],["after","After oTree"]],
+  script_wait_options:[["carry_on","Carry on"],["finish","Wait until finished"],["port","Wait until a port answers"]],
+  script_delete_confirm:"Remove the script %s? Configs that ticked it simply stop running it.",
+  report_title:"What happened",own_script_edit:"Edit script",
+  dashboard_sent_logged_in:"The dashboard was sent to the browser, already logged in.",
+  dashboard_sent_login_page:"The dashboard was sent to the browser at the login page: log in with the username and password below.",
   services_section:"Opens in your browser on launch",
   opens_group_admin:"oTree admin page",
   opens_group_lab:"From the lab settings",
@@ -2176,13 +2243,14 @@ function fillStaticTips(){
   var sc=el("shortcutTip");if(sc)sc.textContent=tip("one_click_shortcut");
   var w=el("blockWarnBtn");if(w)w.textContent=UI_TEXT.get_ready_label;
   var vb=el("viewBlockLink");if(vb)vb.textContent=UI_TEXT.view_block_link;
-  var st=el("svcTip");if(st)st.innerHTML=tipBadge("services_launch");
+  var st=el("svcTip");if(st)st.innerHTML=tipBadge("timeline");
   var sl=el("advLabel");if(sl)sl.textContent=UI_TEXT.services_advanced;
   var phn=el("portHint");if(phn)phn.textContent=UI_TEXT.port_hint;
   var prs=el("portReset");if(prs)prs.textContent=UI_TEXT.port_reset;
-  var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.services_section;
-  [["svcAdminName","opens_group_admin"],["svcGroupLab","opens_group_lab"],["svcGroupOwn","opens_group_own"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
-  var sa=el("svcAddBtn");if(sa)sa.textContent=UI_TEXT.service_add_own;
+  var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.timeline_title;
+  [["tlAvailTitle","timeline_available"],["scrAddBtn","script_add_own"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
+  var nw=el("scrNewWait");if(nw)nw.innerHTML=waitOptionsHtml("carry_on");
+  var sa=el("svcAddBtn");if(sa)sa.textContent=UI_TEXT.website_add_own;
 }
 /* A TRAILING "See the activity log." in a message. Mirror of
    core.ACTIVITY_LOG_HINT_PATTERN / core.split_activity_log_hint. */
@@ -3327,6 +3395,10 @@ function applyFields(f){
   /* Additional services: this config's explicit choices + its own services. */
   currentServiceChoices=Object.assign({},f.service_choices||{});
   currentExtraServices=(f.extra_services||[]).map(function(x){return {name:x.name,url:x.url,enabled:x.enabled!==false};});
+  /* Launch scripts: explicit choices, own scripts, an order only if someone chose one. */
+  currentScriptChoices=Object.assign({},f.script_choices||{});
+  currentExtraScripts=(f.extra_scripts||[]).map(copyOwnScript);
+  currentLaunchOrder=(f.launch_order||[]).slice();
   /* Group 1 of the list: the oTree admin page = the config's open_browser. */
   if(el("open_browser"))el("open_browser").checked=(f.open_browser!==false);
   currentProjectPath=f.project_path||"";setPath(currentProjectPath);
@@ -3377,6 +3449,9 @@ function gatherFields(){
     seat_file:currentSeatFile,
     service_choices:sortedServiceChoices(),
     extra_services:currentExtraServices.map(function(x){return {name:x.name,url:x.url,enabled:x.enabled!==false};}),
+    script_choices:sortedScriptChoices(),
+    extra_scripts:currentExtraScripts.map(copyOwnScript),
+    launch_order:currentLaunchOrder.slice(),
     open_browser:el("open_browser").checked,
     /* Following the lab = no port of its own: core fills in the lab's current one,
        so a lab default changed in Settings does not read as an edit here. */
@@ -3402,60 +3477,170 @@ function toggleAdvanced(){
   el("advArw").innerHTML=advOpen?"&#9662;":"&#9656;";
   el("advToggle").setAttribute("aria-expanded",advOpen?"true":"false");
 }
+var currentScriptChoices={}, currentExtraScripts=[], currentLaunchOrder=[], reorderMode=false, TL_DATA={timeline:[],available:[]};
+function sortedScriptChoices(){
+  var out={};Object.keys(currentScriptChoices).sort().forEach(function(k){out[k]=!!currentScriptChoices[k];});
+  return out;
+}
+function copyOwnScript(x){return {id:x.id,name:x.name,script:x.script,enabled:x.enabled!==false,wait:x.wait||"carry_on",wait_port:x.wait_port||""};}
 function refreshServices(){
-  if(!NATIVE||!API||!API.config_services){renderServices(previewServiceCaption());return;}
-  API.config_services(gatherFields()).then(function(r){
-    if(r&&r.ok){SVC_ROWS=r.rows||[];renderServices(r.caption||"");}
+  if(!NATIVE||!API||!API.launch_timeline){renderTimeline(TL_DATA,previewServiceCaption());return;}
+  API.launch_timeline(gatherFields()).then(function(r){
+    if(r&&r.ok){TL_DATA=r;renderTimeline(r,r.caption||"");}
   });
 }
 /* Static preview only: the count of what would open. */
 function previewServiceCaption(){
-  var n=SVC_ROWS.filter(function(r){return r.checked;}).length+
-    currentExtraServices.filter(function(x){return x.enabled!==false;}).length;
+  var pages=(TL_DATA.timeline||[]).filter(function(r){return r.kind==="page"&&r.source!=="admin";}).length;
+  var scripts=(TL_DATA.timeline||[]).filter(function(r){return r.kind==="script";}).length;
   var parts=[];if(el("open_browser")&&el("open_browser").checked)parts.push("oTree admin");
-  if(n)parts.push(n===1?"1 service":(n+" services"));
-  return parts.length?parts.join(" + "):"nothing opens";
+  if(pages)parts.push(pages===1?"1 service":(pages+" services"));
+  var opens=parts.length?parts.join(" + "):"nothing opens";
+  return scripts?((scripts===1?"1 script":(scripts+" scripts"))+", "+opens):opens;
 }
-function renderServices(caption){
-  var cap=el("advCaption");if(cap)cap.textContent=caption?(" · "+caption):"";
-  var box=el("svcRows");if(!box)return;
-  box.innerHTML=!SVC_ROWS.length?'<p class="svc-none">'+escapeHtml(UI_TEXT.services_no_lab)+'</p>':
-    SVC_ROWS.map(function(r){
-      var id=escapeHtml(r.id);
-      return '<div class="svc-row"><label class="chk"><input type="checkbox" data-svc="'+id+'"'+(r.checked?" checked":"")+
-        ' onchange="onServiceTick(this)"> <span class="svc-name">'+escapeHtml(r.name)+'</span></label>'+
-        '<span class="svc-tag">'+escapeHtml(r.tag)+'</span>'+
-        (r.explicit?'<button type="button" class="svc-reset" onclick="resetServiceChoice('+jsQuote(r.id)+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
-        '<span class="svc-url">'+escapeHtml(r.url)+'</span></div>';
-    }).join("");
-  var own=el("svcOwn");
-  if(own)own.innerHTML=currentExtraServices.map(function(x,i){
-    return '<div class="svc-own-row"><label class="chk"><input type="checkbox" data-i="'+i+'"'+(x.enabled!==false?" checked":"")+
-      ' onchange="onOwnServiceTick(this)"> <span class="svc-name">'+escapeHtml(x.name)+'</span></label>'+
-      '<button type="button" class="btn tiny" onclick="removeOwnService('+i+')">Delete</button>'+
-      '<span class="svc-url">'+escapeHtml(x.url)+'</span></div>';
-  }).join("");
+function waitOptionsHtml(current){
+  return (UI_TEXT.script_wait_options||[]).map(function(o){
+    return '<option value="'+escapeHtml(o[0])+'"'+(o[0]===current?" selected":"")+'>'+escapeHtml(o[1])+'</option>';}).join("");
 }
-function onServiceTick(cb){
-  currentServiceChoices[cb.getAttribute("data-svc")]=!!cb.checked;
-  SVC_ROWS.forEach(function(r){if(r.id===cb.getAttribute("data-svc")){r.checked=!!cb.checked;r.explicit=true;}});
-  updateDirtyState();refreshServices();
+function tlRowHtml(r,selected){
+  var id=jsQuote(r.id),fixed=(r.kind==="otree"||r.kind==="resetdb");
+  var arrows=(selected&&reorderMode&&r.movable)?'<span class="tl-arrows">'+
+    '<button type="button" class="btn tiny" aria-label="Move up"'+(r.can_up?"":" disabled")+' onclick="moveLaunchItem('+id+',\'up\')">&#8593;</button>'+
+    '<button type="button" class="btn tiny" aria-label="Move down"'+(r.can_down?"":" disabled")+' onclick="moveLaunchItem('+id+',\'down\')">&#8595;</button></span>':'';
+  var mark=fixed?'<span class="tl-mark" aria-hidden="true">&#10003;</span>':
+    '<input type="checkbox" data-tl="'+escapeHtml(r.id)+'"'+(selected?" checked":"")+' onchange="tlToggle(this)">';
+  /* Own scripts change their wait rule through Edit: one place, saved at once. */
+  var waitHtml=(r.kind==="script")?'<span class="tl-wait">'+escapeHtml(r.wait_text||"")+'</span>':'';
+  var editing=(OWN_EDIT&&OWN_EDIT.id===r.id);
+  return '<div class="tl-row'+(fixed?' tl-row--fixed':'')+'" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+arrows+
+    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.name)+'</span>':'<label class="chk">'+mark+' <span class="tl-name">'+escapeHtml(r.name)+'</span></label>')+
+    (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
+    (r.can_reset?'<button type="button" class="svc-reset" onclick="tlReset('+id+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
+    waitHtml+
+    (r.can_edit?'<button type="button" class="btn tiny tl-del" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
+    (r.can_delete?'<button type="button" class="btn tiny'+(r.can_edit?'':' tl-del')+'" onclick="tlDelete('+id+')">Delete</button>':'')+
+    (editing?ownEditHtml():r.kind==="script"?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':
+      (r.detail?'<span class="tl-detail">'+escapeHtml(r.detail)+'</span>':''))+
+    '</div>';
 }
-function onOwnServiceTick(cb){
-  var x=currentExtraServices[parseInt(cb.getAttribute("data-i"),10)];if(x)x.enabled=!!cb.checked;
-  updateDirtyState();refreshServices();
+/* ---- Edit an own script: on a saved config it is written straight into that config,
+   only this script (core.save_own_script_edit). Other unsaved edits stay unsaved. ---- */
+var OWN_EDIT=null;   /* {id, name, script, wait, wait_port, note} while the form is open */
+function ownEditHtml(){
+  var e=OWN_EDIT;
+  return '<div class="tl-edit-form" id="scrOwnForm">'+
+    (e.note?'<p class="tl-edit-note" id="scrOwnNote">'+escapeHtml(e.note)+'</p>':'')+
+    '<div class="tl-add-row"><input type="text" id="scrOwnName" value="'+escapeHtml(e.name)+'">'+
+    '<select id="scrOwnWait" class="tl-wait-sel" onchange="el(\'scrOwnPort\').hidden=(this.value!==\'port\')">'+waitOptionsHtml(e.wait)+'</select>'+
+    '<input type="text" class="tl-port" id="scrOwnPort" placeholder="Port" value="'+escapeHtml(e.wait_port||"")+'"'+(e.wait==="port"?"":" hidden")+'></div>'+
+    '<textarea id="scrOwnText" spellcheck="false">'+escapeHtml(e.script)+'</textarea>'+
+    '<div class="svc-msg" id="scrOwnMsg" hidden></div>'+
+    '<div class="cta"><button type="button" class="btn tiny" onclick="ownEditClose()">Cancel</button> '+
+    '<button type="button" class="btn tiny accent" onclick="ownEditSave()"><b>Save</b></button></div></div>';
 }
-function resetServiceChoice(id){
-  delete currentServiceChoices[id];
-  updateDirtyState();refreshServices();
+function ownEditKeepTyping(){
+  if(!OWN_EDIT||!el("scrOwnName"))return;
+  OWN_EDIT.name=el("scrOwnName").value;OWN_EDIT.script=el("scrOwnText").value;
+  OWN_EDIT.wait=el("scrOwnWait").value;OWN_EDIT.wait_port=el("scrOwnPort").value;
 }
-function serviceMessage(text){var m=el("svcMsg");if(!m)return;m.textContent=text||"";m.hidden=!text;}
+function ownEditOpen(id){
+  var r=tlFind(id);if(!r)return;
+  OWN_EDIT={id:id,name:r.name,script:r.detail||"",wait:r.wait,wait_port:r.wait_port||"",note:""};
+  serviceMessage("");
+  renderTimeline(TL_DATA,null);
+  if(NATIVE&&API&&API.own_script_stored)API.own_script_stored(currentConfigName,id).then(function(a){
+    if(a&&a.ok&&OWN_EDIT&&OWN_EDIT.id===id){ownEditKeepTyping();OWN_EDIT.note=a.note||"";renderTimeline(TL_DATA,null);}
+  });
+}
+function ownEditClose(){OWN_EDIT=null;renderTimeline(TL_DATA,null);}
+function ownEditFail(text){var m=el("scrOwnMsg");if(m){m.textContent=text;m.hidden=false;}}
+/* Clean before = clean after, dirty before = still dirty for the other fields only:
+   the baseline moves for this script's own fields, nothing else. */
+function patchCleanSnapshot(script){
+  if(cleanSnapshot===null||!cleanSnapshot)return;
+  var saved=JSON.parse(cleanSnapshot);
+  (saved.extra_scripts||[]).forEach(function(x){
+    if(x.id===script.id){x.name=script.name;x.script=script.script;x.wait=script.wait;x.wait_port=script.wait_port;}
+  });
+  cleanSnapshot=JSON.stringify(saved);
+}
+function ownEditSave(){
+  if(!OWN_EDIT)return;
+  ownEditKeepTyping();
+  if(!NATIVE||!API||!API.edit_own_script){ownEditFail("Saving works in the app, not the static preview.");return;}
+  var e=OWN_EDIT;
+  API.edit_own_script(currentConfigName,e.id,e.name,e.script,e.wait,e.wait_port).then(function(r){
+    /* A failed write leaves the form as it was and claims nothing. */
+    if(!(r&&r.ok&&r.script)){ownEditFail((r&&r.message)||"Could not save the script.");return;}
+    currentExtraScripts.forEach(function(x){
+      if(x.id===r.script.id){x.name=r.script.name;x.script=r.script.script;x.wait=r.script.wait;x.wait_port=r.script.wait_port;}
+    });
+    if(r.saved)patchCleanSnapshot(r.script);
+    OWN_EDIT=null;
+    serviceMessage(r.message,!!r.saved);
+    timelineChanged();
+  });
+}
+function renderTimeline(data,caption){
+  ownEditKeepTyping();
+  var cap=el("advCaption");if(cap&&caption!==null)cap.textContent=caption?(" · "+caption):"";
+  var top=el("tlRows");if(!top)return;
+  top.innerHTML=(data.timeline||[]).map(function(r){return tlRowHtml(r,true);}).join("");
+  var avail=data.available||[];
+  el("tlAvail").innerHTML=avail.length?avail.map(function(r){return tlRowHtml(r,false);}).join(""):
+    '<p class="svc-none">'+escapeHtml(UI_TEXT.timeline_available_none)+'</p>';
+  var rb=el("tlReorder");if(rb){rb.textContent=reorderMode?UI_TEXT.timeline_reorder_done:UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed",reorderMode?"true":"false");}
+}
+function tlFind(id){
+  return (TL_DATA.timeline||[]).concat(TL_DATA.available||[]).filter(function(r){return r.id===id;})[0];
+}
+function timelineChanged(){updateDirtyState();refreshServices();}
+function tlToggle(cb){
+  var r=tlFind(cb.getAttribute("data-tl"));if(!r)return;
+  var on=!!cb.checked;
+  if(r.kind==="script"){
+    if(r.source==="lab")currentScriptChoices[r.id]=on;
+    else currentExtraScripts.forEach(function(x){if(x.id===r.id)x.enabled=on;});
+  }else if(r.source==="admin"){el("open_browser").checked=on;}
+  else if(r.source==="lab"){currentServiceChoices[r.service_id]=on;}
+  else if(currentExtraServices[r.index]){currentExtraServices[r.index].enabled=on;}
+  timelineChanged();
+}
+function tlReset(id){
+  var r=tlFind(id);if(!r)return;
+  if(r.kind==="script")delete currentScriptChoices[r.id];else delete currentServiceChoices[r.service_id];
+  timelineChanged();
+}
+function tlDelete(id){
+  var r=tlFind(id);if(!r)return;
+  if(r.kind==="script")currentExtraScripts=currentExtraScripts.filter(function(x){return x.id!==r.id;});
+  else currentExtraServices.splice(r.index,1);
+  timelineChanged();
+}
+function toggleReorder(){reorderMode=!reorderMode;refreshServices();}
+function moveLaunchItem(id,direction){
+  if(!NATIVE||!API||!API.move_launch_item)return;
+  API.move_launch_item(gatherFields(),id,direction).then(function(r){
+    if(r&&r.ok){currentLaunchOrder=r.order||[];timelineChanged();}
+  });
+}
+function scrNewWaitChanged(){el("scrNewPort").hidden=(val("scrNewWait")!=="port");}
+function serviceMessage(text,good){var m=el("svcMsg");if(!m)return;m.textContent=text||"";m.hidden=!text;m.classList.toggle("ok",!!good);}
+function addOwnScript(){
+  if(!NATIVE||!API||!API.validate_script){serviceMessage("Adding works in the app, not the static preview.");return;}
+  API.validate_script(val("scrNewName"),el("scrNewText").value,val("scrNewWait"),val("scrNewPort")).then(function(r){
+    if(!(r&&r.ok&&r.script)){serviceMessage((r&&r.message)||"Could not add the script.");return;}
+    currentExtraScripts.push(copyOwnScript(r.script));
+    el("scrNewName").value="";el("scrNewText").value="";el("scrNewPort").value="";el("scrNewWait").value="carry_on";scrNewWaitChanged();serviceMessage("");
+    timelineChanged();
+  });
+}
 function addOwnService(){
   var name=(val("svcNewName")||"").trim(),url=(val("svcNewUrl")||"").trim();
   var take=function(service){
     currentExtraServices.push({name:service.name,url:service.url,enabled:true});
     el("svcNewName").value="";el("svcNewUrl").value="";serviceMessage("");
-    updateDirtyState();refreshServices();
+    timelineChanged();
   };
   if(!NATIVE||!API||!API.validate_service){
     if(name&&/^https?:\/\/\S+$/i.test(url))take({name:name,url:url});
@@ -3465,10 +3650,6 @@ function addOwnService(){
   API.validate_service(name,url).then(function(r){
     if(r&&r.ok&&r.service)take(r.service);else serviceMessage((r&&r.message)||"That is not a web address.");
   });
-}
-function removeOwnService(i){
-  currentExtraServices.splice(i,1);
-  updateDirtyState();refreshServices();
 }
 /* ---- Settings > Additional services: per lab, add / edit / delete ---- */
 var SVC_EDIT=null;   /* {lab, id ("" = new)} while the form is open */
@@ -3511,8 +3692,9 @@ function svcApply(r,stay){
   if(r&&r.presets)LAB_PRESETS=r.presets;
   if(r&&r.ok){SVC_EDIT=stay?SVC_EDIT:null;
     var st=el("lsSvcStatus");if(st){st.textContent=r.message||"";}
-    var sum=el("lsSum_services");if(sum&&r.summary!==undefined){sum.textContent=r.summary;sum.title=r.summary;}}
-  lsRenderServices();refreshServices();
+    var sum=el("lsSum_services");if(sum&&r.summary!==undefined){sum.textContent=r.summary;sum.title=r.summary;}
+    var ss=el("lsSum_scripts");if(ss&&r.scripts_summary!==undefined){ss.textContent=r.scripts_summary;ss.title=r.scripts_summary;}}
+  lsRenderServices();lsRenderScripts();refreshServices();
 }
 function svcSave(){
   if(!SVC_EDIT)return;
@@ -3535,6 +3717,71 @@ DELETE_ACTIONS.svc=function(key){
 };
 DELETE_WORDING.svc=function(name){return escapeHtml(UI_TEXT.service_delete_confirm).replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
 DELETE_BACK.svc=function(){openLabSettings("services");};
+/* ---- Settings > Launch scripts: per lab, add / edit / delete ---- */
+var SCR_EDIT=null;   /* {lab, id ("" = new)} while the form is open */
+function lsScriptsHtml(){
+  var labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
+  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
+  return labs.map(function(p){
+    var rows=(p.scripts||[]).map(function(s){
+      if(SCR_EDIT&&SCR_EDIT.lab===p.id&&SCR_EDIT.id===s.id)return scrFormHtml(p.id,s);
+      var pos=(UI_TEXT.script_positions||[]).filter(function(o){return o[0]===s.position;})[0];
+      return '<div class="svc-set-row"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
+        (s.include_by_default?'<span class="svc-def">'+escapeHtml(UI_TEXT.service_default_tag)+'</span>':'')+
+        (s.hidden?'<span class="svc-def">'+escapeHtml(UI_TEXT.script_hidden_short)+'</span>':'')+
+        '<span class="svc-def">'+escapeHtml(pos?pos[1]:"")+'</span>'+
+        '<pre class="tl-detail" style="margin-left:0">'+escapeHtml(s.script)+'</pre></div>'+
+        '<button class="btn tiny" onclick="scrEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
+        deleteBtn("scr",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
+    }).join("");
+    var adding=(SCR_EDIT&&SCR_EDIT.lab===p.id&&!SCR_EDIT.id);
+    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
+      (adding?scrFormHtml(p.id,null):'<button class="btn tiny" style="margin-top:6px" onclick="scrEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.script_add)+'</button>')+'</div>';
+  }).join("");
+}
+function scrFormHtml(labId,s){
+  s=s||{name:"",script:"",include_by_default:false,hidden:false,position:"after",wait:"carry_on",wait_port:""};
+  return '<div class="svc-form" id="scrForm">'+
+    '<div class="mfield"><label for="scrName">Name</label><input id="scrName" type="text" value="'+escapeHtml(s.name)+'"></div>'+
+    '<label for="scrText">'+escapeHtml(UI_TEXT.script_text)+'</label><textarea id="scrText" spellcheck="false" placeholder="cd some/folder&#10;python server.py">'+escapeHtml(s.script)+'</textarea>'+
+    '<div class="mfield"><label for="scrPos">'+escapeHtml(UI_TEXT.script_position)+'</label><select id="scrPos">'+
+      (UI_TEXT.script_positions||[]).map(function(o){return '<option value="'+o[0]+'"'+(o[0]===s.position?" selected":"")+'>'+escapeHtml(o[1])+'</option>';}).join("")+'</select></div>'+
+    '<div class="mfield"><label for="scrWait">'+escapeHtml(UI_TEXT.script_wait)+'</label><select id="scrWait" onchange="el(\'scrPortRow\').hidden=(this.value!==\'port\')">'+waitOptionsHtml(s.wait)+'</select></div>'+
+    '<div class="mfield" id="scrPortRow"'+(s.wait==="port"?"":" hidden")+'><label for="scrPort">'+escapeHtml(UI_TEXT.script_port)+'</label><input id="scrPort" type="text" value="'+escapeHtml(s.wait_port||"")+'"></div>'+
+    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrDefault"'+(s.include_by_default?" checked":"")+'> '+escapeHtml(UI_TEXT.script_include)+'</label><br>'+
+    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrHidden"'+(s.hidden?" checked":"")+'> '+escapeHtml(UI_TEXT.script_hidden)+'</label>'+
+    '<div class="svc-msg" id="scrFormMsg" hidden></div>'+
+    '<div class="cta"><button class="btn" onclick="scrCancel()">Cancel</button>'+
+    '<button class="btn accent" id="scrSaveBtn" onclick="scrSave()"><b>Save</b></button></div></div>';
+}
+function lsRenderScripts(){var b=el("lsScrList");if(b)b.innerHTML=lsScriptsHtml();}
+function scrEdit(labId,id){SCR_EDIT={lab:labId,id:id||""};lsRenderScripts();var n=el("scrName");if(n)n.focus();}
+function scrCancel(){SCR_EDIT=null;lsRenderScripts();}
+function scrSave(){
+  if(!SCR_EDIT)return;
+  var fail=function(m){var e=el("scrFormMsg");if(e){e.textContent=m;e.hidden=false;}};
+  if(!NATIVE||!API||!API.add_lab_script){fail("Saving scripts works in the app, not the static preview.");return;}
+  var name=val("scrName"),text=el("scrText").value,def=!!el("scrDefault").checked,hid=!!el("scrHidden").checked,
+      pos=val("scrPos"),wait=val("scrWait"),port=val("scrPort");
+  var call=SCR_EDIT.id?API.update_lab_script(SCR_EDIT.lab,SCR_EDIT.id,name,text,def,hid,pos,wait,port)
+                      :API.add_lab_script(SCR_EDIT.lab,name,text,def,hid,pos,wait,port);
+  call.then(function(r){
+    if(r&&r.ok){SCR_EDIT=null;svcApply(r,true);var st=el("lsScrStatus");if(st)st.textContent=r.message||"";}
+    else fail((r&&r.message)||"Could not save the script.");
+  });
+}
+DELETE_ACTIONS.scr=function(key){
+  var at=key.indexOf("|"),lab=key.slice(0,at),id=key.slice(at+1);
+  if(!NATIVE||!API||!API.delete_lab_script){openLabSettings("scripts");return;}
+  API.delete_lab_script(lab,id).then(function(r){
+    if(r&&r.presets)LAB_PRESETS=r.presets;
+    openLabSettings("scripts");refreshServices();
+    if(r&&r.ok)window.pywStatus("ok",r.message||"Script removed.");
+    else window.pywStatus("err",(r&&r.message)||"Could not remove the script.");
+  });
+};
+DELETE_WORDING.scr=function(name){return escapeHtml(UI_TEXT.script_delete_confirm).replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
+DELETE_BACK.scr=function(){openLabSettings("scripts");};
 
 /* ---- unsaved-changes (dirty) tracking for the "Save as new config" button ----
    A light flag: snapshot the whole form whenever a config is loaded or saved,
@@ -4613,7 +4860,7 @@ function saveDefaultDb(id){
    except a section that is not set up yet, which starts open. The summaries come
    from core (Api.settings_summaries); the mirrors below serve the static preview
    and the instant before the answer arrives. */
-var LS_CARDS=["computer","labs","databases","pg","github","services"];
+var LS_CARDS=["computer","labs","databases","pg","github","services","scripts"];
 function lsCard(key,title,tipKey,bodyHtml){
   return '<div class="ls-card ls-coll" id="lsCard_'+key+'">'+
     '<div class="ls-card-head"><h4>'+escapeHtml(title)+tipBadge(tipKey)+'</h4>'+
@@ -4642,15 +4889,20 @@ function lsSummaryMirror(){
     labs:(shown.length?shown.join(", "):"None shown")+(hidden?(" ("+hidden+" hidden)"):""),
     databases:dbs,
     pg_admin:u?(u+"@"+((PG_ADMIN.admin_host||"").trim()||"localhost")+(pt==="5432"?"":(":"+pt))):"Not set",
-    services:servicesSummaryMirror()};
+    services:servicesSummaryMirror(),scripts:scriptsSummaryMirror()};
 }
 /* Mirror of core.services_summary (static preview + the instant before core answers). */
 function servicesSummaryMirror(){
   var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.services||[]).forEach(function(s){if(names.indexOf(s.name)<0)names.push(s.name);});});
   return names.length?names.join(", "):"None";
 }
+/* Mirror of core.scripts_summary. */
+function scriptsSummaryMirror(){
+  var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.scripts||[]).forEach(function(s){var n=s.name+(s.hidden?" ("+UI_TEXT.script_hidden_short+")":"");if(names.indexOf(n)<0)names.push(n);});});
+  return names.length?names.join(", "):"None";
+}
 function lsApplySummaries(r){
-  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"]].forEach(function(p){
+  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"],["scripts","scripts"]].forEach(function(p){
     var e=el("lsSum_"+p[0]);if(e&&r[p[1]]!==undefined){e.textContent=r[p[1]];e.title=r[p[1]];}});
 }
 function lsRefreshSummaries(){
@@ -4727,6 +4979,10 @@ function openLabSettings(openCard){
     lsCard("services",UI_TEXT.services_card,"services",
       '<div id="lsSvcList">'+lsServicesHtml()+'</div>'+
       '<div class="ls-status" id="lsSvcStatus"></div>')+
+    /* Launch scripts (2026-11-04): per lab, typed text that runs in its own window. */
+    lsCard("scripts",UI_TEXT.scripts_card,"scripts",
+      '<div id="lsScrList">'+lsScriptsHtml()+'</div>'+
+      '<div class="ls-status" id="lsScrStatus"></div>')+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
        has NO Close button (avoids two closes). LEFT are the only two controls,
@@ -5436,7 +5692,18 @@ function briefingSummaryHtml(b,launched){
      away on the pill). */
   /* What opens in the browser once the server is ready: exactly the ticked
      items of the Advanced list (core): the oTree admin page, then services. */
-  if(b.opens_admin||(b.services&&b.services.length)){
+  if(!launched&&b.scripts_run&&b.scripts_run.length){
+    html+='<div class="bl-scripts" id="blScripts"><div class="bl-services-head">'+escapeHtml(b.scripts_title||"Runs on launch, in this order")+'</div>'+
+      b.scripts_run.map(function(r,i){
+        return '<div class="bl-run-row"><span class="bl-run-num">'+(i+1)+'.</span><b>'+escapeHtml(r.name)+'</b>'+
+          (r.wait_text?'<span class="bl-run-wait">'+escapeHtml(r.wait_text)+'</span>':'')+
+          (r.script?'<pre class="bl-script">'+escapeHtml(r.script)+'</pre>':'')+'</div>';
+      }).join("")+'</div>';
+  }
+  /* After a launch: every row with what the launcher really knows about it. */
+  if(launched&&window._blReport&&window._blReport.length){
+    html+=launchReportHtml(window._blReport,window._blHeadline);
+  }else if(b.opens_admin||(b.services&&b.services.length)){
     var openedTitle=(launched&&b.services_title_launched)||b.services_title||"Browser pages that will open";
     html+='<div class="bl-services" id="blServices"><div class="bl-services-head">'+escapeHtml(openedTitle)+'</div>'+
       (b.opens_admin?blOpensRow(b.opens_admin_label||"oTree admin page",b.opens_admin_url):'')+
@@ -5735,7 +6002,7 @@ function enterLaunchingState(){
   el("modalTitle").textContent="Launching…";
 }
 /* The REAL launch outcome, pushed from the Python worker. Only a genuine
-   success shows "dashboard opening" + a working link; a failure shows a clear
+   success shows "dashboard sent" + a working link; a failure shows a clear
    failure state and no dead "Click here". */
 window.pywOnLaunchResult=function(res){
   if(res&&res.ok){
@@ -5744,9 +6011,26 @@ window.pywOnLaunchResult=function(res){
        slot LIVE (no relaunch). A failure carries no rows, so the list is left
        untouched (never restamped/reordered on a failed launch). */
     if(res.configs){renderConfigList(res.configs,res.selected);if(res.selected)currentConfigName=res.selected;}
+    window._blReport=(res&&res.report)||null;window._blHeadline=(res&&res.headline)||null;
     showHandoffSuccess(res.url||"",res.method||"manual");}
-  else{showHandoffFailure((res&&res.message)||"Launch failed. See the activity log.");}
+  else{window._blReport=(res&&res.report)||null;window._blHeadline=null;
+    showHandoffFailure((res&&res.message)||"Launch failed. See the activity log.");}
 };
+/* The launch report (core.launch_report). A mark claims only what was checked: a
+   full tick for checked, a neutral ring for "started" or "sent to the browser". */
+function launchReportHtml(rows,headline){
+  return '<div class="bl-report" id="blReport"><div class="bl-services-head">'+escapeHtml(UI_TEXT.report_title||"What happened")+'</div>'+
+    ((headline&&headline.text&&headline.level!=="failed")?'<p class="bl-report-line" id="blReportLine"><strong>'+escapeHtml(headline.text)+'</strong></p>':'')+
+    rows.map(function(r){
+      return '<div class="bl-report-row rp-'+escapeHtml(r.mark)+'" data-outcome="'+escapeHtml(r.outcome)+'">'+
+        '<span class="rp-mark" aria-hidden="true">'+escapeHtml(r.glyph)+'</span>'+
+        '<span class="rp-name">'+escapeHtml(r.name)+'</span>'+
+        '<span class="rp-text">'+escapeHtml(r.text)+'</span>'+
+        (r.url?'<button type="button" class="btn tiny rp-copy" data-url="'+escapeHtml(r.url)+'" onclick="blCopyOpensLink(this)">Copy link</button>':'')+
+        ((r.facts&&r.facts.length)?'<div class="rp-facts">'+r.facts.map(function(f){return '<div>'+escapeHtml(f)+'</div>';}).join("")+'</div>':'')+
+        (r.script?'<pre class="bl-script">'+escapeHtml(r.script)+'</pre>':'')+'</div>';
+    }).join("")+'</div>';
+}
 function showHandoffSuccess(url,method){
   launchDashboardUrl=url||"";
   if(el("infoModal").hidden)return;
@@ -5758,12 +6042,15 @@ function showHandoffSuccess(url,method){
   var sum=el("blSummary");if(sum&&window._blBriefing)sum.innerHTML=briefingSummaryHtml(window._blBriefing,true);
   var t=el("takeoverStatus");
   if(t){
+    var partial=(window._blHeadline&&window._blHeadline.level==="partial");
     t.className="handoff-note ok";
     /* Report HONESTLY which path happened: cookie = opened already logged in;
-       manual = opened at the login page, log in with the username/password below. */
-    t.innerHTML='<span class="ok-tick" aria-hidden="true">&#10003;</span><strong>Session running.</strong> '+
-      ((method==="cookie")?'The dashboard opened already logged in.'
-                          :'The dashboard opened at the login page: log in with the username and password below.');
+       manual = the login page, log in with the username/password below. Nothing about the
+       dashboard when the admin page is not selected. */
+    t.innerHTML=(partial?'<span class="rp-mark" aria-hidden="true">&#9675;</span>':'<span class="ok-tick" aria-hidden="true">&#10003;</span>')+'<strong>Session running.</strong> '+
+      ((window._blBriefing&&window._blBriefing.opens_admin===false)?'':
+       (method==="cookie")?escapeHtml(UI_TEXT.dashboard_sent_logged_in)
+                          :escapeHtml(UI_TEXT.dashboard_sent_login_page));
   }
   /* The participant-link check runs in Python right after this success and
      arrives via pywOnLinkCheck; until then one muted "checking" line. */
@@ -5810,7 +6097,9 @@ function showHandoffFailure(msg){
   el("modalTitle").textContent="Launch failed";
   /* The failure and its [See activity log] button are the whole message: the
      "what will launch" recap is hidden. */
-  var sum=el("blSummary");if(sum)sum.innerHTML="";
+  /* The report stays: the failure first, then which step did what. */
+  var sum=el("blSummary");if(sum){sum.innerHTML="";
+    if(window._blReport&&window._blReport.length)sum.innerHTML=launchReportHtml(window._blReport,null);}
   var t=el("takeoverStatus");
   if(!t){var is=el("blIssues");if(is){is.innerHTML='<p class="handoff-note" id="takeoverStatus"></p>';t=el("takeoverStatus");}}
   if(t){t.className="handoff-note err";

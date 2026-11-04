@@ -801,7 +801,7 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
                  link_checker=None):
     """Launch a SAVED config by name with no UI. Returns a process exit code.
 
-    ``0`` means the server was started and the dashboard was opened. A missing
+    ``0`` means the server was started and the dashboard was sent to the browser. A missing
     config name is a loud, non-zero failure (so a broken shortcut is obvious, not
     a silent no-op): it lists the available config names on stderr and returns 2.
     ``9`` means a session is already running on the launch port, so nothing was
@@ -811,7 +811,8 @@ def headless_run(config_name, store_path=None, ask=None, problem_finder=None,
     database not reachable, the room not the lab default). ``11`` means the
     ``otree`` command the launch runs was not found (nothing touched). ``12`` means
     the config's launch port cannot be used: invalid, or refused by this computer
-    (nothing touched).
+    (nothing touched). ``13`` means a launch script failed: later steps did not run and
+    nothing was sent to the browser; what already started stays running (core.run_launch_sequence).
 
     When a newer version is online the box has a third choice, Git pull: the
     same fast-forward pull as the launcher's button (core.git_update_study).
@@ -1009,34 +1010,64 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
     keys = launcher_env_keys(cfg, label_file=label_file)
     _hlog(core.env_log_line(keys, env))
 
-    # 3. Reset the database if the config asks for it.
-    if cfg["resetdb"]:
-        del _HEADLESS_OUTPUT[:]
-        code = _headless_resetdb(path, env, otree)
-        tail = list(_HEADLESS_OUTPUT)
-        if code is None:
-            return _headless_fail(5, "Could not run otree resetdb (resetting the "
-                                     "database): %s" % ("; ".join(tail[-1:]) or
-                                                        "it did not start"))
-        if code != 0:
-            _hlog("ERROR: otree resetdb exited with code %d; the server was not started."
-                  % code)
-            return _headless_fail(5, core.headless_resetdb_failed_reason(code, tail))
-        _hlog("otree resetdb finished with exit code 0.")
-    else:
-        _hlog("Reset database is off, so otree resetdb was skipped.")
+    # 3 + 4. The timeline up to the browser pages: the scripts in their order around
+    #    the reset + server start (the same core function as the GUI).
+    started = {}
 
-    # 4. Start the server in its own terminal window (the wanted Launch terminal).
-    server_start = time.monotonic()
-    del _HEADLESS_OUTPUT[:]
-    ok, server_proc = _headless_start_server(cfg, path, env, otree)
-    start_errors = list(_HEADLESS_OUTPUT)
-    if not ok:
+    def start_otree(_scripts_running):
+        # 3. Reset the database if the config asks for it.
+        if cfg["resetdb"]:
+            del _HEADLESS_OUTPUT[:]
+            code = _headless_resetdb(path, env, otree)
+            tail = list(_HEADLESS_OUTPUT)
+            if code is None:
+                return {"step": "resetdb", "code": None, "exit": 5,
+                        "message": "Could not run otree resetdb (resetting the "
+                                   "database): %s" % ("; ".join(tail[-1:]) or
+                                                      "it did not start")}
+            if code != 0:
+                _hlog("ERROR: otree resetdb exited with code %d; the server was not started."
+                      % code)
+                return {"step": "resetdb", "code": code, "exit": 5,
+                        "message": core.headless_resetdb_failed_reason(code, tail)}
+            _hlog("otree resetdb finished with exit code 0.")
+        else:
+            _hlog("Reset database is off, so otree resetdb was skipped.")
+        # 4. Start the server in its own terminal window (the wanted Launch terminal).
+        started["time"] = time.monotonic()
+        del _HEADLESS_OUTPUT[:]
+        ok, started["proc"] = _headless_start_server(cfg, path, env, otree)
+        start_errors = list(_HEADLESS_OUTPUT)
+        if not ok:
+            core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                                outcome="fail", lab_presets=lab_presets)
+            return {"step": "otree", "code": None, "exit": 6,
+                    "message": "Could not start the oTree server (otree "
+                               "prodserver): %s" % ("; ".join(start_errors[-1:]) or
+                                                    "it did not start")}
+        return None
+
+    def script_log(level, text):
+        _hlog({"warn": "WARNING: ", "err": "ERROR: "}.get(level, "") + text)
+
+    seq = core.run_launch_sequence(
+        cfg, lab_presets, path, start_otree, log=script_log,
+        on_wait=lambda s: _hlog("Still waiting for the server to respond (%d s)…" % s))
+    if seq["stage"] == core.SEQUENCE_OTREE_FAILED:
+        core.finish_launch_report(seq)
+        report = core.launch_report_text(seq)
+        return _headless_fail(seq["failure"]["exit"], seq["message"]
+                              + ("\n\n" + report if report else ""), lead=not seq["started"])
+    if seq["stage"] == core.SEQUENCE_SCRIPT_FAILED:
+        # ANY script failure: non-zero exit, the box says what happened. No page opens.
+        core.finish_launch_report(seq)
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
-        return _headless_fail(6, "Could not start the oTree server (otree "
-                                 "prodserver): %s" % ("; ".join(start_errors[-1:]) or
-                                                      "it did not start"))
+        # lead=False: "did not start anything" may not be true here.
+        return _headless_fail(core.HEADLESS_SCRIPT_FAILED_EXIT,
+                              seq["message"] + "\n\n" + core.launch_report_text(seq), lead=False)
+    server_proc = started["proc"]
+    server_start = started["time"]
 
     # 5. Open the admin dashboard already authenticated (auto-login on by default,
     #    the GUI default), via the SAME core entry point the GUI uses. The open
@@ -1052,14 +1083,14 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         result = core.open_dashboard_authenticated(
             core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
             cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
-            block_relay=True,
+            block_relay=True, ready_timeout=seq["ready_timeout"],
             on_wait=lambda s: _hlog("Still waiting for the server to respond (%d s)…" % s))
         server_ready = bool(result.get("server_ready"))
         if result.get("method") == "cookie":
-            _hlog("Opened the dashboard already logged in (auto-login: form-login + "
+            _hlog("Sent the dashboard to the browser, already logged in (auto-login: form-login + "
                   "cookie relay): %s" % result.get("monitor_url"))
         else:
-            _hlog("Opened the dashboard login page: %s" % result.get("monitor_url"))
+            _hlog("Sent the dashboard login page to the browser: %s" % result.get("monitor_url"))
             _hlog("    %s" % result.get("reason", ""))
     else:
         monitor_url = "http://%s:%s%s" % (
@@ -1067,7 +1098,7 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         _hlog("Open in browser is off. Confirming the server is up. The monitor page "
               "would be %s" % monitor_url)
         server_ready = core.wait_for_server(
-            core.AUTOLOGIN_HOST, cfg["port"],
+            core.AUTOLOGIN_HOST, cfg["port"], timeout=seq["ready_timeout"],
             on_wait=lambda s: _hlog("Still waiting for the server to respond (%d s)…" % s))
 
     if not server_ready:
@@ -1079,14 +1110,29 @@ def _headless_run_once(config_name, store_path, ask, problem_finder, choose, pul
         _hlog(message)
         core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
                             outcome="fail", lab_presets=lab_presets)
-        return _headless_fail(7, message.replace("ERROR: ", "", 1))
+        core.finish_launch_report(seq, ready=False,
+                                  dashboard=result if cfg["open_browser"] else None)
+        report = core.launch_report_text(seq)
+        reason = message.replace("ERROR: ", "", 1)
+        if seq.get("message"):
+            reason += " " + seq["message"]
+        return _headless_fail(7, reason + ("\n\n" + report if report else ""),
+                              lead=not seq["started"])
 
     # Additional services: only now that the server is READY, right after the
     # admin page (same as the GUI). A page that cannot open is one log line and
     # never changes the exit code.
-    core.open_launch_services(
+    opened = core.open_launch_services(
         cfg, lab_presets,
         log=lambda level, text: _hlog(text if level in ("ok", "info") else "WARNING: " + text))
+    late = core.recheck_launch_scripts(seq)
+    core.finish_launch_report(seq, dashboard=result if cfg["open_browser"] else None,
+                              services=opened, ready=True)
+    if late:
+        core.record_session(cfg, config_name=wanted, author=match.get("author", ""),
+                            outcome="fail", lab_presets=lab_presets)
+        return _headless_fail(core.HEADLESS_SCRIPT_FAILED_EXIT,
+                              late + "\n\n" + core.launch_report_text(seq), lead=False)
 
     # Record the run on the saved config, exactly like the GUI's _stamp_last_run --
     # but ONLY now that the server is confirmed ready, and NEVER for the built-in
@@ -2989,12 +3035,10 @@ class LauncherApp(object):
 
     def _card_advanced(self, parent):
         """A slim card that is ONE caption line while collapsed ("▸  ADVANCED"
-        plus a faint count of the services that will open; the same disclosure
-        style as DETAILS). Inside: "Additional services on launch", one tick box
-        per service of the config's lab (core.config_service_rows decides what
-        is ticked and whether that is the lab default or this config's own
-        choice, with "Use lab default" to drop the choice), then the config's
-        own services and a Name + web address row to add one."""
+        plus a faint count of what will happen; the same disclosure style as
+        DETAILS). Inside: the launch timeline in run order, then what is not
+        selected (core.launch_timeline decides both), then the rows to add your own
+        script and website."""
         fonts = self.fonts
         card = tk.Frame(parent, bg=COLORS["card"], highlightbackground=COLORS["card_line"],
                         highlightcolor=COLORS["card_line"], highlightthickness=1, bd=0)
@@ -3015,31 +3059,48 @@ class LauncherApp(object):
         body = self.advanced_body = tk.Frame(card, bg=COLORS["card"])
         title = tk.Frame(body, bg=COLORS["card"])
         title.pack(fill="x")
-        tk.Label(title, text=core.OPENS_ON_LAUNCH_TITLE, bg=COLORS["card"], fg=COLORS["text"],
+        tk.Label(title, text=core.TIMELINE_TITLE, bg=COLORS["card"], fg=COLORS["text"],
                  font=fonts.bold, anchor="w").pack(side="left")
-        info_tip(title, core.ui_tip("services_launch"), font=fonts.small).pack(side="left")
+        info_tip(title, core.ui_tip("timeline"), font=fonts.small).pack(side="left")
+        self.reorder_mode = False
+        self.reorder_button = ttk.Button(title, text=core.TIMELINE_REORDER_LABEL,
+                                         style="Slim.TButton", command=self._toggle_reorder)
+        self.reorder_button.pack(side="right")
+        # The timeline: everything selected, in run order. Selecting moves a row up,
+        # removing moves it back down (core.launch_timeline decides both lists).
+        self.timeline_frame = tk.Frame(body, bg=COLORS["card"])
+        self.timeline_frame.pack(fill="x", pady=(4, 0))
+        tk.Label(body, text=core.TIMELINE_AVAILABLE_TITLE.upper(), bg=COLORS["card"],
+                 fg=COLORS["faint"], font=fonts.small_bold, anchor="w").pack(fill="x", pady=(10, 0))
+        self.available_frame = tk.Frame(body, bg=COLORS["card"])
+        self.available_frame.pack(fill="x", pady=(2, 0))
 
-        # ONE list in three groups (Julian, 2026-10-30); every item has its own
-        # tick and opens on its own once the server is ready.
-        def group(text):
-            tk.Label(body, text=text.upper(), bg=COLORS["card"], fg=COLORS["faint"],
-                     font=fonts.small_bold, anchor="w").pack(fill="x", pady=(8, 0))
-        # 1. The oTree admin page IS the config's open_browser field: one tick
-        # box at the top of the list, no group heading (Julian).
-        self.open_browser_check = tk.Checkbutton(
-            body, text=core.OPENS_GROUP_ADMIN, variable=self.var["open_browser"],
-            bg=COLORS["card"], fg=COLORS["text"], activebackground=COLORS["card"],
-            activeforeground=COLORS["text"], selectcolor=COLORS["accent"], font=fonts.body,
-            anchor="w", bd=0, highlightthickness=0, padx=0, cursor="hand2")
-        self.open_browser_check.pack(fill="x", pady=(2, 0))
-        group(core.OPENS_GROUP_LAB)
-        self.services_rows_frame = tk.Frame(body, bg=COLORS["card"])
-        self.services_rows_frame.pack(fill="x", pady=(2, 0))
-        group(core.OPENS_GROUP_OWN)
-        self.services_own_frame = tk.Frame(body, bg=COLORS["card"])
-        self.services_own_frame.pack(fill="x")
+        add_script = tk.Frame(body, bg=COLORS["card"])
+        add_script.pack(fill="x", pady=(10, 0))
+        add_script.columnconfigure(0, weight=1)
+        self.script_new_name = tk.StringVar(self.root, value="")
+        self.script_new_wait = tk.StringVar(self.root, value=core.SCRIPT_WAIT_OPTIONS[0][1])
+        self.script_new_port = tk.StringVar(self.root, value="")
+        ttk.Entry(add_script, textvariable=self.script_new_name).grid(row=0, column=0, sticky="ew")
+        ttk.Combobox(add_script, textvariable=self.script_new_wait, state="readonly", width=24,
+                     values=[label for _value, label in core.SCRIPT_WAIT_OPTIONS]).grid(
+            row=0, column=1, padx=(6, 0))
+        ttk.Entry(add_script, textvariable=self.script_new_port, width=6).grid(row=0, column=2,
+                                                                               padx=(6, 0))
+        tk.Label(add_script, text="Script name", bg=COLORS["card"], fg=COLORS["faint"],
+                 font=fonts.small).grid(row=1, column=0, sticky="w")
+        tk.Label(add_script, text=core.SCRIPT_WAIT_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
+                 font=fonts.small).grid(row=1, column=1, sticky="w", padx=(6, 0))
+        tk.Label(add_script, text=core.SCRIPT_PORT_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
+                 font=fonts.small).grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self.script_new_text = _script_text_box(add_script, fonts, height=3)
+        self.script_new_text.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        self.script_add_button = ttk.Button(add_script, text=core.SCRIPT_ADD_OWN_LABEL,
+                                            command=self._add_own_script)
+        self.script_add_button.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
         add = tk.Frame(body, bg=COLORS["card"])
-        add.pack(fill="x", pady=(6, 0))
+        add.pack(fill="x", pady=(10, 0))
         add.columnconfigure(1, weight=1)
         self.service_new_name = tk.StringVar(self.root, value="")
         self.service_new_url = tk.StringVar(self.root, value="")
@@ -3049,7 +3110,7 @@ class LauncherApp(object):
         url_entry.grid(row=0, column=1, sticky="ew", padx=(6, 6))
         for entry in (name_entry, url_entry):
             entry.bind("<Return>", lambda _e: self._add_own_service())
-        self.service_add_button = ttk.Button(add, text=core.SERVICE_ADD_OWN_LABEL,
+        self.service_add_button = ttk.Button(add, text=core.WEBSITE_ADD_OWN_LABEL,
                                              command=self._add_own_service)
         self.service_add_button.grid(row=0, column=2, sticky="e")
         tk.Label(add, text="Name", bg=COLORS["card"], fg=COLORS["faint"],
@@ -3061,11 +3122,17 @@ class LauncherApp(object):
                                      font=fonts.small, anchor="w", justify="left",
                                      wraplength=420)
         self.services_msg.pack(fill="x")
+        self.timeline_rows = {}
+        self.timeline_checks = {}
+        self.timeline_reset_links = {}
+        self.timeline_arrows = {}
+        self.timeline_edit_buttons = {}
         self.service_checks = {}
         self.service_tags = {}
         self.service_reset_links = {}
         self.own_service_rows = []
         self.own_service_checks = []
+        self.open_browser_check = None
         self._services_signature = None
 
     def _toggle_advanced(self, _event=None):
@@ -3105,6 +3172,13 @@ class LauncherApp(object):
         except (tk.TclError, RuntimeError):
             apply()
 
+    def _toggle_reorder(self):
+        self.reorder_mode = not self.reorder_mode
+        self.reorder_button.configure(text=core.TIMELINE_REORDER_DONE_LABEL if self.reorder_mode
+                                      else core.TIMELINE_REORDER_LABEL)
+        self._services_signature = None
+        self.refresh_services_view()
+
     def _on_service_tick(self, service_id, var):
         choices = self._service_choices()
         choices[service_id] = bool(var.get())
@@ -3115,11 +3189,117 @@ class LauncherApp(object):
         choices.pop(service_id, None)
         self._set_services_later("service_choices", json.dumps(choices, sort_keys=True))
 
+    def _script_choices(self):
+        try:
+            value = json.loads(self.var["script_choices"].get() or "{}")
+        except (ValueError, tk.TclError):
+            value = {}
+        return core.normalize_service_choices(value)
+
+    def _extra_scripts(self):
+        try:
+            value = json.loads(self.var["extra_scripts"].get() or "[]")
+        except (ValueError, tk.TclError):
+            value = []
+        return core.normalize_extra_scripts(value)
+
+    def _on_timeline_tick(self, row, var):
+        """A row's marker: selected moves it to the timeline, cleared back down."""
+        on = bool(var.get())
+        if row["kind"] == "script" and row["source"] == "lab":
+            choices = self._script_choices()
+            choices[row["id"]] = on
+            self._set_services_later("script_choices", json.dumps(choices, sort_keys=True))
+        elif row["kind"] == "script":
+            scripts = self._extra_scripts()
+            for script in scripts:
+                if script["id"] == row["id"]:
+                    script["enabled"] = on
+            self._set_services_later("extra_scripts", json.dumps(scripts))
+        elif row["source"] == "admin":
+            self._set_services_later("open_browser", on)
+        elif row["source"] == "lab":
+            self._on_service_tick(row["service_id"], var)
+        else:
+            self._on_own_service_tick(row["index"], var)
+
+    def _timeline_reset(self, row):
+        if row["kind"] == "script":
+            choices = self._script_choices()
+            choices.pop(row["id"], None)
+            self._set_services_later("script_choices", json.dumps(choices, sort_keys=True))
+        else:
+            self._reset_service_choice(row["service_id"])
+
+    def _timeline_delete(self, row):
+        if row["kind"] == "script":
+            scripts = [s for s in self._extra_scripts() if s["id"] != row["id"]]
+            self._set_services_later("extra_scripts", json.dumps(scripts))
+        else:
+            self._remove_own_service(row["index"])
+
+    def _move_launch_item(self, item_id, direction):
+        order = core.move_launch_item(self.form_values(), self.lab_presets, item_id, direction)
+        self._set_services_later("launch_order", json.dumps(order))
+
+    def _edit_own_script(self, script_id):
+        """Edit one own script. On a saved config it is written straight into that config,
+        only this script (core.save_own_script_edit). The dirty check compares with the
+        stored config, which now holds the edit, so the baseline moves for this script only:
+        clean stays clean, other unsaved fields stay dirty."""
+        script = None
+        for item in self._extra_scripts():
+            if item["id"] == script_id:
+                script = item
+        if script is None:
+            return None
+        stored = core.own_script_is_stored(self._selected_preset(), script_id)
+
+        def on_save(fields):
+            result = core.save_own_script_edit(
+                self._mutate_store, self._selected_preset, script_id, fields["name"],
+                fields["script"], fields["wait"], fields["wait_port"])
+            if not result["ok"]:
+                return False, result["message"]
+            scripts = self._extra_scripts()
+            for item in scripts:
+                if item["id"] == script_id:
+                    item.update(name=result["script"]["name"], script=result["script"]["script"],
+                                wait=result["script"]["wait"],
+                                wait_port=result["script"]["wait_port"])
+            self.var["extra_scripts"].set(json.dumps(scripts))
+            self.services_msg.configure(text=result["message"],
+                                        fg=COLORS["ok"] if result["saved"] else COLORS["warn"])
+            return True, ""
+        self.own_script_dialog = ScriptEditDialog(
+            self.root, self.fonts, core.OWN_SCRIPT_EDIT_TITLE, script, on_save, own=True,
+            note="" if stored else core.OWN_SCRIPT_UNSAVED_NOTE)
+        return self.own_script_dialog
+
+    def _add_own_script(self):
+        wait = dict((text, key) for key, text in core.SCRIPT_WAIT_OPTIONS).get(
+            self.script_new_wait.get(), core.SCRIPT_WAIT_CARRY_ON)
+        text = self.script_new_text.get("1.0", "end-1c")
+        ok, message, entry = core.validate_script(self.script_new_name.get(), text, wait,
+                                                  self.script_new_port.get())
+        if not ok:
+            self.services_msg.configure(text=message, fg=COLORS["warn"])
+            return
+        self.services_msg.configure(text="")
+        scripts = self._extra_scripts()
+        entry["id"] = core.new_script_id("own-", [s["id"] for s in scripts])
+        entry["enabled"] = True
+        self.script_new_name.set("")
+        self.script_new_port.set("")
+        self.script_new_wait.set(core.SCRIPT_WAIT_OPTIONS[0][1])
+        self.script_new_text.delete("1.0", "end")
+        self.var["extra_scripts"].set(json.dumps(scripts + [entry]))
+
     def _add_own_service(self):
         ok, message, entry = core.validate_service(self.service_new_name.get(),
                                                    self.service_new_url.get())
         if not ok:
-            self.services_msg.configure(text=message)
+            self.services_msg.configure(text=message, fg=COLORS["warn"])
             return
         self.services_msg.configure(text="")
         extras = self._extra_services() + [entry]
@@ -3140,78 +3320,112 @@ class LauncherApp(object):
             self._set_services_later("extra_services", json.dumps(extras))
 
     def refresh_services_view(self):
-        """Repaint the additional services from core for the on-screen config.
-        Rebuilt only when something it shows changed (it runs on every edit)."""
-        if not hasattr(self, "services_rows_frame"):
+        """Repaint the timeline from core for the on-screen config. Rebuilt only when
+        something it shows changed (it runs on every edit)."""
+        if not hasattr(self, "timeline_frame"):
             return
         try:
             cfg = self.form_values()
         except tk.TclError:
             return
-        rows = core.config_service_rows(cfg, self.lab_presets)
-        extras = cfg[core.EXTRA_SERVICES_KEY]
-        caption = core.services_caption(cfg, self.lab_presets)
+        data = core.launch_timeline(cfg, self.lab_presets)
+        caption = core.launch_caption(cfg, self.lab_presets)
         self.advanced_caption.configure(text=("·  " + caption) if caption else "")
-        signature = json.dumps([rows, extras], sort_keys=True)
+        signature = json.dumps(data, sort_keys=True)
         if signature == self._services_signature:
             return
         self._services_signature = signature
-        fonts = self.fonts
-        for frame in (self.services_rows_frame, self.services_own_frame):
+        for frame in (self.timeline_frame, self.available_frame):
             for child in list(frame.winfo_children()):
                 child.destroy()
+        self.timeline_rows, self.timeline_checks = {}, {}
+        self.timeline_reset_links, self.timeline_arrows = {}, {}
+        self.timeline_edit_buttons = {}
         self.service_checks, self.service_tags, self.service_reset_links = {}, {}, {}
-        self.own_service_rows = []
-        self.own_service_checks = []
-        if not rows:
-            tk.Label(self.services_rows_frame, text=core.SERVICES_NO_LAB_TEXT,
-                     bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
-                     anchor="w").pack(fill="x")
-        for row in rows:
-            line = tk.Frame(self.services_rows_frame, bg=COLORS["card"])
-            line.pack(fill="x", pady=(2, 0))
-            var = tk.BooleanVar(self.root, value=row["checked"])
+        self.own_service_rows, self.own_service_checks = [], []
+        self.open_browser_check = None
+        for row in data["timeline"]:
+            self._timeline_row(self.timeline_frame, row, True)
+        for row in data["available"]:
+            self._timeline_row(self.available_frame, row, False)
+        if not data["available"]:
+            tk.Label(self.available_frame, text=core.TIMELINE_AVAILABLE_NONE, bg=COLORS["card"],
+                     fg=COLORS["muted"], font=self.fonts.small, anchor="w").pack(fill="x")
+
+    def _timeline_row(self, parent, row, selected):
+        fonts = self.fonts
+        holder = tk.Frame(parent, bg=COLORS["card"])
+        holder.pack(fill="x", pady=(3, 0))
+        line = tk.Frame(holder, bg=COLORS["card"])
+        line.pack(fill="x")
+        self.timeline_rows[row["id"]] = holder
+        if selected and self.reorder_mode and row["movable"]:
+            arrows = []
+            for text, direction, usable in (("↑", "up", row["can_up"]), ("↓", "down", row["can_down"])):
+                button = ttk.Button(line, text=text, style="Slim.TButton", width=2,
+                                    command=lambda d=direction, i=row["id"]:
+                                    self._move_launch_item(i, d))
+                if not usable:
+                    button.state(["disabled"])
+                button.pack(side="left", padx=(0, 2))
+                arrows.append(button)
+            self.timeline_arrows[row["id"]] = arrows
+        if row["kind"] in ("otree", "resetdb"):
+            tk.Label(line, text="✓", bg=COLORS["card"], fg=COLORS["ok"],
+                     font=fonts.bold).pack(side="left", padx=(2, 6))
+            tk.Label(line, text=row["name"], bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold).pack(side="left")
+        else:
+            var = tk.BooleanVar(self.root, value=selected)
             check = tk.Checkbutton(
                 line, text=row["name"], variable=var, bg=COLORS["card"], fg=COLORS["text"],
                 activebackground=COLORS["card"], activeforeground=COLORS["text"],
                 selectcolor=COLORS["accent"], font=fonts.body, anchor="w", bd=0,
                 highlightthickness=0, padx=0, cursor="hand2",
-                command=lambda sid=row["id"], v=var: self._on_service_tick(sid, v))
+                command=lambda r=row, v=var: self._on_timeline_tick(r, v))
             check.pack(side="left")
+            self.timeline_checks[row["id"]] = (check, var)
+            if row["kind"] == "page":
+                if row["source"] == "lab":
+                    self.service_checks[row["service_id"]] = (check, var)
+                elif row["source"] == "own":
+                    self.own_service_checks.append((check, var))
+                    self.own_service_rows.append(line)
+                else:
+                    self.open_browser_check = check
+        if row["tag"]:
             tag = tk.Label(line, text=row["tag"], bg=COLORS["card"], fg=COLORS["faint"],
                            font=fonts.small)
             tag.pack(side="left", padx=(6, 0))
-            self.service_checks[row["id"]] = (check, var)
-            self.service_tags[row["id"]] = tag
-            if row["explicit"]:
-                reset = tk.Label(line, text=core.SERVICE_RESET_LABEL, bg=COLORS["card"],
-                                 fg=COLORS["accent"], font=fonts.small, cursor="hand2")
-                reset.pack(side="left", padx=(8, 0))
-                reset.bind("<Button-1>",
-                           lambda _e, sid=row["id"]: self._reset_service_choice(sid))
-                self.service_reset_links[row["id"]] = reset
-            tk.Label(self.services_rows_frame, text=row["url"], bg=COLORS["card"],
-                     fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
-                fill="x", padx=(24, 0))
-        for index, entry in enumerate(extras):
-            line = tk.Frame(self.services_own_frame, bg=COLORS["card"])
-            line.pack(fill="x", pady=(4, 0))
-            var = tk.BooleanVar(self.root, value=entry["enabled"])
-            check = tk.Checkbutton(
-                line, text=entry["name"], variable=var, bg=COLORS["card"], fg=COLORS["text"],
-                activebackground=COLORS["card"], activeforeground=COLORS["text"],
-                selectcolor=COLORS["accent"], font=fonts.body, anchor="w", bd=0,
-                highlightthickness=0, padx=0, cursor="hand2",
-                command=lambda i=index, v=var: self._on_own_service_tick(i, v))
-            check.pack(side="left")
-            self.own_service_checks.append((check, var))
+            if row["kind"] == "page" and row["source"] == "lab":
+                self.service_tags[row["service_id"]] = tag
+        if row["can_reset"]:
+            reset = tk.Label(line, text=core.SERVICE_RESET_LABEL, bg=COLORS["card"],
+                             fg=COLORS["accent"], font=fonts.small, cursor="hand2")
+            reset.pack(side="left", padx=(8, 0))
+            reset.bind("<Button-1>", lambda _e, r=row: self._timeline_reset(r))
+            self.timeline_reset_links[row["id"]] = reset
+            if row["kind"] == "page":
+                self.service_reset_links[row["service_id"]] = reset
+        if row["can_delete"]:
             ttk.Button(line, text="Delete", style="Slim.TButton",
-                       command=lambda i=index: self._remove_own_service(i)).pack(
-                side="left", padx=(8, 0))
-            tk.Label(self.services_own_frame, text=entry["url"], bg=COLORS["card"],
-                     fg=COLORS["faint"], font=fonts.mono_small, anchor="w").pack(
-                fill="x", padx=(24, 0))
-            self.own_service_rows.append(line)
+                       command=lambda r=row: self._timeline_delete(r)).pack(side="right")
+        if row.get("can_edit"):
+            edit = ttk.Button(line, text="Edit", style="Slim.TButton",
+                              command=lambda i=row["id"]: self._edit_own_script(i))
+            edit.pack(side="right", padx=(0, 4))
+            self.timeline_edit_buttons[row["id"]] = edit
+        if row["kind"] == "script":
+            # Own scripts change their wait rule through Edit: one place, saved at once.
+            tk.Label(line, text=row["wait_text"], bg=COLORS["card"], fg=COLORS["muted"],
+                     font=fonts.small).pack(side="left", padx=(8, 0))
+            lines = row["detail"].splitlines()
+            shown = "\n".join(lines[:3]) + ("\n..." if len(lines) > 3 else "")
+            tk.Label(holder, text=shown, bg=COLORS["card"], fg=COLORS["faint"],
+                     font=fonts.mono_small, anchor="w", justify="left").pack(fill="x", padx=(24, 0))
+        elif row["detail"]:
+            tk.Label(holder, text=row["detail"], bg=COLORS["card"], fg=COLORS["faint"],
+                     font=fonts.mono_small, anchor="w").pack(fill="x", padx=(24, 0))
 
     def _card_database(self, parent):
         card = Card(parent, "2.  Database")
@@ -6468,7 +6682,7 @@ class LauncherApp(object):
         # _do_launch returns (ok, info): info is the open-dashboard URL on a real
         # success, or a plain-language failure reason otherwise. That result, the
         # REAL outcome, is what drives the handoff popup, so the takeover can
-        # never claim "dashboard opening" when nothing actually started.
+        # never claim "dashboard sent" when nothing actually started.
         result = (False, "Launch did not complete. See the activity log above.")
         try:
             result = self._do_launch(cfg) or result
@@ -6563,10 +6777,10 @@ class LauncherApp(object):
                 cfg["admin_username"], cfg["admin_password"],
                 auto_login=cfg.get("auto_login", True))
             if result["method"] == "cookie":
-                self.log("Re-opened the dashboard already logged in: %s"
+                self.log("Sent the dashboard to the browser again, already logged in: %s"
                          % result["monitor_url"], "ok")
             else:
-                self.log("Re-opened the dashboard login page: %s (%s)"
+                self.log("Sent the dashboard login page to the browser again: %s (%s)"
                          % (result["monitor_url"], result["reason"]), "info")
         threading.Thread(target=worker, daemon=True).start()
 
@@ -6614,25 +6828,54 @@ class LauncherApp(object):
         # already said by the lines around it.
         self.log(core.env_log_line(keys, env), "muted")
 
-        if cfg["resetdb"]:
-            code = self._run_resetdb(path, env)
-            if code is None:
-                return False, "otree resetdb could not be started. See the log above."
-            if code != 0:
-                self.log("otree resetdb exited with code %d, so the server was not started."
-                         % code, "err")
-                self._on_main(lambda: self.inline_status.set(
-                    "error", "otree resetdb failed (exit code %d). See the log above." % code))
-                return False, ("otree resetdb failed (exit code %d). Nothing was started: "
-                               "see the activity log." % code)
-            self.log("otree resetdb finished with exit code 0.", "ok")
-        else:
-            self.log("Reset database is off, so otree resetdb was skipped.", "muted")
+        started = {}
 
-        server_start = time.monotonic()
-        if not self._start_server(cfg, path, env):
+        def start_otree(_scripts_running):
+            """The oTree row of the timeline: reset (when on), then the server."""
+            if cfg["resetdb"]:
+                code = self._run_resetdb(path, env)
+                if code is None:
+                    return {"step": "resetdb", "code": None, "message":
+                            "otree resetdb could not be started. See the log above."}
+                if code != 0:
+                    self.log("otree resetdb exited with code %d, so the server was not started."
+                             % code, "err")
+                    return {"step": "resetdb", "code": code,
+                            "status": "otree resetdb failed (exit code %d). See the log above."
+                                      % code,
+                            "message": ("otree resetdb failed (exit code %d). Nothing was started: "
+                                        "see the activity log." % code)}
+                self.log("otree resetdb finished with exit code 0.", "ok")
+            else:
+                self.log("Reset database is off, so otree resetdb was skipped.", "muted")
+            started["time"] = time.monotonic()
+            if not self._start_server(cfg, path, env):
+                self._record_session(cfg, config_name, "fail", None)
+                return {"step": "otree", "code": None, "message":
+                        "The oTree server could not be started. See the activity log above."}
+            return None
+
+        def script_log(level, text):
+            self.log(text, {"info": "muted"}.get(level, level))
+
+        seq = core.run_launch_sequence(
+            cfg, getattr(self, "lab_presets", None), path, start_otree, log=script_log,
+            on_wait=lambda s: self.log(
+                "Still waiting for the server to respond (%d s)…" % s, "muted"))
+        if seq["stage"] == core.SEQUENCE_OTREE_FAILED:
+            core.finish_launch_report(seq)
+            status = seq["failure"].get("status")
+            if status:
+                self._on_main(lambda: self.inline_status.set("error", status))
+            return False, _launch_failure_info(seq, seq["message"])
+        if seq["stage"] == core.SEQUENCE_SCRIPT_FAILED:
+            # ANY script failure stops here, BEFORE any browser page: on purpose, so
+            # nobody carries on with a broken setup.
+            core.finish_launch_report(seq)
+            self._on_main(lambda msg=seq["message"]: self.inline_status.set("error", msg))
             self._record_session(cfg, config_name, "fail", None)
-            return False, "The oTree server could not be started. See the activity log above."
+            return False, _launch_failure_info(seq, seq["message"])
+        server_start = started["time"]
 
         # Auto login (default ON, the "Auto login" tick on the oTree admin row):
         # open the admin room monitor already authenticated via a REAL form-login
@@ -6652,13 +6895,14 @@ class LauncherApp(object):
             result = core.open_dashboard_authenticated(
                 core.AUTOLOGIN_HOST, cfg["port"], cfg["room_name"],
                 cfg["admin_username"], cfg["admin_password"], auto_login=use_auto,
+                ready_timeout=seq["ready_timeout"],
                 on_wait=lambda s: self.log(
                     "Still waiting for the server to respond (%d s)…" % s, "muted"))
             if result["method"] == "cookie":
-                self.log("Opened the dashboard already logged in (auto-login: form-login + "
+                self.log("Sent the dashboard to the browser, already logged in (auto-login: form-login + "
                          "cookie relay): %s" % result["monitor_url"], "ok")
             else:
-                self.log("Opened the dashboard login page: %s" % result["monitor_url"], "info")
+                self.log("Sent the dashboard login page to the browser: %s" % result["monitor_url"], "info")
                 self.log("    %s. Log in with the admin username and password shown in the popup."
                          % result["reason"], "muted", prefix=False)
         else:
@@ -6667,7 +6911,7 @@ class LauncherApp(object):
             self.log("Open in browser is off. Confirming the server is up. The page would be %s"
                      % monitor_url, "muted")
             ready = core.wait_for_server(
-                core.AUTOLOGIN_HOST, cfg["port"],
+                core.AUTOLOGIN_HOST, cfg["port"], timeout=seq["ready_timeout"],
                 on_wait=lambda s: self.log(
                     "Still waiting for the server to respond (%d s)…" % s, "muted"))
             result = {"ok": True, "method": "manual", "monitor_url": monitor_url,
@@ -6679,18 +6923,29 @@ class LauncherApp(object):
             # traceback is in the server terminal window. Fail-soft: a page may
             # already be open (manual fallback), so the operator can still retry.
             msg = self._startup_failure_message()
+            if seq.get("message"):
+                msg += " " + seq["message"]
             self.log(msg, "err")
             self._on_main(lambda: self.inline_status.set("error", msg))
             self._record_session(cfg, config_name, "fail", None)
-            return False, msg
+            core.finish_launch_report(seq, ready=False,
+                                      dashboard=result if cfg["open_browser"] else None)
+            return False, _launch_failure_info(seq, msg)
 
         # Additional services: only now that the server is READY, right after the
         # admin page. A page that cannot open is one log line; it never fails the
         # launch (core.open_launch_services never raises).
-        core.open_launch_services(
+        opened = core.open_launch_services(
             cfg, self.lab_presets,
             log=lambda level, text: self.log(
                 text, {"ok": "ok", "info": "muted"}.get(level, "warn")))
+        late = core.recheck_launch_scripts(seq)
+        core.finish_launch_report(seq, dashboard=result if cfg["open_browser"] else None,
+                                  services=opened, ready=True)
+        if late:
+            self._on_main(lambda: self.inline_status.set("error", late))
+            self._record_session(cfg, config_name, "fail", None)
+            return False, _launch_failure_info(seq, late)
 
         # Only a real, server-ready success stamps the run and claims "Launched".
         ready_seconds = time.monotonic() - server_start
@@ -6699,9 +6954,11 @@ class LauncherApp(object):
         self._on_main(lambda: self.inline_status.set(
             "ok", "Server started. Its window stays open; press Ctrl-C there to stop it."))
         self.log("Done. The server keeps running in its own window.", "ok")
+        result = dict(result, report=core.launch_box_report(seq),
+                      headline=core.launch_report_headline(seq))
         # The launch briefing popup is still open in its "launching" state; on
         # this real success it switches to the post-launch takeover banner, which
-        # reports HONESTLY whether the dashboard opened logged in (cookie) or at
+        # reports HONESTLY whether the dashboard was sent logged in (cookie) or at
         # the login page (manual), via _deliver_launch_result.
         return True, result
 
@@ -8514,7 +8771,31 @@ class LaunchBriefingDialog(object):
         self.services_box = None
         self.opens_copy_buttons = []
         services = briefing.get("services") or []
-        if briefing.get("opens_admin") or services:
+        # Launch scripts: before the launch the run list with each script's text.
+        self.scripts_box = None
+        run = briefing.get("scripts_run") or []
+        if run and not getattr(self, "_launched", False):
+            box = self.scripts_box = tk.Frame(summary, bg=COLORS["card"])
+            box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
+            sr += 1
+            tk.Label(box, text=briefing.get("scripts_title", ""), bg=COLORS["card"],
+                     fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
+            for index, item in enumerate(run):
+                head = "%d. %s" % (index + 1, item["name"])
+                if item.get("wait_text"):
+                    head += "   (%s)" % item["wait_text"]
+                tk.Label(box, text=head, bg=COLORS["card"], fg=COLORS["text"], font=fonts.body,
+                         anchor="w").pack(fill="x")
+                if item.get("script"):
+                    self._script_view(box, item["script"])
+        # After a launch: every row with what the launcher really knows about it.
+        report = getattr(self, "_report", None)
+        if getattr(self, "_launched", False) and report:
+            self.report_box = tk.Frame(summary, bg=COLORS["card"])
+            self.report_box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
+            sr += 1
+            self._render_report(self.report_box, report, getattr(self, "_headline", None))
+        elif briefing.get("opens_admin") or services:
             box = self.services_box = tk.Frame(summary, bg=COLORS["card"])
             box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
             sr += 1
@@ -8540,6 +8821,49 @@ class LaunchBriefingDialog(object):
                                                         pady=(2, 6))
                 sr += 1
         tk.Frame(summary, bg=COLORS["card"], height=6).grid(row=sr, column=0)
+
+    def _script_view(self, box, text):
+        """A script's text: a short read-only box that scrolls with the wheel."""
+        lines = text.count("\n") + 1
+        view = tk.Text(box, height=min(lines, 4), width=52, wrap="none", font=self.fonts.mono_small,
+                       bg=COLORS["card"], fg=COLORS["muted"], bd=0, highlightthickness=1,
+                       highlightbackground=COLORS["card_line"])
+        view.insert("1.0", text)
+        view.configure(state="disabled")
+        view.pack(fill="x", padx=(16, 0), pady=(1, 4))
+        return view
+
+    def _render_report(self, box, report, headline=None):
+        """The launch report (core.launch_report). A mark claims only what was
+        checked: a full tick for checked, a neutral ring for "started"."""
+        fonts = self.fonts
+        self.report_marks = {}
+        colors = {core.MARK_OK: COLORS["ok"], core.MARK_NEUTRAL: COLORS["muted"],
+                  core.MARK_FAILED: COLORS["error"], core.MARK_WARN: COLORS["warn"],
+                  core.MARK_NOT_RUN: COLORS["faint"]}
+        tk.Label(box, text=core.LAUNCH_REPORT_TITLE, bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
+        if headline and headline.get("text") and headline.get("level") != "failed":
+            tk.Label(box, text=headline["text"], bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.small_bold, anchor="w", justify="left",
+                     wraplength=460).pack(fill="x", pady=(0, 4))
+        for row in report:
+            line = tk.Frame(box, bg=COLORS["card"])
+            line.pack(fill="x", pady=(0, 2))
+            mark = tk.Label(line, text=row["glyph"], bg=COLORS["card"], fg=colors[row["mark"]],
+                            font=fonts.bold, width=2)
+            mark.pack(side="left", anchor="n")
+            self.report_marks[row["name"]] = mark
+            failed = row["mark"] == core.MARK_FAILED
+            tk.Label(line, text="%s: %s" % (row["name"], row["text"]), bg=COLORS["card"],
+                     fg=COLORS["error"] if failed else COLORS["text"],
+                     font=fonts.small_bold if failed else fonts.small, anchor="w",
+                     justify="left", wraplength=430).pack(side="left", fill="x")
+            for fact in row.get("facts", ()):
+                tk.Label(box, text=fact, bg=COLORS["card"], fg=COLORS["text"], font=fonts.small,
+                         anchor="w", justify="left", wraplength=430).pack(fill="x", padx=(24, 0))
+            if row.get("script"):
+                self._script_view(box, row["script"])
 
     def _opens_row(self, box, name, url):
         """One browser page of the popup: its name, Copy link right after it, left
@@ -9128,9 +9452,9 @@ class LaunchBriefingDialog(object):
     def set_result(self, ok, info):
         """Show the REAL outcome. On success ``info`` is the open-dashboard result
         dict (``method`` cookie/manual) and the banner reports HONESTLY whether the
-        dashboard opened already logged in or at the login page, with a working
+        dashboard was sent to the browser logged in or at the login page, with a working
         re-open link; on failure ``info`` is a reason string and the banner shows a
-        clear failure state, never a false 'dashboard opening'.
+        clear failure state, never a false "dashboard sent".
         """
         line = getattr(self, "_handoff_line", None)
         if line is None:
@@ -9153,21 +9477,29 @@ class LaunchBriefingDialog(object):
             # The success line comes FIRST, above the summary (#22); on the
             # manual-login path the dashboard login box below is opened, since the
             # line tells the user to use it.
-            if method == "cookie":
-                lead = "Experiment launched. The dashboard opened already logged in."
+            admin_page = self.get_briefing().get("opens_admin", True)
+            if not admin_page:
+                # The admin page is not selected: nothing to say about the dashboard.
+                lead = "Experiment launched."
+            elif method == "cookie":
+                lead = "Experiment launched. " + core.DASHBOARD_SENT_LOGGED_IN
             elif method == "manual":
-                lead = ("Experiment launched. The dashboard opened at the login page: "
-                        "log in with the username and password below.")
+                lead = "Experiment launched. " + core.DASHBOARD_SENT_LOGIN_PAGE
                 self._creds_open = True
             else:
-                lead = "Experiment launched, dashboard opening."
-            tk.Label(line, text="✓", bg=COLORS["card"], fg=COLORS["ok"],
+                lead = "Experiment launched, dashboard sent to the browser."
+            partial = isinstance(info, dict) and (info.get("headline") or {}).get(
+                "level") == "partial"
+            tk.Label(line, text=core.MARK_GLYPHS[core.MARK_NEUTRAL] if partial else "✓",
+                     bg=COLORS["card"], fg=COLORS["muted"] if partial else COLORS["ok"],
                      font=self.fonts.bold).pack(side="left", anchor="n")
             self.result_label = tk.Label(
                 line, text=lead, bg=COLORS["card"], fg=COLORS["text"],
                 font=self.fonts.small_bold, anchor="w", justify="left", wraplength=450)
             self.result_label.pack(side="left", padx=(6, 0))
             self._launched = True
+            self._report = info.get("report") if isinstance(info, dict) else None
+            self._headline = info.get("headline") if isinstance(info, dict) else None
             body = getattr(self, "_body", None)
             if body is not None:
                 try:
@@ -9214,9 +9546,18 @@ class LaunchBriefingDialog(object):
                            command=self._show_log).pack(side="left", padx=(8, 0))
             reason = core.split_activity_log_hint(str(info or ""))[0]
             if reason and reason != "Launch failed.":
-                tk.Label(self.action, text=reason, bg=COLORS["card"], fg=COLORS["muted"],
-                         font=self.fonts.small, anchor="w", justify="left",
-                         wraplength=460).grid(row=1, column=0, sticky="w", pady=(4, 0))
+                report = getattr(info, "report", ())
+                # With a report this is a stopped launch: the failure comes first, loud.
+                tk.Label(self.action, text=reason, bg=COLORS["card"],
+                         fg=COLORS["error"] if report else COLORS["muted"],
+                         font=self.fonts.small_bold if report else self.fonts.small, anchor="w",
+                         justify="left", wraplength=460).grid(row=1, column=0, sticky="w",
+                                                              pady=(4, 0))
+            report = getattr(info, "report", ())
+            if report:
+                self.report_box = tk.Frame(self.action, bg=COLORS["card"])
+                self.report_box.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+                self._render_report(self.report_box, report)
             try:
                 self.top.update_idletasks()
                 _center_on(self.parent, self.top)
@@ -10325,6 +10666,126 @@ class LabPresetEditDialog(object):
         _modal_close(self.top)
 
 
+def _script_text_box(parent, fonts, height=4, width=46):
+    """A multi-line box for a script's text. Enter types a new line."""
+    return tk.Text(parent, height=height, width=width, wrap="none", font=fonts.mono_small,
+                   bg=COLORS["card"], fg=COLORS["text"], insertbackground=COLORS["text"],
+                   highlightthickness=1, highlightbackground=COLORS["card_line"],
+                   highlightcolor=COLORS["accent"], bd=0, undo=True)
+
+
+class ScriptEditDialog(object):
+    """Add or edit one launch script. Validation and the write go through core; the
+    caller passes on_save(fields) -> (ok, message). ``own`` = a config's own script: name,
+    text, wait rule and port only. ``note`` = a short line at the top."""
+
+    def __init__(self, parent, fonts, title, script, on_save, own=False, note=""):
+        self.on_save = on_save
+        top = self.top = tk.Toplevel(parent)
+        top.title(title)
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.resizable(False, False)
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=20, pady=18)
+        body.columnconfigure(0, weight=1)
+        script = script or {}
+        self.name = tk.StringVar(top, value=script.get("name", ""))
+        self.include = tk.BooleanVar(top, value=bool(script.get("include_by_default")))
+        self.hidden = tk.BooleanVar(top, value=bool(script.get("hidden")))
+        self.position = tk.StringVar(top, value=dict(core.SCRIPT_POSITIONS)[
+            script.get("position", core.SCRIPT_POSITION_AFTER)])
+        self.wait = tk.StringVar(top, value=dict(core.SCRIPT_WAIT_OPTIONS)[
+            script.get("wait", core.SCRIPT_WAIT_CARRY_ON)])
+        self.port = tk.StringVar(top, value=script.get("wait_port", ""))
+
+        def label(text, row):
+            tk.Label(body, text=text, bg=COLORS["card"], fg=COLORS["muted"], font=fonts.body,
+                     anchor="w").grid(row=row, column=0, sticky="w")
+        self.note = None
+        if note:
+            self.note = tk.Label(body, text=note, bg=COLORS["card"], fg=COLORS["warn"],
+                                 font=fonts.small, anchor="w", justify="left", wraplength=380)
+            self.note.grid(row=12, column=0, sticky="ew", pady=(8, 0))
+        label("Name", 0)
+        name_entry = ttk.Entry(body, textvariable=self.name, width=46)
+        name_entry.grid(row=1, column=0, sticky="ew", pady=(2, 8))
+        label(core.SCRIPT_TEXT_LABEL, 2)
+        self.text = _script_text_box(body, fonts, height=7)
+        self.text.insert("1.0", script.get("script", ""))
+        self.text.grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        if not own:
+            label(core.SCRIPT_POSITION_LABEL, 4)
+            ttk.Combobox(body, textvariable=self.position, state="readonly",
+                         values=[text for _v, text in core.SCRIPT_POSITIONS]).grid(
+                row=5, column=0, sticky="w", pady=(2, 8))
+        label(core.SCRIPT_WAIT_LABEL, 6)
+        wait_row = tk.Frame(body, bg=COLORS["card"])
+        wait_row.grid(row=7, column=0, sticky="w", pady=(2, 8))
+        ttk.Combobox(wait_row, textvariable=self.wait, state="readonly", width=26,
+                     values=[text for _v, text in core.SCRIPT_WAIT_OPTIONS]).pack(side="left")
+        tk.Label(wait_row, text=core.SCRIPT_PORT_LABEL, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.small).pack(side="left", padx=(8, 4))
+        ttk.Entry(wait_row, textvariable=self.port, width=7).pack(side="left")
+        if not own:
+            ttk.Checkbutton(body, text=core.SCRIPT_INCLUDE_LABEL,
+                            variable=self.include).grid(row=8, column=0, sticky="w")
+            ttk.Checkbutton(body, text=core.SCRIPT_HIDDEN_LABEL,
+                            variable=self.hidden).grid(row=9, column=0, sticky="w")
+        self.status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["error"],
+                               font=fonts.small, anchor="w", justify="left", wraplength=380)
+        self.status.grid(row=10, column=0, sticky="ew", pady=(6, 0))
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.grid(row=11, column=0, sticky="ew", pady=(12, 0))
+        buttons.columnconfigure(0, weight=1)
+        ttk.Button(buttons, text="Cancel", command=self.close).grid(row=0, column=0, sticky="w")
+        self.save_button = tk.Button(
+            buttons, text="Save", command=self.save, font=fonts.bold,
+            bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
+            activeforeground="#ffffff", relief="flat", padx=14, pady=5, cursor="hand2")
+        self.save_button.grid(row=0, column=1, sticky="e")
+        name_entry.bind("<Return>", lambda _e: self.save())
+        top.bind("<Escape>", lambda _e: self.close())
+        _center_on(parent, top)
+        try:
+            _grab_modal(top)
+        except tk.TclError:
+            pass
+        name_entry.focus_set()
+
+    def fields(self):
+        return {"name": self.name.get(), "script": self.text.get("1.0", "end-1c"),
+                "include_by_default": bool(self.include.get()), "hidden": bool(self.hidden.get()),
+                "position": dict((t, k) for k, t in core.SCRIPT_POSITIONS).get(self.position.get()),
+                "wait": dict((t, k) for k, t in core.SCRIPT_WAIT_OPTIONS).get(self.wait.get()),
+                "wait_port": self.port.get()}
+
+    def save(self):
+        ok, message = self.on_save(self.fields())
+        if not ok:
+            self.status.configure(text=message)
+            return False
+        self.close()
+        return True
+
+    def close(self):
+        _modal_close(self.top)
+
+
+class _LaunchFailure(str):
+    """A launch's failure text + its report rows (see _launch_failure_info)."""
+    report = ()
+
+
+def _launch_failure_info(seq, message):
+    """What set_result gets for a failed launch: a str subclass carrying the report,
+    so everything that reads the failure as text keeps working."""
+    info = _LaunchFailure(message)
+    info.report = core.launch_box_report(seq)
+    return info
+
+
 class ServiceEditDialog(object):
     """Add or edit one additional service of a lab: Name, Web address and
     "Include by default". Validation and the write go through core; the caller
@@ -10595,10 +11056,12 @@ class LabSettingsDialog(object):
         self._build_admin_card(outer, row=3)         # Postgres admin
         # -- GitHub: one summary line + Edit, like the sections above --
         self._build_github_sync_card(outer, row=4)
-        # -- Additional services: per lab, web pages opened after a launch --
+        # -- Additional services: per lab, web pages sent to the browser after a launch --
         self._build_services_card(outer, row=5)
+        # -- Launch scripts: per lab, typed text run around the server start --
+        self._build_scripts_card(outer, row=6)
         # -- Footer: version / update (History + Quit are in the bottom bar) ---
-        self._build_footer(outer, row=6)
+        self._build_footer(outer, row=7)
 
         self._reload_tree()
         self._refresh_summaries()
@@ -10650,6 +11113,8 @@ class LabSettingsDialog(object):
                                             warn=not admin.get("admin_username"))
             if "services" in self.cards:
                 self.cards["services"].set_summary(core.services_summary(presets))
+            if "scripts" in self.cards:
+                self.cards["scripts"].set_summary(core.scripts_summary(presets))
         except (tk.TclError, KeyError):
             pass
 
@@ -10659,7 +11124,7 @@ class LabSettingsDialog(object):
         """Additional services, collapsed to the service names. Inside: each
         lab with its services (name, "on by default", web address) and Edit /
         Delete per service, then "Add service" for that lab. A service is a web
-        page opened in a new browser tab once the server is ready."""
+        page sent to a new browser tab once the server is ready."""
         card = self._card(outer, row, "services", core.SERVICES_CARD_TITLE, "services")
         body = card.body
         self.services_frame = tk.Frame(body, bg=COLORS["card"])
@@ -10768,6 +11233,123 @@ class LabSettingsDialog(object):
         self._save_service_change((ok, message, new_list))
         if not ok:
             self.services_status.configure(text=message, fg=COLORS["warn"])
+        return ok
+
+    # -- Launch scripts (2026-11-04) --------------------------------------------
+
+    def _build_scripts_card(self, outer, row):
+        """Launch scripts, collapsed to the script names. Inside: each lab with its
+        scripts and Edit / Delete, then Add script for that lab."""
+        card = self._card(outer, row, "scripts", core.SCRIPTS_CARD_TITLE, "scripts")
+        body = card.body
+        self.scripts_frame = tk.Frame(body, bg=COLORS["card"])
+        self.scripts_frame.grid(row=0, column=0, sticky="ew")
+        self.scripts_frame.columnconfigure(0, weight=1)
+        self.scripts_status = tk.Label(body, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                                       font=self.fonts.small, anchor="w", justify="left",
+                                       wraplength=600)
+        self.scripts_status.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.script_buttons = {}
+        self._reload_scripts()
+
+    def _reload_scripts(self):
+        frame = getattr(self, "scripts_frame", None)
+        if frame is None:
+            return
+        try:
+            for child in list(frame.winfo_children()):
+                child.destroy()
+        except tk.TclError:
+            return
+        fonts = self.fonts
+        self.script_buttons = {}
+        positions = dict(core.SCRIPT_POSITIONS)
+        for lab in [p for p in self._lab_presets() if not p.get("deleted")]:
+            group = tk.Frame(frame, bg=COLORS["card"])
+            group.pack(fill="x", pady=(0, 10))
+            tk.Label(group, text=lab["name"], bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold, anchor="w").pack(fill="x")
+            for script in core.normalize_lab_scripts(lab.get(core.LAB_SCRIPTS_KEY)):
+                line = tk.Frame(group, bg=COLORS["card"])
+                line.pack(fill="x", pady=(2, 0))
+                text = tk.Frame(line, bg=COLORS["card"])
+                text.pack(side="left", fill="x", expand=True)
+                head = tk.Frame(text, bg=COLORS["card"])
+                head.pack(fill="x")
+                tk.Label(head, text=script["name"], bg=COLORS["card"], fg=COLORS["text"],
+                         font=fonts.body, anchor="w").pack(side="left")
+                tags = [positions[script["position"]], core.script_wait_text(script)]
+                if script["include_by_default"]:
+                    tags.insert(0, core.SERVICE_DEFAULT_TAG)
+                if script["hidden"]:
+                    tags.insert(0, core.SCRIPT_HIDDEN_SHORT)
+                tk.Label(head, text=", ".join(tags), bg=COLORS["card"], fg=COLORS["muted"],
+                         font=fonts.small).pack(side="left", padx=(6, 0))
+                tk.Label(text, text=script["script"], bg=COLORS["card"], fg=COLORS["faint"],
+                         font=fonts.mono_small, anchor="w", justify="left").pack(fill="x")
+                delete = ttk.Button(line, text="Delete", style="Slim.TButton",
+                                    command=lambda l=lab["id"], sid=script["id"]:
+                                    self._delete_script(l, sid))
+                delete.pack(side="right")
+                edit = ttk.Button(line, text="Edit", style="Slim.TButton",
+                                  command=lambda l=lab["id"], sid=script["id"]:
+                                  self._edit_script(l, sid))
+                edit.pack(side="right", padx=(0, 4))
+                self.script_buttons[(lab["id"], script["id"])] = (edit, delete)
+            add = ttk.Button(group, text=core.SCRIPT_ADD_LABEL, style="Slim.TButton",
+                             command=lambda l=lab["id"]: self._edit_script(l, None))
+            add.pack(anchor="w", pady=(4, 0))
+            self.script_buttons[(lab["id"], None)] = (add, None)
+
+    def _save_script_change(self, result):
+        ok, message, new_list = result[0], result[1], result[2]
+        if ok:
+            self._save_presets(new_list)
+            self._reload_scripts()
+            self.scripts_status.configure(text=message, fg=COLORS["ok"])
+        return ok, message
+
+    def _edit_script(self, lab_id, script_id):
+        lab = core.find_lab_preset(lab_id, self._lab_presets())
+        if lab is None:
+            return None
+        script = None
+        if script_id:
+            for item in core.lab_scripts(self._lab_presets(), lab_id):
+                if item["id"] == script_id:
+                    script = item
+            if script is None:
+                return None
+
+        def on_save(fields):
+            if script is None:
+                result = core.add_lab_script(self._lab_presets(), lab_id, fields["name"],
+                                             fields["script"],
+                                             include_by_default=fields["include_by_default"],
+                                             hidden=fields["hidden"], position=fields["position"],
+                                             wait=fields["wait"], wait_port=fields["wait_port"])
+            else:
+                result = core.update_lab_script(self._lab_presets(), lab_id, script_id, **fields)
+            return self._save_script_change(result)
+        title = ("Edit script" if script else core.SCRIPT_ADD_LABEL) + " (%s)" % lab["name"]
+        self.script_dialog = ScriptEditDialog(self.top, self.fonts, title, script, on_save)
+        return self.script_dialog
+
+    def _delete_script(self, lab_id, script_id, confirm=None):
+        script = None
+        for item in core.lab_scripts(self._lab_presets(), lab_id):
+            if item["id"] == script_id:
+                script = item
+        if script is None:
+            return False
+        ask = confirm or (lambda text: messagebox.askyesno(core.SCRIPTS_CARD_TITLE, text,
+                                                            parent=self.top))
+        if not ask(core.SCRIPT_DELETE_CONFIRM % script["name"]):
+            return False
+        ok, message, new_list = core.delete_lab_script(self._lab_presets(), lab_id, script_id)
+        self._save_script_change((ok, message, new_list))
+        if not ok:
+            self.scripts_status.configure(text=message, fg=COLORS["warn"])
         return ok
 
     # -- Postgres admin (collapsed: user@host) ------------------------------

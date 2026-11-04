@@ -314,11 +314,27 @@ double-click away.
 **Additional services.** A lab can list web pages that open in a new browser
 tab right after the oTree admin page, once the server is ready (for example
 the lab's FOG page). **Settings > Additional services > Edit**, then **Add
-service** under the lab: a name, a web address (`http://` or `https://` only,
-never a program) and **Include by default**. A ticked default opens for every
+service** under the lab: a name, a web address (`http://` or `https://` only;
+a program goes under **Launch scripts**) and **Include by default**. A ticked default opens for every
 config that has not made its own choice, so changing it later moves all of
 them at once. Saved per lab in `lab_info.json`, so copy that file to the
 other computers of the lab as usual.
+
+**Launch scripts.** A lab can keep commands that run on launch, each in its own
+terminal window. **Settings > Launch scripts > Edit**, then **Add script** under
+the lab: a name, the text to run (several lines are fine, for example `cd some/folder`
+and then `python server.py`), the **Default position** (before or after oTree, after
+when you set nothing), what to do next (**Then**) and two ticks:
+
+- **Include by default** selects it for every config that has not chosen.
+- **Hidden** keeps it off the list of a config that never chose it, and it runs only
+  for a config that has explicitly selected it. A lab manager can park a script
+  hidden, unhide it for a moment, let one person select it into their config, and hide
+  it again. That config keeps it and still sees it, so it can remove it; once removed
+  it is gone from that config's list. This keeps the list tidy. It is not a lock:
+  anyone with `lab_info.json` can read the text.
+
+See **What happens on launch** in Part 2 for how they run.
 
 **Updating the launcher.** When a new version exists, **a small dot appears on
 the gear** (the launcher asks GitHub at most once a day). In Settings, at the
@@ -495,23 +511,78 @@ with a **Git pull** button. It warns and never blocks: pull there, or launch as
 it is.
 
 *What opens in your browser:* the screen lists it under **Browser pages that
-will open** (**Browser pages opened** once it runs), each with a **Copy link**
+will open** (**Pages sent to the browser** once it runs), each with a **Copy link**
 button. Once the server is ready, each ticked item opens in its own tab. To
-change that for your study, open **Advanced** (under Database). It is one list,
-**Opens in your browser on launch**, in three groups, and each item has its
-own tick box:
+change that for your study, open **Advanced** (under Database).
 
-- **oTree admin page**: the admin/monitor page (logged in when Auto login is
-  on). Ticked by default.
-- **From the lab settings**: your lab's services. A box you never touched says
-  *(lab default)* and follows the lab; one you changed says *(your choice)*,
-  with **Use lab default** to undo it.
-- **Added for this config**: your own pages. **Add your own** (a name and a
-  web address); untick one to skip it without deleting it, or **Delete** it.
+*What happens on launch.* The top of Advanced is the launch itself, in run order:
+your scripts, **Reset database** when it is ticked (always directly before oTree,
+and it moves with it; its tick stays on the Database card), **Launch oTree server**,
+then the browser pages, which always come last. Below it is everything **Not selected**.
 
-The collapsed Advanced line counts what will open, for example *oTree admin +
-2 services*. These choices are part of the config: save it to keep them. A
-page that cannot open never stops the launch; the activity log says so.
+- **Select or clear the tick** on a row to move it between the two lists. That covers
+  the oTree admin page, the lab's scripts and websites, and your own.
+- **Reorder** shows arrows for the scripts and the oTree row.
+- **Add your own script** or **Add your own website** at the bottom. **Delete** removes
+  your own.
+- **Edit** on your own script changes its name, text, wait rule and port. On a saved config
+  the edit is saved to the config straight away, with no Save and no new config; it keeps its
+  place and tick, and any other unsaved change on the form stays unsaved. On the Lab default or
+  a config not saved yet there is nothing to write to, so it stays on the form until you save.
+  Adding, deleting, ticking and reordering stay on the form as usual. Lab scripts are edited
+  in Settings.
+- A row you never touched says *(lab default)* and follows the lab; one you changed says
+  *(your choice)*, with **Use lab default** to undo it. A config you never reordered also
+  follows the lab's default positions.
+
+The collapsed Advanced line counts what will happen, for example *2 scripts, oTree admin
++ 1 service*. These choices are part of the config: save it to keep them. A page that
+cannot open never stops the launch; the activity log says so.
+
+*How a script runs.* In its own window, started minimised on Windows, titled
+`oTree script: <name>`. It starts in the project folder, with your normal environment plus
+`OTREE_LAB_PORT`, `OTREE_LAB_ROOM` and `OTREE_LAB_PROJECT`. It never gets `DATABASE_URL` or
+the admin password. Text runs as a batch file on Windows and with `sh` on Mac and Linux.
+The launcher writes these files to a temporary folder, never into your project. The window
+closes when the script ends with exit code 0, and stays open on any other code so you can
+read the error. On a Mac, whether a finished window disappears is your Terminal profile's
+choice ("When the shell exits"), the same as the server's window.
+
+**Then** sets when the launch moves on:
+
+- **Carry on**: start it, watch it for 3 seconds, go on. A script still running by then is
+  only known to have started.
+- **Wait until finished**: wait for it to end (up to 5 minutes).
+- **Wait until a port answers**: wait for a web request to that port to get an answer (up to
+  1 minute). If the port already answers, the script is not started, so a second launch
+  does not start it twice. Use this rule to say what a script should achieve.
+
+*If a script fails, the launch stops.* Any non-zero exit, a port that never answers, or a
+wait that runs out stops everything, also after oTree has started: no later script runs, and
+**no browser page opens, the admin page included**, on purpose, so nobody carries on with a
+broken setup. The launch counts as failed. Anything already started stays running: if oTree
+started, close its window before launching again, because a new launch is refused while it
+runs. One-click shortcuts do exactly the same and show the same text in their error box.
+
+*The summary box says what the launcher checked.* After a launch with at least one script,
+each row has a mark (with no script, the box lists the pages sent to the browser as before):
+
+- **✓** was checked: *finished, exit code 0*, *port 9000 answering*, *answering on port 8000*.
+- **○** is all that could be known: *started, still running after 3 s, not checked further*,
+  *skipped: port 9000 already answered*, *sent to the browser*.
+- **✗** failed, with the exit code, the rule that failed, how long it ran, the script's text
+  and the title of its window. The launcher does not capture a script's output: **look in
+  that window**, which stays open.
+- **–** *not run because an earlier step failed*.
+
+*What the launcher cannot see.*
+
+- A script that ends with exit code 0 although something went wrong counts as finished. Mac and
+  Linux run your text with `sh -e`, so a failed command, such as a `cd`, stops it (add `|| true`
+  to a command that may fail). **Windows batch files have no such mode, and the launcher does
+  not rewrite your lines: there only the last command's exit code counts.** A failed `cd` in the
+  middle goes unnoticed unless you write `cd /d folder || exit /b 1`.
+- A crash after the launch was confirmed is not tracked. Nothing watches a script after that.
 
 *The port:* the summary always names it (**Port: 8000**). In the Lab card, the
 **Port** pill shows the port this launch will really use, and why: *(lab default)*,
@@ -596,8 +667,8 @@ machine, so you just add your project and launch.
 
 *Once the project is recognised and ready, just click **Launch**. The server starts and the oTree dashboard opens on its own.*
 
-The dashboard then shows the live monitor for the running session:
+Studies built on the [oTree-Template](https://github.com/juliantait/Template_oTree) also have their own live monitor, at `/experimenter_dashboard` on the same server. Other studies do not have it, and the launcher does not add it:
 
-![The running-session monitor dashboard](screenshots/monitor_dashboard.png)
+![The oTree-Template's experimenter dashboard](screenshots/monitor_dashboard.png)
 
-*Seats flip from grey to green as participants open their machine's link.*
+*The oTree-Template's monitor, in a demo session with invented participants. One row per participant shows their progress through the study, quiz result, time, earnings and state: green has finished, red ended early, amber has stalled.*

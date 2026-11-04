@@ -250,6 +250,29 @@ def _ui_text():
     return {
         # Additional services (2026-10-30).
         "services_card": core.SERVICES_CARD_TITLE,
+        "timeline_title": core.TIMELINE_TITLE,
+        "timeline_reorder": core.TIMELINE_REORDER_LABEL,
+        "timeline_reorder_done": core.TIMELINE_REORDER_DONE_LABEL,
+        "timeline_available": core.TIMELINE_AVAILABLE_TITLE,
+        "timeline_available_none": core.TIMELINE_AVAILABLE_NONE,
+        "scripts_card": core.SCRIPTS_CARD_TITLE,
+        "script_add": core.SCRIPT_ADD_LABEL,
+        "own_script_edit": core.OWN_SCRIPT_EDIT_TITLE,
+        "dashboard_sent_logged_in": core.DASHBOARD_SENT_LOGGED_IN,
+        "dashboard_sent_login_page": core.DASHBOARD_SENT_LOGIN_PAGE,
+        "script_add_own": core.SCRIPT_ADD_OWN_LABEL,
+        "website_add_own": core.WEBSITE_ADD_OWN_LABEL,
+        "script_include": core.SCRIPT_INCLUDE_LABEL,
+        "script_hidden": core.SCRIPT_HIDDEN_LABEL,
+        "script_hidden_short": core.SCRIPT_HIDDEN_SHORT,
+        "script_text": core.SCRIPT_TEXT_LABEL,
+        "script_position": core.SCRIPT_POSITION_LABEL,
+        "script_wait": core.SCRIPT_WAIT_LABEL,
+        "script_port": core.SCRIPT_PORT_LABEL,
+        "script_positions": [list(item) for item in core.SCRIPT_POSITIONS],
+        "script_wait_options": [list(item) for item in core.SCRIPT_WAIT_OPTIONS],
+        "script_delete_confirm": core.SCRIPT_DELETE_CONFIRM,
+        "report_title": core.LAUNCH_REPORT_TITLE,
         "services_section": core.OPENS_ON_LAUNCH_TITLE,
         "opens_group_admin": core.OPENS_GROUP_ADMIN,
         "opens_group_lab": core.OPENS_GROUP_LAB,
@@ -406,7 +429,9 @@ def _lab_rows(presets):
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
              "default_port": p["default_port"],
              # The lab's additional services (Settings -> Additional services).
-             "services": core.normalize_lab_services(p.get(core.SERVICES_KEY))}
+             "services": core.normalize_lab_services(p.get(core.SERVICES_KEY)),
+             # The lab's launch scripts (Settings -> Launch scripts).
+             "scripts": core.normalize_lab_scripts(p.get(core.LAB_SCRIPTS_KEY))}
             for p in presets if not p.get("deleted")]
 
 
@@ -1344,7 +1369,8 @@ class Api(object):
                 "databases": core.databases_summary(
                     self._db_list(), core.default_database_id(self.store_extra)),
                 "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra)),
-                "services": core.services_summary(presets)}
+                "services": core.services_summary(presets),
+                "scripts": core.scripts_summary(presets)}
 
     @api_call
     def admin_summary(self, fields=None):
@@ -2347,7 +2373,8 @@ class Api(object):
             return {"ok": False, "message": "Could not save: %s" % error}
         presets = core.lab_presets_from_store(self.store_extra)
         return {"ok": answer.get("ok", False), "message": answer.get("message", ""),
-                "presets": _lab_rows(presets), "summary": core.services_summary(presets)}
+                "presets": _lab_rows(presets), "summary": core.services_summary(presets),
+                "scripts_summary": core.scripts_summary(presets)}
 
     @api_call
     def add_lab_service(self, lab_id, name, url, include_by_default=False):
@@ -2391,7 +2418,75 @@ class Api(object):
         presets = core.lab_presets_from_store(self.store_extra)
         return {"ok": True, "rows": core.config_service_rows(cfg, presets),
                 "extras": cfg[core.EXTRA_SERVICES_KEY],
-                "caption": core.services_caption(cfg, presets)}
+                "caption": core.launch_caption(cfg, presets)}
+
+    # -- launch scripts + the timeline (2026-11-04) -------------------------------
+
+    @api_call
+    def launch_timeline(self, fields=None):
+        """Advanced's two lists for the on-screen fields, all decided by core: the
+        timeline in run order and what is not selected."""
+        cfg = fields_to_config(fields or {})
+        presets = core.lab_presets_from_store(self.store_extra)
+        answer = core.launch_timeline(cfg, presets)
+        answer.update(ok=True, caption=core.launch_caption(cfg, presets))
+        return answer
+
+    @api_call
+    def move_launch_item(self, fields, item_id, direction):
+        """The config's launch order after one move (the page keeps only the order)."""
+        cfg = fields_to_config(fields or {})
+        presets = core.lab_presets_from_store(self.store_extra)
+        return {"ok": True, "order": core.move_launch_item(cfg, presets, item_id, direction)}
+
+    @api_call
+    def validate_script(self, name, script, wait=core.SCRIPT_WAIT_CARRY_ON, wait_port=""):
+        """Check a config's own script before the page adds it."""
+        ok, message, entry = core.validate_script(name, script, wait, wait_port)
+        if ok:
+            entry["id"] = core.new_script_id("own-")
+            entry["enabled"] = True
+        return {"ok": ok, "message": message, "script": entry}
+
+    @api_call
+    def own_script_stored(self, config_name, script_id):
+        """Is there a saved config to write this own script's edit to?"""
+        stored = core.own_script_is_stored(self._find(config_name), script_id)
+        return {"ok": True, "stored": stored, "note": "" if stored else core.OWN_SCRIPT_UNSAVED_NOTE}
+
+    @api_call
+    def edit_own_script(self, config_name, script_id, name, script,
+                        wait=core.SCRIPT_WAIT_CARRY_ON, wait_port=""):
+        """Save an edit of one own script straight into its saved config (only that
+        script; see core.save_own_script_edit). The page moves its dirty baseline for
+        this script only when the answer says ``saved``."""
+        return core.save_own_script_edit(self._mutate_store, lambda: self._find(config_name),
+                                         script_id, name, script, wait, wait_port)
+
+    @api_call
+    def add_lab_script(self, lab_id, name, script, include_by_default=False, hidden=False,
+                       position=core.SCRIPT_POSITION_AFTER, wait=core.SCRIPT_WAIT_CARRY_ON,
+                       wait_port=""):
+        """Add a script to a lab (Settings -> Launch scripts)."""
+        return self._lab_service_change(lambda presets: core.add_lab_script(
+            presets, lab_id, name, script, include_by_default=include_by_default, hidden=hidden,
+            position=position, wait=wait, wait_port=wait_port))
+
+    @api_call
+    def update_lab_script(self, lab_id, script_id, name=None, script=None,
+                          include_by_default=None, hidden=None, position=None, wait=None,
+                          wait_port=None):
+        """Edit a lab script (its id stays, so configs keep their choice)."""
+        return self._lab_service_change(lambda presets: core.update_lab_script(
+            presets, lab_id, script_id, name=name, script=script,
+            include_by_default=include_by_default, hidden=hidden, position=position,
+            wait=wait, wait_port=wait_port))
+
+    @api_call
+    def delete_lab_script(self, lab_id, script_id):
+        """Remove a script from a lab."""
+        return self._lab_service_change(lambda presets: core.delete_lab_script(
+            presets, lab_id, script_id))
 
     def _store_lab_presets(self, presets):
         """Store new lab presets AND re-derive the built-in Lab default's room
@@ -2971,9 +3066,9 @@ class Api(object):
                 last["admin_username"], last["admin_password"],
                 auto_login=last["auto_login"])
             if result["method"] == "cookie":
-                self._log("ok", "Re-opened the dashboard already logged in.")
+                self._log("ok", "Sent the dashboard to the browser again, already logged in.")
             else:
-                self._log("info", "Re-opened the dashboard login page. %s"
+                self._log("info", "Sent the dashboard login page to the browser again. %s"
                           % result["reason"])
 
         self._spawn(worker, "reopen-dashboard")
@@ -3046,37 +3141,63 @@ class Api(object):
             env = core.build_env(cfg, label_file=label_file)
             self._log("muted", core.env_log_line(core.launcher_env_keys(cfg, label_file), env))
 
-            if cfg.get("resetdb"):
-                self._log("cmd", "$ otree resetdb   (answering \"y\" on stdin)")
-                code = self._run_resetdb(project, env)
-                if code != 0:
-                    msg = ("otree resetdb failed (exit code %s). Nothing was started." % code)
-                    self._status("err", msg)
-                    self._log("err", "otree resetdb exited with code %s." % code)
-                    # Drive the handoff banner with the REAL failure, so it never
-                    # claims "dashboard opening" when nothing actually started.
-                    self._launch_result(False, msg)
-                    return
-                self._log("ok", "otree resetdb finished with exit code 0.")
+            presets = core.lab_presets_from_store(self.store_extra)
+            started = {}
 
-            launch = core.build_server_launch(cfg, project, env)
-            self._log("info", "Starting the server: %s" % launch["description"])
-            popen_kwargs = dict(
-                cwd=launch["cwd"], env=env,
-                creationflags=launch.get("creationflags", 0), shell=launch.get("shell", False),
-            )
-            if sys.platform.startswith("win"):
-                # Start the server console MINIMISED and without stealing focus, so
-                # it runs in the background and the oTree dashboard (opened next) is
-                # what takes the screen.
-                startup = subprocess.STARTUPINFO()
-                startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-                popen_kwargs["startupinfo"] = startup
-            server_start = time.monotonic()
-            server_proc = subprocess.Popen(launch["cmd"], **popen_kwargs)
-            self._log("ok", "otree prodserver started in its OWN terminal window (in the "
-                            "background). Watch that window for live server logs and any errors.")
+            def start_otree(_scripts_running):
+                """The oTree row of the timeline: reset (when on), then the server."""
+                if cfg.get("resetdb"):
+                    self._log("cmd", "$ otree resetdb   (answering \"y\" on stdin)")
+                    code = self._run_resetdb(project, env)
+                    if code != 0:
+                        self._log("err", "otree resetdb exited with code %s." % code)
+                        return {"step": "resetdb", "code": code, "message": (
+                            "otree resetdb failed (exit code %s). Nothing was started." % code)}
+                    self._log("ok", "otree resetdb finished with exit code 0.")
+                launch = core.build_server_launch(cfg, project, env)
+                self._log("info", "Starting the server: %s" % launch["description"])
+                popen_kwargs = dict(
+                    cwd=launch["cwd"], env=env,
+                    creationflags=launch.get("creationflags", 0),
+                    shell=launch.get("shell", False),
+                )
+                if sys.platform.startswith("win"):
+                    # Start the server console MINIMISED and without stealing focus, so
+                    # it runs in the background and the oTree dashboard (sent next) is
+                    # what takes the screen.
+                    startup = subprocess.STARTUPINFO()
+                    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+                    popen_kwargs["startupinfo"] = startup
+                started["time"] = time.monotonic()
+                started["proc"] = subprocess.Popen(launch["cmd"], **popen_kwargs)
+                started["launch"] = launch
+                self._log("ok", "otree prodserver started in its OWN terminal window (in the "
+                                "background). Watch that window for live server logs and any errors.")
+                return None
+
+            def script_log(level, text):
+                self._log({"ok": "ok", "info": "muted", "err": "err"}.get(level, "warn"), text)
+
+            seq = core.run_launch_sequence(
+                cfg, presets, project, start_otree, log=script_log,
+                on_wait=lambda s: self._log(
+                    "muted", "Still waiting for the server to respond (%d s)…" % s))
+            if seq["stage"] in (core.SEQUENCE_SCRIPT_FAILED, core.SEQUENCE_OTREE_FAILED):
+                # ANY script failure stops here, BEFORE any browser page: on purpose,
+                # so nobody carries on with a broken setup. Drive the handoff banner
+                # with the REAL failure, so it never claims "dashboard sent".
+                msg = seq["message"]
+                self._status("err", msg)
+                self._log("err", msg)
+                core.finish_launch_report(seq)
+                self._launch_result(False, msg, report=core.launch_box_report(seq))
+                if seq["stage"] == core.SEQUENCE_SCRIPT_FAILED:
+                    self._record_session(cfg, config_name, "fail", None)
+                return
+            server_proc = started["proc"]
+            launch = started["launch"]
+            server_start = started["time"]
 
             # Auto login (default ON): open the admin room monitor already
             # authenticated via a REAL form-login + one-shot localhost cookie relay
@@ -3102,13 +3223,14 @@ class Api(object):
                     core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
                     cfg.get("admin_username", ""), cfg.get("admin_password", ""),
                     auto_login=cfg.get("auto_login", True),
+                    ready_timeout=seq["ready_timeout"],
                     on_wait=lambda s: self._log(
                         "muted", "Still waiting for the server to respond (%d s)…" % s))
                 if result["method"] == "cookie":
-                    self._log("ok", "Opened the oTree dashboard already logged in "
+                    self._log("ok", "Sent the oTree dashboard to the browser, already logged in "
                                     "(auto-login: form-login + cookie relay).")
                 else:
-                    self._log("info", "Opened the oTree dashboard login page. %s Log in with "
+                    self._log("info", "Sent the oTree dashboard login page to the browser. %s Log in with "
                                       "the admin username and password shown here."
                                       % result["reason"])
             else:
@@ -3116,7 +3238,7 @@ class Api(object):
                 # reporting success, so a crash is not mis-reported as "Launched".
                 self._log("muted", "Open in browser is off. Confirming the server is up …")
                 result["server_ready"] = core.wait_for_server(
-                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
+                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"), timeout=seq["ready_timeout"],
                     on_wait=lambda s: self._log(
                         "muted", "Still waiting for the server to respond (%d s)…" % s))
 
@@ -3130,28 +3252,45 @@ class Api(object):
                 # polling it would falsely annotate "already exited with code 0".
                 poll_proc = server_proc if launch.get("kind") == "linux-background" else None
                 msg = self._startup_failure_message(poll_proc)
+                if seq.get("message"):
+                    msg += " " + seq["message"]
                 self._status("err", msg)
                 self._log("err", msg)
+                core.finish_launch_report(seq, ready=False,
+                                          dashboard=result if cfg.get("open_browser") else None)
                 # Fail-soft: a page may already be open (manual fallback), so keep
                 # the url so the operator can retry, but report the honest failure.
                 self._launch_result(False, msg, url=result.get("monitor_url", monitor_url),
-                                    method=result.get("method", "manual"))
+                                    method=result.get("method", "manual"),
+                                    report=core.launch_box_report(seq))
                 self._record_session(cfg, config_name, "fail", None)
                 return
 
             # Additional services: only now that the server is READY, right after
             # the admin page. A page that cannot open is one log line; it never
             # fails the launch (core.open_launch_services never raises).
-            core.open_launch_services(
-                cfg, core.lab_presets_from_store(self.store_extra),
+            opened = core.open_launch_services(
+                cfg, presets,
                 log=lambda level, text: self._log(
                     {"ok": "ok", "info": "muted"}.get(level, "warn"), text))
+            late = core.recheck_launch_scripts(seq)
+            core.finish_launch_report(
+                seq, dashboard=result if cfg.get("open_browser") else None, services=opened,
+                ready=True)
+            if late:
+                self._status("err", late)
+                self._launch_result(False, late, url=result.get("monitor_url", monitor_url),
+                                    method=result.get("method", "manual"),
+                                    report=core.launch_box_report(seq))
+                self._record_session(cfg, config_name, "fail", None)
+                return
 
             matched = self._mark_run(cfg, config_name)
             self._record_session(cfg, config_name, "ok", time.monotonic() - server_start)
-            self._status("ok", "Launched: the oTree dashboard is opening in your browser. The "
-                               "server runs in its own window; watch there for live logs. You "
-                               "can close this launcher.")
+            self._status("ok", ("Launched: the oTree dashboard was sent to your browser. The "
+                                if cfg.get("open_browser") else "Launched. The ")
+                         + "server runs in its own window; watch there for live logs. You "
+                           "can close this launcher.")
             # Only a real, server-ready success reaches here: tell the handoff
             # banner, with the method so it reports honestly (already logged in vs
             # at the login page). Also push the REFRESHED config rows + selected so
@@ -3161,7 +3300,9 @@ class Api(object):
             configs, selected = self._launched_config_state(matched)
             self._launch_result(True, "", url=result["monitor_url"],
                                 method=result["method"],
-                                configs=configs, selected=selected)
+                                configs=configs, selected=selected,
+                                report=core.launch_box_report(seq),
+                                headline=core.launch_report_headline(seq))
             # The participant-link check (2026-11-02): only now, after the
             # success is on screen, so it never delays or blocks the launch.
             self._run_link_check(cfg)
@@ -3190,7 +3331,7 @@ class Api(object):
         return result
 
     def _launch_result(self, ok, message, url="", method="manual",
-                       configs=None, selected=None):
+                       configs=None, selected=None, report=None, headline=None):
         """Deliver the REAL launch outcome to the page's handoff banner.
 
         Worker-thread only (it uses evaluate_js via _callback). ``ok`` True means
@@ -3207,6 +3348,11 @@ class Api(object):
         if configs is not None:
             payload["configs"] = configs
             payload["selected"] = selected or ""
+        # The timeline with what really happened to each row (core.launch_report).
+        if report is not None:
+            payload["report"] = report
+        if headline is not None:
+            payload["headline"] = headline
         self._callback("pywOnLaunchResult", payload)
 
     def _remember_launch(self, cfg):

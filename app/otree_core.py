@@ -81,7 +81,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.10.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -552,6 +552,10 @@ def normalize_stored_lab(raw):
     services = normalize_lab_services(raw.get(SERVICES_KEY))
     if services:
         entry[SERVICES_KEY] = services
+    # The same for launch scripts.
+    scripts = normalize_lab_scripts(raw.get(LAB_SCRIPTS_KEY))
+    if scripts:
+        entry[LAB_SCRIPTS_KEY] = scripts
     # The same for the default port: only when it is not the usual one.
     port = _parse_launch_port(raw.get("default_port"))
     if port is not None and str(port) != DEFAULT_CONFIG["port"]:
@@ -910,7 +914,7 @@ DEFAULT_CONFIG = {
     "seat_mode": SEAT_DEFAULT,
     "seat_excluded": [],
     "seat_file": "",
-    # Additional services (2026-10-30): web pages opened in the default browser
+    # Additional services (2026-10-30): web pages sent to the default browser
     # once the server is ready. ``service_choices`` holds ONLY the explicit
     # choices this config made for its lab's services ({service_id: bool}); a
     # lab service with no choice here follows the lab's include_by_default.
@@ -918,6 +922,13 @@ DEFAULT_CONFIG = {
     # neither key: no choices, no own services (see effective_services).
     "service_choices": {},
     "extra_services": [],
+    # Launch scripts (2026-11-04): ``script_choices`` = ONLY explicit choices
+    # ({script_id: bool}), ``extra_scripts`` = the config's own, ``launch_order`` =
+    # ONLY an order someone chose (empty = follow the lab). None of the three is
+    # written when empty (see config_for_storage and launch_timeline).
+    "script_choices": {},
+    "extra_scripts": [],
+    "launch_order": [],
 }
 
 # The launch port option, both faces. General on purpose: app/ and docs/ ship
@@ -1005,6 +1016,15 @@ def normalize_config(cfg):
             continue
         if key == EXTRA_SERVICES_KEY:
             out[key] = normalize_extra_services(value)
+            continue
+        if key == SCRIPT_CHOICES_KEY:
+            out[key] = normalize_service_choices(value)
+            continue
+        if key == EXTRA_SCRIPTS_KEY:
+            out[key] = normalize_extra_scripts(value)
+            continue
+        if key == LAUNCH_ORDER_KEY:
+            out[key] = normalize_launch_order(value)
             continue
         if isinstance(default, bool):
             value = bool(value)
@@ -2651,6 +2671,9 @@ def default_preset():
     # Fresh containers (DEFAULT_CONFIG's own {} / [] must never be shared).
     preset["service_choices"] = {}
     preset["extra_services"] = []
+    preset["script_choices"] = {}
+    preset["extra_scripts"] = []
+    preset["launch_order"] = []
     preset["name"] = "Lab default"
     preset["created"] = now_iso()
     preset["last_run"] = None
@@ -2726,6 +2749,10 @@ def config_for_storage(preset):
     preset = dict(preset or {})
     n = normalize_config(preset)
     out = {k: v for k, v in preset.items() if k not in CONFIG_DB_FIELDS}
+    # Launch scripts: stored only when there is something to store.
+    for key in SCRIPT_CONFIG_KEYS:
+        if not out.get(key, True):
+            del out[key]
     db_id = str(preset.get("database_id", "") or "").strip()
     if db_id:
         out["database_id"] = db_id
@@ -2900,6 +2927,7 @@ def stored_labs_from_presets(lab_presets, info=None):
         if suggested:
             entry["suggested_database"] = suggested
         entry[SERVICES_KEY] = p.get(SERVICES_KEY) or []
+        entry[LAB_SCRIPTS_KEY] = p.get(LAB_SCRIPTS_KEY) or []
         out.append(normalize_stored_lab(entry))
         seen.add(p["id"])
     for lab_id, entry in existing.items():
@@ -7329,6 +7357,7 @@ def default_lab_presets():
             "deleted": raw["deleted"],
             "suggested_database": raw.get("suggested_database"),
             SERVICES_KEY: raw.get(SERVICES_KEY) or [],
+            LAB_SCRIPTS_KEY: raw.get(LAB_SCRIPTS_KEY) or [],
             "builtin": False,
         }))
     return presets
@@ -7442,8 +7471,10 @@ def normalize_lab_preset(preset):
          "db_user": str(suggested.get("db_user", "") or "").strip()}
         if isinstance(suggested, dict) and str(suggested.get("db_name", "") or "").strip()
         else None)
-    # The lab's additional services (web pages opened after a launch).
+    # The lab's additional services (web pages sent to the browser after a launch).
     out[SERVICES_KEY] = normalize_lab_services(out.get(SERVICES_KEY))
+    # The lab's launch scripts.
+    out[LAB_SCRIPTS_KEY] = normalize_lab_scripts(out.get(LAB_SCRIPTS_KEY))
     return out
 
 
@@ -8852,14 +8883,14 @@ def open_dashboard_authenticated(host, port, room, username, password,
 
     Returns a dict::
 
-        {"ok": bool,            # a page was opened (True even for manual)
+        {"ok": bool,            # a page was sent to the browser (True even for manual)
          "method": "cookie"|"manual",
          "reason": str,         # plain-language what-happened, for the log/popup
          "monitor_url": str,    # the plain monitor URL (manual login lands here)
          "opened_url": str,     # the URL actually handed to the browser
          "server_ready": bool}  # the server answered the readiness poll
 
-    ``ok`` is True whenever a page opened, because the manual fallback still lets
+    ``ok`` is True whenever a page was sent to the browser, because the manual fallback still lets
     the operator finish by hand. ``server_ready`` is the ACTUAL readiness result
     (from ``wait``/:func:`wait_for_server`): it is ``True`` only when the server
     answered within ``ready_timeout``. Callers must gate "Launched" success and
@@ -8931,7 +8962,7 @@ def open_dashboard_authenticated(host, port, room, username, password,
                 relay = start_relay(cookie, monitor_url, host=host)
             except Exception as error:
                 result["reason"] = ("auto-login worked but the cookie relay "
-                                    "could not start (%s); opened the login page"
+                                    "could not start (%s); sent the login page to the browser"
                                     % type(error).__name__)
             else:
                 # start_cookie_relay now returns (url, server, serve_thread);
@@ -8957,12 +8988,12 @@ def open_dashboard_authenticated(host, port, room, username, password,
                                          "cookie relay)")
                     return result
                 result["reason"] = ("auto-login worked but the browser could not "
-                                    "be opened; opened the login page")
+                                    "be reached; sent the login page to the browser")
         else:
             result["reason"] = ("auto-login could not log in (wrong password, or "
-                                "the server was not ready); opened the login page")
+                                "the server was not ready); sent the login page to the browser")
     else:
-        result["reason"] = "auto-login is off; opened the login page"
+        result["reason"] = "auto-login is off; sent the login page to the browser"
 
     result.update(ok=_open(monitor_url), method="manual", opened_url=monitor_url)
     return result
@@ -8973,7 +9004,8 @@ def open_dashboard_authenticated(host, port, room, username, password,
 #
 # A service is a name + a web address (http/https only) that opens in a new tab
 # of the default browser once the oTree server is READY, right after the
-# admin/monitor page. Never a script or a program.
+# admin/monitor page. A service is only ever a web page; programs run through the
+# separate launch scripts below.
 #
 #   LAB level (lab_info.json, each lab):  "services": [{id, name, url,
 #       include_by_default}]  -- edited in Lab Settings -> Additional services.
@@ -9013,7 +9045,11 @@ SERVICE_ADD_OWN_LABEL = "Add your own"
 # The launch popup's heading for that list: what WILL open before the launch,
 # what opened on the running screen.
 SERVICES_BRIEFING_TITLE = "Browser pages that will open"
-SERVICES_BRIEFING_TITLE_LAUNCHED = "Browser pages opened"
+# After a launch: the launcher only hands a page over, it cannot know it opened.
+SERVICES_BRIEFING_TITLE_LAUNCHED = "Pages sent to the browser"
+DASHBOARD_SENT_LOGGED_IN = "The dashboard was sent to the browser, already logged in."
+DASHBOARD_SENT_LOGIN_PAGE = ("The dashboard was sent to the browser at the login page: log in "
+                             "with the username and password below.")
 SERVICES_NONE_TEXT = "None"
 SERVICES_NO_LAB_TEXT = "This lab has no additional services. Add them in Settings."
 SERVICE_NAME_MISSING = "Give the service a name."
@@ -9275,7 +9311,7 @@ def service_line(service):
 def open_additional_services(services, open_url=None, log=None):
     """Open each service in a new tab of the default browser, in order.
 
-    NEVER raises and never stops part way: a page that cannot be opened is one
+    NEVER raises and never stops part way: a page that cannot be sent is one
     warning line (``log(level, text)``, level "ok" | "warn") and the next one is
     tried. Returns ``[{"name", "url", "ok", "error"}]``."""
     opener = open_url or webbrowser.open_new_tab
@@ -9307,7 +9343,7 @@ def open_additional_services(services, open_url=None, log=None):
             say("warn", "Could not open the additional service %s (%s): %s. The launch "
                         "itself is fine." % (name, url, error))
         else:
-            say("ok", "Opened the additional service %s: %s" % (name, url))
+            say("ok", "Sent the additional service %s to the browser: %s" % (name, url))
         results.append({"name": name, "url": url, "ok": not error, "error": error})
     return results
 
@@ -9327,6 +9363,1205 @@ def open_launch_services(cfg, lab_presets=None, open_url=None, log=None):
                 pass
         return []
     return open_additional_services(services, open_url=open_url, log=log)
+
+
+# ---------------------------------------------------------------------------
+# Launch scripts + the launch timeline (2026-11-04, Julian's design).
+#
+# A script is a name + TYPED TEXT (real newlines) that runs in the platform shell
+# (a cmd batch on Windows, POSIX sh elsewhere), in its OWN terminal window, in a
+# user-set order around the oTree server start. The websites above are a separate
+# thing and stay web addresses only.
+#
+#   LAB level (lab_info.json, each lab): "scripts": [{id, name, script,
+#       include_by_default, hidden, position, wait, wait_port}]
+#   CONFIG level (saved_configs.json): "script_choices" {id: bool} (explicit
+#       choices only), "extra_scripts" [{id, name, script, enabled, wait,
+#       wait_port}], "launch_order" [ids] (explicit order only). None of the three
+#       is written when empty, and a lab with no scripts has no "scripts" key, so
+#       old files round-trip byte-identical. No schema bump.
+#
+# Hidden scripts: a lab admin can park a script hidden, unhide it for a moment, let
+# one person tick it into their config, and hide it again. A hidden script runs and
+# is listed ONLY for a config with an explicit true choice; include_by_default does
+# not carry through while hidden. This is tidiness, not a security boundary.
+#
+# Failure tracking: nothing can watch the process (cmd stays open, osascript returns
+# at once), so EVERY script's wrapper writes its exit code to a sentinel file the
+# launcher polls. ANY script failure stops the launch: no later script, no browser
+# page, no last_run stamp. What already runs is left running. Expected-output
+# matching is deliberately absent: the port rule is how a script states what it
+# should achieve.
+#
+# All of it lives in a temporary folder: PRINCIPLES 4, nothing is written into the
+# researcher's project.
+# ---------------------------------------------------------------------------
+
+LAB_SCRIPTS_KEY = "scripts"
+SCRIPT_CHOICES_KEY = "script_choices"
+EXTRA_SCRIPTS_KEY = "extra_scripts"
+LAUNCH_ORDER_KEY = "launch_order"
+# The keys left out of a stored config when empty (see config_for_storage).
+SCRIPT_CONFIG_KEYS = (SCRIPT_CHOICES_KEY, EXTRA_SCRIPTS_KEY, LAUNCH_ORDER_KEY)
+
+SCRIPT_POSITION_BEFORE = "before"
+SCRIPT_POSITION_AFTER = "after"
+SCRIPT_WAIT_CARRY_ON = "carry_on"
+SCRIPT_WAIT_FINISH = "finish"
+SCRIPT_WAIT_PORT = "port"
+LAUNCH_OTREE_ROW_ID = "otree"
+LAUNCH_RESETDB_ROW_ID = "resetdb"
+LAUNCH_ADMIN_ROW_ID = "page-admin"
+
+# After a carry-on script starts, watch its sentinel this long, so a script that
+# dies at once (bad cd, missing command) counts as failed.
+SCRIPT_SETTLE_SECONDS = 3.0
+SCRIPT_FINISH_TIMEOUT = 300.0
+SCRIPT_PORT_TIMEOUT = 60.0
+# The wrapper's first act is writing a "started" file. None by now = the terminal
+# window never opened (on a Mac, for example, a refused Automation permission),
+# which would otherwise read as a script that is still running.
+SCRIPT_WINDOW_OPEN_TIMEOUT = 20.0
+# Folders of older launches are removed after this long, never the current one: a
+# running batch file is read from disk while it runs.
+LAUNCH_SCRIPTS_DIR_PREFIX = "otree-lab-scripts-"
+LAUNCH_SCRIPTS_DIR_KEEP_SECONDS = 7 * 24 * 3600
+
+# Words both faces use.
+TIMELINE_TITLE = "What happens on launch"
+TIMELINE_REORDER_LABEL = "Reorder"
+TIMELINE_REORDER_DONE_LABEL = "Done"
+TIMELINE_AVAILABLE_TITLE = "Not selected"
+TIMELINE_AVAILABLE_NONE = "Nothing else to add."
+LAUNCH_OTREE_ROW_NAME = "Launch oTree server"
+LAUNCH_RESETDB_ROW_NAME = "Reset database"
+SCRIPTS_CARD_TITLE = "Launch scripts"
+SCRIPT_ADD_LABEL = "Add script"
+OWN_SCRIPT_EDIT_TITLE = "Edit script"
+OWN_SCRIPT_SAVED_TEXT = "Saved to this config."
+OWN_SCRIPT_UNSAVED_NOTE = ("This script is not in a saved config yet, so this edit stays on "
+                           "the form until you save the config.")
+SCRIPT_ADD_OWN_LABEL = "Add your own script"
+WEBSITE_ADD_OWN_LABEL = "Add your own website"
+SCRIPT_INCLUDE_LABEL = "Include by default"
+SCRIPT_HIDDEN_LABEL = "Hidden"
+SCRIPT_HIDDEN_SHORT = "hidden"
+SCRIPT_TEXT_LABEL = "Script"
+SCRIPT_POSITION_LABEL = "Default position"
+SCRIPT_WAIT_LABEL = "Then"
+SCRIPT_PORT_LABEL = "Port"
+SCRIPT_HIDDEN_TAG = "(your choice, hidden in the lab)"
+SCRIPT_NAME_MISSING = "Give the script a name."
+SCRIPT_TEXT_MISSING = "Type what the script should run."
+SCRIPT_PORT_INVALID = "Enter the port to wait for, a number from 1 to 65535."
+SCRIPT_DELETE_CONFIRM = ("Remove the script %s? Configs that ticked it simply stop "
+                         "running it.")
+SCRIPT_POSITIONS = ((SCRIPT_POSITION_BEFORE, "Before oTree"),
+                    (SCRIPT_POSITION_AFTER, "After oTree"))
+SCRIPT_WAIT_OPTIONS = ((SCRIPT_WAIT_CARRY_ON, "Carry on"),
+                       (SCRIPT_WAIT_FINISH, "Wait until finished"),
+                       (SCRIPT_WAIT_PORT, "Wait until a port answers"))
+SCRIPTS_BRIEFING_TITLE = "Runs on launch, in this order"
+SCRIPT_WINDOW_KEEP_OPEN = ("This window stays open so you can read the error. "
+                           "Close it when you are done.")
+
+# What the launcher verified, and the mark that may claim it. A full tick only for
+# what was CHECKED; "only started" or "sent to the browser" get the neutral mark, so a
+# row can never read as more than is known (PRINCIPLES 14).
+MARK_OK = "ok"
+MARK_NEUTRAL = "neutral"
+MARK_FAILED = "failed"
+MARK_WARN = "warn"
+MARK_NOT_RUN = "not_run"
+MARK_GLYPHS = {MARK_OK: "\u2713", MARK_NEUTRAL: "\u25cb", MARK_FAILED: "\u2717",
+               MARK_WARN: "!", MARK_NOT_RUN: "\u2013"}
+OUTCOME_FINISHED = "finished"
+OUTCOME_PORT_ANSWERS = "port_answers"
+OUTCOME_RUNNING = "running"
+OUTCOME_FAILED = "failed"
+OUTCOME_SKIPPED = "skipped"
+OUTCOME_NOT_RUN = "not_run"
+OUTCOME_SENT_BROWSER = "sent_browser"
+OUTCOME_OPEN_FAILED = "open_failed"
+OUTCOME_MARKS = {OUTCOME_FINISHED: MARK_OK, OUTCOME_PORT_ANSWERS: MARK_OK,
+                 OUTCOME_RUNNING: MARK_NEUTRAL, OUTCOME_SKIPPED: MARK_NEUTRAL,
+                 OUTCOME_SENT_BROWSER: MARK_NEUTRAL, OUTCOME_FAILED: MARK_FAILED,
+                 OUTCOME_OPEN_FAILED: MARK_WARN, OUTCOME_NOT_RUN: MARK_NOT_RUN}
+TEXT_FINISHED = "finished, exit code 0"
+TEXT_RUNNING = "started, still running after %g s, not checked further"
+TEXT_NOT_RUN = "not run because an earlier step failed"
+TEXT_SENT_BROWSER = "sent to the browser"
+TEXT_OPEN_FAILED = "could not be sent to the browser"
+LAUNCH_REPORT_TITLE = "What happened"
+
+SEQUENCE_READY = "ready"
+SEQUENCE_SCRIPT_FAILED = "script_failed"
+SEQUENCE_OTREE_FAILED = "otree_failed"
+SEQUENCE_NOT_READY = "not_ready"
+
+SCRIPT_ENV_PORT = "OTREE_LAB_PORT"
+SCRIPT_ENV_ROOM = "OTREE_LAB_ROOM"
+SCRIPT_ENV_PROJECT = "OTREE_LAB_PROJECT"
+
+
+def _clean_script_text(text):
+    """The typed text with line endings made uniform and otherwise untouched. The
+    file written at launch gets the platform's own endings."""
+    return str("" if text is None else text).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _clean_script_name(name):
+    """One line: a name goes into a window title."""
+    return " ".join(str("" if name is None else name).split())
+
+
+def validate_script(name, script, wait=SCRIPT_WAIT_CARRY_ON, wait_port=""):
+    """``(ok, message, {"name", "script", "wait", "wait_port"})`` for a typed script.
+    Empty (or only blank) text is invalid."""
+    name = _clean_script_name(name)
+    text = _clean_script_text(script)
+    if not name:
+        return False, SCRIPT_NAME_MISSING, None
+    if not text.strip():
+        return False, SCRIPT_TEXT_MISSING, None
+    known = [value for value, _label in SCRIPT_WAIT_OPTIONS]
+    wait = wait if wait in known else SCRIPT_WAIT_CARRY_ON
+    port = ""
+    if wait == SCRIPT_WAIT_PORT:
+        parsed = _parse_launch_port(wait_port)
+        if parsed is None:
+            return False, SCRIPT_PORT_INVALID, None
+        port = str(parsed)
+    return True, "", {"name": name, "script": text, "wait": wait, "wait_port": port}
+
+
+def _derived_script_id(prefix, name, script):
+    digest = hashlib.sha1(("%s\n%s" % (name, script)).encode("utf-8")).hexdigest()
+    return prefix + digest[:8]
+
+
+def new_script_id(prefix="scr-", existing_ids=()):
+    """A fresh, unique script id ("scr-" for a lab's, "own-" for a config's)."""
+    taken = set(existing_ids or ())
+    while True:
+        candidate = prefix + uuid.uuid4().hex[:8]
+        if candidate not in taken:
+            return candidate
+
+
+def _script_entry(raw):
+    """A valid script's core fields, leniently: a port rule with no usable port stays
+    a port rule with no port. Its launch then fails with that reason, rather than a
+    silent "carry on" that would claim nothing was asked for."""
+    if not isinstance(raw, dict):
+        return None
+    wait = raw.get("wait", SCRIPT_WAIT_CARRY_ON)
+    ok, _message, entry = validate_script(raw.get("name"), raw.get("script"), wait,
+                                          raw.get("wait_port"))
+    if not ok and wait == SCRIPT_WAIT_PORT:
+        ok, _message, entry = validate_script(raw.get("name"), raw.get("script"))
+        if ok:
+            entry["wait"] = SCRIPT_WAIT_PORT
+    return entry if ok else None
+
+
+def normalize_lab_script(raw):
+    """One lab script in full, or None with no name or no text. A missing id is
+    derived from name + text, so it is stable."""
+    entry = _script_entry(raw)
+    if entry is None:
+        return None
+    script_id = str(raw.get("id", "") or "").strip()
+    if not script_id or script_id == LAUNCH_OTREE_ROW_ID:
+        script_id = _derived_script_id("scr-", entry["name"], entry["script"])
+    position = raw.get("position")
+    known = (SCRIPT_POSITION_BEFORE, SCRIPT_POSITION_AFTER)
+    return {"id": script_id, "name": entry["name"], "script": entry["script"],
+            "include_by_default": bool(raw.get("include_by_default", False)),
+            "hidden": bool(raw.get("hidden", False)),
+            "position": position if position in known else SCRIPT_POSITION_AFTER,
+            "wait": entry["wait"], "wait_port": entry["wait_port"]}
+
+
+def normalize_lab_scripts(raw_list):
+    """A lab's scripts: invalid entries dropped, a repeated id keeps its first."""
+    out = []
+    seen = set()
+    for raw in (raw_list if isinstance(raw_list, (list, tuple)) else []):
+        entry = normalize_lab_script(raw)
+        if entry is None or entry["id"] in seen:
+            continue
+        seen.add(entry["id"])
+        out.append(entry)
+    return out
+
+
+def normalize_extra_scripts(raw):
+    """A config's own scripts as ``[{id, name, script, enabled, wait, wait_port}]``.
+    ``enabled`` is the tick: off = kept but not run."""
+    out = []
+    seen = set()
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        entry = _script_entry(item)
+        if entry is None:
+            continue
+        script_id = str(item.get("id", "") or "").strip()
+        if not script_id.startswith("own-"):
+            script_id = _derived_script_id("own-", entry["name"], entry["script"])
+        if script_id in seen:
+            continue
+        seen.add(script_id)
+        entry["id"] = script_id
+        entry["enabled"] = bool(item.get("enabled", True))
+        out.append(entry)
+    return out
+
+
+def normalize_launch_order(raw):
+    """A config's explicit order: a list of ids, each once."""
+    out = []
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        text = str(item).strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def lab_scripts(lab_presets, lab_id):
+    """The scripts of lab ``lab_id``, hidden ones included (``[]`` for an unknown
+    lab, localhost or another host)."""
+    preset = find_lab_preset(lab_id, lab_presets) if lab_presets else None
+    if preset is None or preset.get("deleted"):
+        return []
+    return normalize_lab_scripts(preset.get(LAB_SCRIPTS_KEY))
+
+
+def add_lab_script(lab_presets, lab_id, name, script, include_by_default=False, hidden=False,
+                   position=SCRIPT_POSITION_AFTER, wait=SCRIPT_WAIT_CARRY_ON, wait_port=""):
+    """Validate and add a script to a lab. Returns ``(ok, message, presets, script)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    ok, message, entry = validate_script(name, script, wait, wait_port)
+    if not ok:
+        return False, message, presets, None
+    taken = [s["id"] for p in presets for s in normalize_lab_scripts(p.get(LAB_SCRIPTS_KEY))]
+    new = normalize_lab_script(dict(
+        entry, id=new_script_id("scr-", taken), include_by_default=bool(include_by_default),
+        hidden=bool(hidden), position=position))
+    target[LAB_SCRIPTS_KEY] = normalize_lab_scripts(target.get(LAB_SCRIPTS_KEY)) + [new]
+    return True, "Added %s to %s." % (new["name"], target["name"]), presets, new
+
+
+def update_lab_script(lab_presets, lab_id, script_id, name=None, script=None,
+                      include_by_default=None, hidden=None, position=None, wait=None,
+                      wait_port=None):
+    """Edit one lab script; its id never changes, so configs keep their choice.
+    ``None`` leaves a field as it is. Returns ``(ok, message, presets, script)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    scripts = normalize_lab_scripts(target.get(LAB_SCRIPTS_KEY))
+    for index, current in enumerate(scripts):
+        if current["id"] != str(script_id):
+            continue
+        ok, message, entry = validate_script(
+            current["name"] if name is None else name,
+            current["script"] if script is None else script,
+            current["wait"] if wait is None else wait,
+            current["wait_port"] if wait_port is None else wait_port)
+        if not ok:
+            return False, message, presets, None
+        updated = dict(current, **entry)
+        if include_by_default is not None:
+            updated["include_by_default"] = bool(include_by_default)
+        if hidden is not None:
+            updated["hidden"] = bool(hidden)
+        if position is not None:
+            updated["position"] = position
+        updated = normalize_lab_script(updated)
+        scripts[index] = updated
+        target[LAB_SCRIPTS_KEY] = scripts
+        return True, "Saved %s." % updated["name"], presets, updated
+    return False, "That script is not in this lab any more.", presets, None
+
+
+def delete_lab_script(lab_presets, lab_id, script_id):
+    """Remove one script from a lab. Returns ``(ok, message, presets)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets
+    scripts = normalize_lab_scripts(target.get(LAB_SCRIPTS_KEY))
+    keep = [s for s in scripts if s["id"] != str(script_id)]
+    if len(keep) == len(scripts):
+        return False, "That script is not in this lab any more.", presets
+    gone = [s for s in scripts if s["id"] == str(script_id)][0]
+    target[LAB_SCRIPTS_KEY] = keep
+    return True, "Removed %s from %s." % (gone["name"], target["name"]), presets
+
+
+def scripts_summary(lab_presets):
+    """The collapsed Settings card: the script names, each once, or "None"."""
+    names = []
+    for preset in (lab_presets or []):
+        if preset.get("deleted"):
+            continue
+        for script in normalize_lab_scripts(preset.get(LAB_SCRIPTS_KEY)):
+            label = script["name"] + (" (%s)" % SCRIPT_HIDDEN_SHORT if script["hidden"] else "")
+            if label not in names:
+                names.append(label)
+    return ", ".join(names) if names else SERVICES_NONE_TEXT
+
+
+def script_wait_text(script):
+    """The wait rule in words."""
+    wait = script.get("wait", SCRIPT_WAIT_CARRY_ON)
+    if wait == SCRIPT_WAIT_FINISH:
+        return "Wait until finished"
+    if wait == SCRIPT_WAIT_PORT:
+        port = script.get("wait_port", "")
+        return "Wait until port %s answers" % port if port else "Wait until a port answers (no port set)"
+    return "Carry on"
+
+
+def _lab_script_selected(script, choices):
+    """Does this lab script run for a config with these explicit choices?"""
+    if script["hidden"]:
+        return choices.get(script["id"]) is True
+    if script["id"] in choices:
+        return bool(choices[script["id"]])
+    return script["include_by_default"]
+
+
+def _script_row(script, source, selected, **more):
+    row = {"id": script["id"], "kind": "script", "source": source, "name": script["name"],
+           "detail": script["script"], "selected": bool(selected), "movable": True,
+           "wait": script["wait"], "wait_port": script["wait_port"],
+           "wait_text": script_wait_text(script), "can_remove": True, "explicit": False,
+           "can_reset": False, "can_delete": False, "can_edit": False, "tag": ""}
+    row.update(more)
+    return row
+
+
+def _launch_script_rows(c, presets):
+    """Every script this config can see (hidden and unchosen ones are out)."""
+    choices = c[SCRIPT_CHOICES_KEY]
+    rows, seen = [], {LAUNCH_OTREE_ROW_ID}
+    for script in lab_scripts(presets, c["lab"]):
+        selected = _lab_script_selected(script, choices)
+        if (script["hidden"] and not selected) or script["id"] in seen:
+            continue
+        seen.add(script["id"])
+        explicit = script["id"] in choices
+        rows.append(_script_row(
+            script, "lab", selected, explicit=explicit, default=script["include_by_default"],
+            position=script["position"], hidden=script["hidden"],
+            can_reset=explicit and not script["hidden"],
+            tag=(SCRIPT_HIDDEN_TAG if script["hidden"] else
+                 SERVICE_OWN_CHOICE_TAG if explicit else SERVICE_LAB_DEFAULT_TAG)))
+    for script in c[EXTRA_SCRIPTS_KEY]:
+        if script["id"] in seen:
+            continue
+        seen.add(script["id"])
+        rows.append(_script_row(script, "own", script["enabled"], can_delete=True, can_edit=True,
+                                position=None, hidden=False))
+    return rows
+
+
+def _ordered_script_ids(rows, saved):
+    """The run order of the selected ``rows`` + the oTree row. Saved ids keep their
+    places; anything else goes by its default position: a lab script directly before
+    the oTree row or at the end, an own script last. With nothing saved this IS the
+    default order, so a config that never reordered follows the lab."""
+    selected = {row["id"]: row for row in rows if row["selected"]}
+    order = [i for i in saved if i in selected or i == LAUNCH_OTREE_ROW_ID]
+    if LAUNCH_OTREE_ROW_ID not in order:
+        order.append(LAUNCH_OTREE_ROW_ID)
+    missing = [row for row in rows if row["selected"] and row["id"] not in order]
+    for row in missing:
+        if row["source"] == "lab":
+            if row["position"] == SCRIPT_POSITION_BEFORE:
+                order.insert(order.index(LAUNCH_OTREE_ROW_ID), row["id"])
+            else:
+                order.append(row["id"])
+    for row in missing:
+        if row["source"] == "own":
+            order.append(row["id"])
+    return order
+
+
+def _page_rows(c, presets):
+    """The browser pages: selected (in their fixed opening order) and not selected."""
+    def page(row_id, source, name, url, selected, **more):
+        row = {"id": row_id, "kind": "page", "source": source, "name": name, "detail": url,
+               "selected": bool(selected), "movable": False, "can_remove": True,
+               "explicit": False, "can_reset": False, "can_delete": False, "tag": "",
+               "wait_text": "", "duplicate": False}
+        row.update(more)
+        return row
+    rows = [page(LAUNCH_ADMIN_ROW_ID, "admin", OPENS_GROUP_ADMIN, "", c["open_browser"])]
+    for service in config_service_rows(c, presets):
+        rows.append(page("svc:" + service["id"], "lab", service["name"], service["url"],
+                         service["checked"], service_id=service["id"],
+                         explicit=service["explicit"], can_reset=service["explicit"],
+                         tag=service["tag"]))
+    for index, entry in enumerate(c[EXTRA_SERVICES_KEY]):
+        rows.append(page("own-svc:%d" % index, "own", entry["name"], entry["url"],
+                         entry["enabled"], index=index, can_delete=True))
+    seen = set()
+    for row in rows:
+        if row["selected"] and row["detail"]:
+            row["duplicate"] = row["detail"] in seen
+            seen.add(row["detail"])
+    return rows
+
+
+def launch_timeline(cfg, lab_presets=None):
+    """Advanced's two lists, all decided here::
+
+        {"timeline": selected rows in run order: scripts, the reset row (only when
+                     reset is on, directly before the oTree row, moves with it), the
+                     oTree row, then the browser pages,
+         "available": what is not selected, offered to add}
+
+    Each row has ``id``, ``kind`` ("script" | "resetdb" | "otree" | "page"),
+    ``source`` ("lab" | "own" | "admin" | ""), ``name``, ``detail`` (script text or
+    web address), ``movable``, ``can_up``, ``can_down``, ``can_remove``, ``can_reset``,
+    ``can_delete``, ``tag``, ``explicit``, ``wait``, ``wait_port``, ``wait_text``."""
+    c = normalize_config(cfg or {})
+    presets = _presets_or_default(lab_presets)
+    scripts = _launch_script_rows(c, presets)
+    by_id = {row["id"]: row for row in scripts}
+    order = _ordered_script_ids(scripts, c[LAUNCH_ORDER_KEY])
+    otree = {"id": LAUNCH_OTREE_ROW_ID, "kind": "otree", "source": "",
+             "name": LAUNCH_OTREE_ROW_NAME, "detail": "", "selected": True, "movable": True,
+             "can_remove": False, "explicit": False, "can_reset": False,
+             "can_delete": False, "tag": "", "wait_text": ""}
+    moving = [otree if item == LAUNCH_OTREE_ROW_ID else by_id[item] for item in order]
+    timeline = []
+    for index, row in enumerate(moving):
+        row = dict(row, can_up=index > 0, can_down=index < len(moving) - 1)
+        if row["kind"] == "otree" and c["resetdb"]:
+            timeline.append({"id": LAUNCH_RESETDB_ROW_ID, "kind": "resetdb", "source": "",
+                             "name": LAUNCH_RESETDB_ROW_NAME, "detail": "", "selected": True,
+                             "movable": False, "can_up": False, "can_down": False,
+                             "can_remove": False, "explicit": False, "can_reset": False,
+                             "can_delete": False, "tag": "", "wait_text": ""})
+        timeline.append(row)
+    pages = _page_rows(c, presets)
+    for row in pages:
+        row.update(can_up=False, can_down=False)
+    timeline += [row for row in pages if row["selected"]]
+    available = [dict(row, can_up=False, can_down=False)
+                 for row in scripts + pages if not row["selected"]]
+    return {"timeline": timeline, "available": available}
+
+
+def move_launch_item(cfg, lab_presets, item_id, direction):
+    """The config's ``launch_order`` after moving a script or the oTree row one step
+    ("up" | "down") among what is selected. Moving back to the default order gives
+    ``[]``: following the lab again, and not an edit."""
+    c = normalize_config(cfg or {})
+    presets = _presets_or_default(lab_presets)
+    scripts = _launch_script_rows(c, presets)
+    order = _ordered_script_ids(scripts, c[LAUNCH_ORDER_KEY])
+    item_id = str(item_id)
+    if item_id in order:
+        index = order.index(item_id)
+        other = index + (-1 if direction == "up" else 1)
+        if 0 <= other < len(order):
+            order[index], order[other] = order[other], order[index]
+    return [] if order == _ordered_script_ids(scripts, []) else order
+
+
+def own_script_is_stored(preset, script_id):
+    """Is this own script in a config that is really saved? The built-in Lab default, no
+    config at all, or a script added on the form only: nothing stored to write to."""
+    if not preset or is_builtin(preset):
+        return False
+    return any(s["id"] == str(script_id)
+               for s in normalize_extra_scripts(preset.get(EXTRA_SCRIPTS_KEY)))
+
+
+def with_own_script_edit(raw_list, script_id, entry):
+    """A new list with ONE own script changed (name, text, wait rule, port). Its id is
+    written out so ``launch_order`` keeps finding it: an old entry's id is derived from
+    its name + text, which just changed. Its tick and every other entry stay as stored."""
+    out = []
+    done = False
+    for raw in (raw_list if isinstance(raw_list, (list, tuple)) else []):
+        found = normalize_extra_scripts([raw])
+        if not done and found and found[0]["id"] == str(script_id):
+            done = True
+            raw = dict(raw, id=str(script_id), name=entry["name"], script=entry["script"],
+                       wait=entry["wait"], wait_port=entry["wait_port"])
+        out.append(raw)
+    return out
+
+
+def save_own_script_edit(mutate_store, get_preset, script_id, name, script, wait, wait_port):
+    """Edit of a config's own script, both faces. On a saved config it goes straight into
+    that config through the face's locked store save; only this script is written, so
+    unsaved form changes stay unsaved. This is the one deliberate exception to "configs
+    are immutable" (PRINCIPLES 9).
+
+    Returns ``{"ok", "saved", "message", "script"}``. ``ok`` False = invalid, or the write
+    failed (the in-memory config is put back). ``saved`` False with ``ok`` True = nothing
+    stored to write to: the caller changes the form only. The caller updates its dirty
+    baseline for this script only when ``saved``."""
+    ok, message, entry = validate_script(name, script, wait, wait_port)
+    if not ok:
+        return {"ok": False, "saved": False, "message": message, "script": None}
+    entry["id"] = str(script_id)
+    if not own_script_is_stored(get_preset(), script_id):
+        return {"ok": True, "saved": False, "message": OWN_SCRIPT_UNSAVED_NOTE, "script": entry}
+    undo = {}
+
+    def apply():
+        # Read again under the lock: the store may just have merged another process's change.
+        preset = get_preset()
+        if not own_script_is_stored(preset, script_id):
+            return False
+        undo.update(preset=preset, scripts=preset.get(EXTRA_SCRIPTS_KEY))
+        preset[EXTRA_SCRIPTS_KEY] = with_own_script_edit(preset.get(EXTRA_SCRIPTS_KEY),
+                                                         script_id, entry)
+        return True
+    try:
+        stored = mutate_store(apply)
+    except Exception as error:  # noqa: BLE001 - said to the user, never claimed as saved
+        if undo:
+            undo["preset"][EXTRA_SCRIPTS_KEY] = undo["scripts"]
+        return {"ok": False, "saved": False, "script": None,
+                "message": "Could not save the script: %s" % error}
+    if not stored:
+        return {"ok": True, "saved": False, "message": OWN_SCRIPT_UNSAVED_NOTE, "script": entry}
+    return {"ok": True, "saved": True, "message": OWN_SCRIPT_SAVED_TEXT, "script": entry}
+
+
+def launch_caption(cfg, lab_presets=None):
+    """The muted line next to the collapsed Advanced caption: what will happen, e.g.
+    "2 scripts, oTree admin + 1 service"."""
+    c = normalize_config(cfg or {})
+    presets = _presets_or_default(lab_presets)
+    count = sum(1 for row in _launch_script_rows(c, presets) if row["selected"])
+    pages = services_caption(c, presets)
+    if not count:
+        return pages
+    return "%s, %s" % ("1 script" if count == 1 else "%d scripts" % count, pages)
+
+
+def launch_briefing_scripts(cfg, lab_presets=None):
+    """The launch popup's run list: scripts, the reset row and the oTree row in order
+    (the pages are its own list). ``[]`` with no script: the popup then says nothing
+    new."""
+    rows = [r for r in launch_timeline(cfg, lab_presets)["timeline"] if r["kind"] != "page"]
+    if not any(r["kind"] == "script" for r in rows):
+        return []
+    return [{"kind": r["kind"], "name": r["name"], "script": r["detail"],
+             "wait_text": r["wait_text"]} for r in rows]
+
+
+# -- running them ------------------------------------------------------------
+
+def launch_script_env(cfg, project_path, base_env=None):
+    """The environment a script's window gets: the user's own, plus ONLY the port,
+    the room and the project path.
+
+    build_env is NOT the base: it holds DATABASE_URL and the admin password. The
+    launcher never writes to its own os.environ, but it can have inherited such
+    values from the machine (a setx left over from the old batch file), so those are
+    removed too. Names compare in upper case because Windows' do. A Mac Terminal
+    window inherits nothing at all, so there only these three are exported in the
+    line (build_script_launch)."""
+    env = {}
+    for key, value in dict(os.environ if base_env is None else base_env).items():
+        upper = key.upper()
+        if upper in DB_ENV_KEYS or upper.startswith("OTREE_") or upper == "PGPASSWORD":
+            continue
+        env[key] = value
+    env.update(launch_script_env_pairs(cfg, project_path))
+    return env
+
+
+def launch_script_env_pairs(cfg, project_path):
+    """The three variables, as a dict."""
+    c = normalize_config(cfg or {})
+    port = launch_port(c)
+    return {SCRIPT_ENV_PORT: str(port if port is not None else c["port"]),
+            SCRIPT_ENV_ROOM: c["room_name"],
+            SCRIPT_ENV_PROJECT: str(project_path)}
+
+
+def _batch_title_text(name):
+    """A name made safe on a batch file's ``title`` line."""
+    text = str(name).replace("%", "%%")
+    for char in "^&|<>":
+        text = text.replace(char, "^" + char)
+    return text
+
+
+def launch_script_files(directory, index, name, script, platform_name=None):
+    """Write one script and its wrapper into ``directory``. Returns the paths.
+
+    The wrapper starts the script in a CHILD shell so an ``exit`` in the typed text
+    ends only that, then writes the exit code to the sentinel (written aside and
+    renamed, so a half-written number is never read). A non-zero code keeps the
+    window open. POSIX runs with ``sh -e``: a failed ``cd`` stops the script. A batch
+    file has no such mode and the user's lines are never rewritten, so there the last
+    command's exit code decides (see the user guide)."""
+    platform_name = platform_name or sys.platform
+    base = "script%02d" % index
+    text = _clean_script_text(script)
+    title = script_window_title(name)
+    if platform_name.startswith("win"):
+        # A batch file is read in the console's code page, hence chcp before any
+        # line that can hold a non-ASCII character. %~dp0 = this file's folder,
+        # spaces included. "> file echo N", not "echo N> file": that reads 1> as a
+        # redirect. cmd /k keeps the failed window open at a prompt.
+        wrapper_lines = [
+            "@echo off",
+            "chcp 65001 >nul",
+            '> "%%~dp0%s.started" echo 1' % base,
+            "title %s" % _batch_title_text(title),
+            'cmd /c ""%%~dp0%s.bat""' % base,
+            'set "OTREE_LAB_SCRIPT_EXIT=%ERRORLEVEL%"',
+            '> "%%~dp0%s.exit.tmp" echo %%OTREE_LAB_SCRIPT_EXIT%%' % base,
+            'move /y "%%~dp0%s.exit.tmp" "%%~dp0%s.exit" >nul' % (base, base),
+            'if "%OTREE_LAB_SCRIPT_EXIT%"=="0" exit 0',
+            "echo.",
+            "echo This script stopped with exit code %OTREE_LAB_SCRIPT_EXIT%.",
+            "echo %s" % SCRIPT_WINDOW_KEEP_OPEN,
+            "cmd /k",
+        ]
+        wrapper = os.path.join(directory, base + "_window.bat")
+        user = os.path.join(directory, base + ".bat")
+        newline = "\r\n"
+    else:
+        # "trap :" so Ctrl-C ends the script, not this wrapper: the code still gets
+        # written. (A plain ignore would be inherited by the script.)
+        wrapper_lines = [
+            "#!/bin/sh",
+            'd=$(dirname "$0")',
+            ': > "$d/%s.started"' % base,
+            "printf '\\033]0;%%s\\007' %s" % shlex.quote(title),
+            "trap : INT",
+            '/bin/sh -e "$d/%s.sh"' % base,
+            "code=$?",
+            'printf \'%%s\\n\' "$code" > "$d/%s.exit.tmp"' % base,
+            'mv -f "$d/%s.exit.tmp" "$d/%s.exit"' % (base, base),
+            'if [ "$code" -ne 0 ]; then',
+            '  echo',
+            '  echo "This script stopped with exit code $code."',
+            "  echo %s" % shlex.quote(SCRIPT_WINDOW_KEEP_OPEN),
+            "fi",
+            'exit "$code"',
+        ]
+        wrapper = os.path.join(directory, base + "_window.sh")
+        user = os.path.join(directory, base + ".sh")
+        newline = "\n"
+    body = text.replace("\n", newline)
+    if not body.endswith(newline):
+        body += newline
+    with open(user, "wb") as handle:
+        handle.write(body.encode("utf-8"))
+    with open(wrapper, "wb") as handle:
+        handle.write((newline.join(wrapper_lines) + newline).encode("utf-8"))
+    return {"wrapper": wrapper, "script": user,
+            "sentinel": os.path.join(directory, base + ".exit"),
+            "started": os.path.join(directory, base + ".started"),
+            "log": os.path.join(directory, base + ".log")}
+
+
+def build_script_launch(name, wrapper, project_path, env_pairs, platform_name=None, log_path=None):
+    """How to start one script's wrapper in its own window, kept apart from the
+    running of it so every platform can be tested off its own platform. Mirrors
+    build_server_launch.
+
+    Windows: a command STRING, ``cmd /c ""path""``: a list would go through Python's
+    command-line quoting, and a quoted path does not survive that for cmd. Started
+    minimised without taking the focus, as the server console is.
+    Mac: no ``activate``, so Terminal does not take the screen. Whether a finished
+    window disappears is the Terminal profile's choice, the same as the server's.
+    """
+    platform_name = platform_name or sys.platform
+    if platform_name.startswith("win"):
+        return {"kind": "windows", "cmd": 'cmd /c ""%s""' % wrapper, "cwd": project_path,
+                "creationflags": CREATE_NEW_CONSOLE, "minimised": True, "shell": False,
+                "description": "new minimised console window"}
+    if platform_name == "darwin":
+        parts = ["cd " + shlex.quote(project_path)]
+        for key, value in sorted(env_pairs.items()):
+            parts.append("export %s=%s" % (key, shlex.quote(value)))
+        parts.append("/bin/sh " + shlex.quote(wrapper))
+        parts.append("if [ $? -eq 0 ]; then exit 0; fi")
+        line = "; ".join(parts)
+        script = 'tell application "Terminal"\ndo script %s\nend tell' % _applescript_string(line)
+        return {"kind": "macos", "cmd": ["osascript", "-e", script], "cwd": project_path,
+                "creationflags": 0, "shell": False,
+                "description": "new Terminal window via osascript"}
+    held = '/bin/sh %s; if [ $? -eq 0 ]; then exit 0; fi; exec "${SHELL:-/bin/sh}"' % (
+        shlex.quote(wrapper))
+    for terminal in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+        if shutil.which(terminal):
+            run_flag = "--" if terminal == "gnome-terminal" else "-e"
+            return {"kind": "linux-terminal", "cmd": [terminal, run_flag, "sh", "-c", held],
+                    "cwd": project_path, "creationflags": 0, "shell": False,
+                    "description": "new %s window" % terminal}
+    return {"kind": "linux-background", "cmd": ["/bin/sh", wrapper], "cwd": project_path,
+            "creationflags": 0, "shell": False, "log": log_path,
+            "description": "background process (no terminal emulator found)"}
+
+
+def _spawn_script_window(spec, env):
+    """Start a built script launch. Raises OSError when it cannot start."""
+    kwargs = {"cwd": spec["cwd"], "env": env, "shell": False}
+    if spec.get("creationflags"):
+        kwargs["creationflags"] = spec["creationflags"]
+    if spec.get("minimised") and sys.platform.startswith("win"):
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        kwargs["startupinfo"] = startup
+    if spec["kind"] == "linux-background" and spec.get("log"):
+        with open(spec["log"], "ab") as output:
+            return subprocess.Popen(spec["cmd"], stdin=subprocess.DEVNULL, stdout=output,
+                                    stderr=subprocess.STDOUT, **kwargs)
+    return subprocess.Popen(spec["cmd"], **kwargs)
+
+
+def read_script_exit(sentinel):
+    """The exit code a wrapper wrote, or None while there is none."""
+    try:
+        with open(sentinel, encoding="ascii", errors="replace") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _port_answers(port, timeout=0.0, on_wait=None):
+    """core.wait_for_server on a script's port. An answer that is not even HTTP still
+    means something is listening."""
+    import http.client
+    try:
+        return bool(wait_for_server(AUTOLOGIN_HOST, port, timeout=timeout, on_wait=on_wait))
+    except http.client.HTTPException:
+        return True
+    except Exception:  # noqa: BLE001 - a probe never stops a launch by itself
+        return False
+
+
+def _launch_scripts_folder():
+    """A new temporary folder for this launch; older launches' folders go."""
+    root = tempfile.gettempdir()
+    now = time.time()
+    try:
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            if (name.startswith(LAUNCH_SCRIPTS_DIR_PREFIX) and os.path.isdir(path)
+                    and now - os.path.getmtime(path) > LAUNCH_SCRIPTS_DIR_KEEP_SECONDS):
+                shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+    return tempfile.mkdtemp(prefix=LAUNCH_SCRIPTS_DIR_PREFIX)
+
+
+def _set_row(row, outcome, text):
+    row["outcome"] = outcome
+    row["mark"] = OUTCOME_MARKS[outcome]
+    row["text"] = text
+
+
+def script_window_title(name):
+    """The title of a script's window, named in the report so it can be found."""
+    return "oTree script: %s" % _clean_script_name(name)
+
+
+def _fail_script(track, seq, reason, code=None, still_running=False):
+    """Mark a script's row failed with everything the launcher knows. Its output is
+    never captured: it stays in its own window. Returns the problem text."""
+    row = track["row"]
+    start = track.get("start_time")
+    ran = None if start is None else time.monotonic() - start
+    facts = []
+    if code is not None:
+        facts.append("Exit code %s" % code)
+    facts.append("What failed: %s" % reason)
+    if ran is not None:
+        facts.append("%s about %d s after it started" % (
+            "Still running when given up on" if still_running else "Seen stopped",
+            max(1, round(ran))))
+    if track.get("log"):
+        facts.append("Its output is in %s" % track["log"])
+    elif start is not None:
+        facts.append('Full output: look in its window, titled "%s", which stays open'
+                     % script_window_title(row["name"]))
+    row["facts"] = facts
+    row["failed_script"] = track["script"]
+    text = "failed: %s" % reason
+    if code is not None:
+        text += ", exit code %s" % code
+    _set_row(row, OUTCOME_FAILED, text)
+    track["ended"] = not still_running
+    return 'The script "%s" %s.' % (row["name"], text)
+
+
+def _run_one_script(track, seq):
+    """Start one script and apply its wait rule. Updates ``track["row"]``; returns the
+    problem text ("" = fine)."""
+    row = track["row"]
+    name, say = row["name"], seq["say"]
+    wait, port = track["wait"], track["wait_port"]
+    if wait == SCRIPT_WAIT_PORT and not port:
+        return _fail_script(track, seq, "its wait rule names no port")
+    if wait == SCRIPT_WAIT_PORT and _port_answers(port):
+        say("info", 'Port %s already answers, so the script "%s" was not started.' % (port, name))
+        _set_row(row, OUTCOME_SKIPPED, "skipped: port %s already answered" % port)
+        return ""
+    if not seq.get("folder"):
+        seq["folder"] = _launch_scripts_folder()
+    seq["count"] += 1
+    files = launch_script_files(seq["folder"], seq["count"], name, track["script"],
+                                seq["platform"])
+    spec = build_script_launch(name, files["wrapper"], seq["project"],
+                               launch_script_env_pairs(seq["cfg"], seq["project"]),
+                               seq["platform"], files["log"])
+    say("info", 'Starting the script "%s": %s.' % (name, spec["description"]))
+    try:
+        (seq.get("spawn") or _spawn_script_window)(spec, seq["env"])
+    except OSError as error:
+        return _fail_script(track, seq, "could not start (%s)" % error)
+    start = time.monotonic()
+    track.update(sentinel=files["sentinel"], started=files["started"], start_time=start,
+                 log=files["log"] if spec["kind"] == "linux-background" else "")
+    seq["started"].append(track)
+
+    limit = {SCRIPT_WAIT_CARRY_ON: SCRIPT_SETTLE_SECONDS, SCRIPT_WAIT_FINISH: SCRIPT_FINISH_TIMEOUT,
+             SCRIPT_WAIT_PORT: SCRIPT_PORT_TIMEOUT}[wait]
+    next_notice = 5.0
+    while True:
+        code = read_script_exit(files["sentinel"])
+        elapsed = time.monotonic() - start
+        if code == 0 and wait != SCRIPT_WAIT_PORT:
+            track["ended"] = True
+            _set_row(row, OUTCOME_FINISHED, TEXT_FINISHED)
+            return ""
+        if code not in (None, 0):
+            reason = {SCRIPT_WAIT_CARRY_ON: "stopped within %g s of starting" % SCRIPT_SETTLE_SECONDS,
+                      SCRIPT_WAIT_FINISH: "stopped with an error after about %d s"
+                                          % max(1, round(elapsed)),
+                      SCRIPT_WAIT_PORT: "stopped before port %s answered" % port}[wait]
+            return _fail_script(track, seq, reason, code=code)
+        if (code is None and elapsed >= SCRIPT_WINDOW_OPEN_TIMEOUT
+                and not os.path.exists(files["started"])):
+            track["start_time"] = None
+            problem = _fail_script(track, seq, "its window did not open within %g s"
+                                   % SCRIPT_WINDOW_OPEN_TIMEOUT)
+            seq["started"].remove(track)
+            return problem
+        if wait == SCRIPT_WAIT_PORT and _port_answers(port):
+            _set_row(row, OUTCOME_PORT_ANSWERS, "port %s answering" % port)
+            say("ok", 'Port %s answers (script "%s").' % (port, name))
+            return ""
+        if elapsed >= limit and os.path.exists(files["started"]) or elapsed >= max(
+                limit, SCRIPT_WINDOW_OPEN_TIMEOUT):
+            break
+        if wait != SCRIPT_WAIT_CARRY_ON and elapsed >= next_notice:
+            say("info", 'Still waiting for the script "%s" (%d s)...' % (name, elapsed))
+            next_notice += 5.0
+        time.sleep(0.1)
+    if wait == SCRIPT_WAIT_CARRY_ON:
+        _set_row(row, OUTCOME_RUNNING, TEXT_RUNNING % SCRIPT_SETTLE_SECONDS)
+        say("info", 'The script "%s" is running.' % name)
+        return ""
+    if wait == SCRIPT_WAIT_PORT:
+        return _fail_script(track, seq, "port %s did not answer after %g s" % (port, limit),
+                            still_running=True)
+    return _fail_script(track, seq, "did not finish within %g s" % limit, still_running=True)
+
+
+def _recheck_scripts(seq):
+    """Read every started script's sentinel again: a crash during the sequence shows
+    here. Returns the first problem text ("" = none)."""
+    problem = ""
+    for track in seq["started"]:
+        if track.get("ended") or track["row"].get("outcome") == OUTCOME_FAILED:
+            continue
+        code = read_script_exit(track["sentinel"])
+        if code == 0:
+            track["ended"] = True
+            if track["row"]["outcome"] == OUTCOME_RUNNING:
+                _set_row(track["row"], OUTCOME_FINISHED, TEXT_FINISHED)
+            else:
+                track["row"]["text"] += "; the script then finished, exit code 0"
+        elif code is not None:
+            text = _fail_script(track, seq, "stopped during the launch", code=code)
+            problem = problem or text
+    return problem
+
+
+def _running_script_names(seq):
+    return [t["row"]["name"] for t in seq["started"] if not t.get("ended")]
+
+
+def launch_running_note(seq):
+    """What stays running after a failed launch, and what to do about it. "" when
+    nothing does."""
+    parts = []
+    names = _running_script_names(seq)
+    if names:
+        parts.append("Scripts already started stay running: %s." % ", ".join(names))
+    if seq.get("otree_started"):
+        parts.append("The oTree server stays running. Close its window before launching "
+                     "again: a new launch is refused while it runs.")
+    return " ".join(parts)
+
+
+def _script_stop_message(seq, problem):
+    head = problem
+    if not seq.get("otree_started"):
+        head += " The oTree server was not started and the database was not reset."
+    head += " Later steps did not run and nothing was sent to the browser."
+    note = launch_running_note(seq)
+    return head + (" " + note if note else "")
+
+
+def _script_track(row):
+    return {"row": row, "script": row["detail"], "wait": row["wait"],
+            "wait_port": row["wait_port"]}
+
+
+def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, on_wait=None,
+                        platform_name=None, spawn=None, base_env=None):
+    """The one sequence Tk, web and the one-click shortcut all run, in place of their
+    old reset + start step. Goes through the timeline up to, not including, the
+    browser pages; the caller opens those after this returns ``ready``, which keeps
+    them last.
+
+    ``start_otree(started_names)`` does the reset + server start, and returns None
+    when it worked or ``{"step": "resetdb" | "otree", "code": exit code or None,
+    "message": text, ...}``. ``log(level, text)``: level "ok" | "info" | "warn" | "err".
+
+    Returns ``{"ok", "stage", "message", "rows", "started", "failure", "ready_timeout",
+    ...}``; pass it to :func:`recheck_launch_scripts`, :func:`finish_launch_report` and
+    :func:`launch_report_lines`. Stages: ``ready``; ``script_failed`` (ANY script
+    failure: nothing later runs, what started stays running); ``otree_failed``;
+    ``not_ready``.
+
+    With no script at all this adds no wait: the old flow, unchanged. With scripts it
+    waits for readiness itself, so scripts run and the sentinels are read before any
+    page opens; the caller's own readiness wait then returns at once.
+    """
+    timeline = launch_timeline(cfg, lab_presets)["timeline"]
+    rows = []
+    for row in timeline:
+        if row["kind"] == "page" and row.get("duplicate"):
+            continue   # the same address opens once
+        report = dict(row)
+        _set_row(report, OUTCOME_NOT_RUN, TEXT_NOT_RUN)
+        rows.append(report)
+
+    def say(level, text):
+        if log is not None:
+            try:
+                log(level, text)
+            except Exception:  # noqa: BLE001 - a broken logger never stops a launch
+                pass
+
+    seq = {"ok": False, "stage": "", "message": "", "rows": rows, "started": [], "failure": None,
+           "cfg": cfg, "project": project_path, "platform": platform_name or sys.platform,
+           "spawn": spawn, "say": say, "count": 0, "folder": "", "otree_started": False,
+           "ready_timeout": READINESS_TIMEOUT,
+           "env": launch_script_env(cfg, project_path, base_env)}
+
+    def stop(problem):
+        seq.update(ok=False, stage=SEQUENCE_SCRIPT_FAILED, message=_script_stop_message(seq, problem))
+        say("err", seq["message"])
+        return seq
+
+    scripts_exist = any(row["kind"] == "script" for row in rows)
+    otree_row = [row for row in rows if row["kind"] == "otree"][0]
+    reset_row = next((row for row in rows if row["kind"] == "resetdb"), None)
+
+    def run_scripts(script_rows):
+        for row in script_rows:
+            problem = _recheck_scripts(seq)
+            if not problem:
+                try:
+                    problem = _run_one_script(_script_track(row), seq)
+                except OSError as error:
+                    problem = _fail_script(_script_track(row), seq,
+                                           "could not be prepared (%s)" % error)
+            if problem:
+                return problem
+        return ""
+
+    index = rows.index(reset_row) if reset_row else rows.index(otree_row)
+    before = [row for row in rows[:index] if row["kind"] == "script"]
+    after = [row for row in rows[rows.index(otree_row) + 1:] if row["kind"] == "script"]
+    problem = run_scripts(before) or _recheck_scripts(seq)
+    if problem:
+        return stop(problem)
+
+    failure = start_otree(_running_script_names(seq))
+    if failure:
+        code = failure.get("code")
+        if failure.get("step") == "resetdb":
+            _set_row(reset_row or otree_row, OUTCOME_FAILED,
+                     "failed: did not start" if code is None else "failed, exit code %s" % code)
+        else:
+            if reset_row is not None:
+                _set_row(reset_row, OUTCOME_FINISHED, TEXT_FINISHED)
+            _set_row(otree_row, OUTCOME_FAILED, "failed: did not start")
+        message = str(failure.get("message", ""))
+        note = launch_running_note(seq)
+        if note:
+            message = message.replace("Nothing was started", "The oTree server was not started")
+            message += " " + note
+        seq.update(ok=False, stage=SEQUENCE_OTREE_FAILED, message=message, failure=failure)
+        return seq
+    if reset_row is not None:
+        _set_row(reset_row, OUTCOME_FINISHED, TEXT_FINISHED)
+    seq["otree_started"] = True
+    _set_row(otree_row, OUTCOME_RUNNING, "started, not checked yet")
+
+    if scripts_exist:
+        ready = wait_for_server(AUTOLOGIN_HOST, normalize_config(cfg)["port"], on_wait=on_wait) \
+            if on_wait is not None else wait_for_server(AUTOLOGIN_HOST, normalize_config(cfg)["port"])
+        if not ready:
+            # The caller's existing not-ready handling still runs; no second long wait.
+            seq.update(ok=False, stage=SEQUENCE_NOT_READY, ready_timeout=0.0)
+            _set_row(otree_row, OUTCOME_FAILED, "failed: did not become ready")
+            problem = _recheck_scripts(seq)
+            if problem:
+                return stop(problem)
+            seq["otree_started"] = False
+            seq["message"] = launch_running_note(seq)
+            return seq
+        _set_row(otree_row, OUTCOME_PORT_ANSWERS, "answering on port %s"
+                 % normalize_config(cfg)["port"])
+        problem = run_scripts(after) or _recheck_scripts(seq)
+        if problem:
+            return stop(problem)
+    seq.update(ok=True, stage=SEQUENCE_READY)
+    return seq
+
+
+def recheck_launch_scripts(seq):
+    """After the pages were sent, the launch's last look at the sentinels. Returns the
+    failure message, or "" when the launch stands. A crash after this is not tracked
+    by anyone (said in the docs)."""
+    problem = _recheck_scripts(seq)
+    if not problem:
+        return ""
+    seq.update(ok=False, stage=SEQUENCE_SCRIPT_FAILED)
+    head = problem + " The pages had already been sent to the browser."
+    note = launch_running_note(seq)
+    seq["message"] = head + (" " + note if note else "")
+    seq["say"]("err", seq["message"])
+    return seq["message"]
+
+
+def finish_launch_report(seq, dashboard=None, services=None, ready=None):
+    """Mark what the sequence itself could not know, then write the report to the
+    activity log. ``dashboard`` = open_dashboard_authenticated's result, ``services`` =
+    open_launch_services', ``ready`` = did oTree answer. A page is only ever "sent to the
+    browser": nothing tells the launcher the page really appeared."""
+    results = {str(item.get("url", "")): item for item in (services or [])}
+    for row in seq["rows"]:
+        if row["kind"] == "otree" and row["outcome"] == OUTCOME_RUNNING:
+            if ready is True:
+                _set_row(row, OUTCOME_PORT_ANSWERS, "answering on port %s"
+                         % normalize_config(seq["cfg"])["port"])
+            elif ready is False:
+                _set_row(row, OUTCOME_FAILED, "failed: did not become ready")
+        if row["kind"] != "page":
+            continue
+        answer = None
+        if row["source"] == "admin":
+            if dashboard is not None:
+                answer = bool(dashboard.get("ok"))
+        elif row["detail"] in results:
+            answer = bool(results[row["detail"]].get("ok"))
+        if answer is not None:
+            _set_row(row, OUTCOME_SENT_BROWSER if answer else OUTCOME_OPEN_FAILED,
+                     TEXT_SENT_BROWSER if answer else TEXT_OPEN_FAILED)
+    if not seq.get("reported") and _launch_has_scripts(seq):
+        seq["reported"] = True
+        levels = {MARK_OK: "ok", MARK_NEUTRAL: "info", MARK_FAILED: "err", MARK_WARN: "warn",
+                  MARK_NOT_RUN: "info"}
+        seq["say"]("info", LAUNCH_REPORT_TITLE + ":")
+        for row in seq["rows"]:
+            seq["say"](levels[row["mark"]], "  %s %s: %s" % (
+                MARK_GLYPHS[row["mark"]], row["name"], row["text"]))
+            for fact in row.get("facts", ()):
+                seq["say"]("info", "      " + fact)
+            if row.get("failed_script"):
+                seq["say"]("info", "      Script text:")
+                for line in row["failed_script"].splitlines():
+                    seq["say"]("info", "        " + line)
+    return seq["rows"]
+
+
+def _launch_has_scripts(seq):
+    return any(row["kind"] == "script" for row in (seq or {}).get("rows", []))
+
+
+def launch_box_report(seq):
+    """What the result box gets: the report only when the launch had a script. A launch
+    with none keeps the plain browser-pages list (Julian, 2026-11-04). A failed script
+    always means there was one, so a loud failure is unaffected."""
+    return launch_report(seq) if _launch_has_scripts(seq) else []
+
+
+def launch_report(seq):
+    """The rows the result box shows: ``[{"kind", "name", "outcome", "mark", "glyph",
+    "text", "facts", "script", "url"}]``; ``script`` only on a failed row, ``url`` only
+    on a website."""
+    out = []
+    for row in (seq or {}).get("rows", []):
+        out.append({"kind": row["kind"], "name": row["name"], "outcome": row["outcome"],
+                    "mark": row["mark"], "glyph": MARK_GLYPHS[row["mark"]], "text": row["text"],
+                    "facts": list(row.get("facts", ())),
+                    "script": row.get("failed_script", ""),
+                    "url": row["detail"] if row["kind"] == "page" else ""})
+    return out
+
+
+def launch_report_headline(seq):
+    """``{"level": "ok" | "partial" | "failed", "text"}``: the overall line. It never
+    says everything worked when a script was only started."""
+    rows = (seq or {}).get("rows", [])
+    if any(r["mark"] == MARK_FAILED for r in rows):
+        return {"level": "failed", "text": str((seq or {}).get("message", ""))}
+    scripts = [r for r in rows if r["kind"] == "script"]
+    unchecked = [r for r in scripts if r["mark"] != MARK_OK]
+    if unchecked:
+        return {"level": "partial", "text": (
+            "oTree is running. %s only started or skipped, not checked: see the marks below."
+            % ("1 script was" if len(unchecked) == 1 else "%d scripts were" % len(unchecked)))}
+    if scripts:
+        return {"level": "ok", "text": "oTree is running and every script was checked."}
+    return {"level": "ok", "text": ""}
+
+
+def launch_report_lines(seq):
+    """The report as plain text lines, facts and failed script text included, for the
+    one-click box."""
+    lines = []
+    for row in launch_report(seq):
+        lines.append("%s %s: %s" % (row["glyph"], row["name"], row["text"]))
+        lines.extend("    " + fact for fact in row["facts"])
+        if row["script"]:
+            lines.append("    Script text:")
+            lines.extend("      " + line for line in row["script"].splitlines())
+    return lines
+
+
+def launch_report_text(seq):
+    """The report as a block of text with a heading ("" with no script in it)."""
+    if not _launch_has_scripts(seq):
+        return ""
+    return "\n".join([LAUNCH_REPORT_TITLE + ":"] + launch_report_lines(seq))
 
 
 # ---------------------------------------------------------------------------
@@ -9515,6 +10750,10 @@ def launch_briefing(cfg, lab_presets=None):
         "services": [{"name": s["name"], "url": s["url"]} for s in _services],
         "services_title": SERVICES_BRIEFING_TITLE,
         "services_title_launched": SERVICES_BRIEFING_TITLE_LAUNCHED,
+        # The launch scripts + oTree in run order ([] with no script: nothing new to
+        # say). Each script shows its text.
+        "scripts_run": launch_briefing_scripts(c, resolved_presets),
+        "scripts_title": SCRIPTS_BRIEFING_TITLE,
     }
 
 
@@ -10790,6 +12029,7 @@ PORT_NO_PERMISSION_MESSAGE = (
     "not ask for those. Choose another port with the pen next to Port, or ask your IT "
     "department.")
 HEADLESS_PORT_REFUSED_EXIT = 12
+HEADLESS_SCRIPT_FAILED_EXIT = 13
 # What a server that never came up may have run into (all three launch paths).
 SERVER_START_FAILED_CAUSES = ("a missing project, a database error, the port already in "
                               "use, or no permission to use the port")
@@ -12838,7 +14078,7 @@ UI_TIPS = {
                       "another computer of the lab into data/ and restart.",
     "services": "Web pages that open in a new browser tab once the oTree server is "
                 "ready, right after the admin page (for example a lab tool). Web "
-                "addresses only, never programs. Saved per lab in lab_info.json. "
+                "addresses only: programs go under Launch scripts. Saved per lab in lab_info.json. "
                 "“Include by default” ticks the service for every config "
                 "that has not made its own choice.",
     "services_launch": "Everything ticked here opens in a new browser tab once "
@@ -12847,6 +14087,15 @@ UI_TIPS = {
                        "and your own. A lab service you have not changed follows "
                        "the lab setting; one you ticked or unticked yourself stays "
                        "your choice. A page that cannot open never stops the launch.",
+    "scripts": "Typed commands that run in their own terminal window around the oTree "
+               "server start, in the project folder. Saved per lab in lab_info.json. "
+               "\u201cInclude by default\u201d selects a script for every config that has "
+               "not chosen. \u201cHidden\u201d keeps it out of the list unless a config "
+               "already chose it; that keeps things tidy, it does not protect the text.",
+    "timeline": "Everything that happens on launch, top to bottom. Scripts run in their "
+                "own window, in the project folder, in the shell of this computer, and "
+                "get OTREE_LAB_PORT, OTREE_LAB_ROOM and OTREE_LAB_PROJECT. Any script that "
+                "fails stops the launch. Browser pages always open last.",
 }
 
 
