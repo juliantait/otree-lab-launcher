@@ -352,7 +352,6 @@ def _ui_text():
         "unsaved_settings": core.UNSAVED_SETTINGS_TITLE,
         # Saving a config: the words the page needs before it has asked Python.
         "save_config_label": core.SAVE_CONFIG_LABEL,
-        "save_as_new_label": core.SAVE_AS_NEW_LABEL,
         "save_and_launch": core.SAVE_AND_LAUNCH_LABEL,
         "save_and_launch_anyway": core.SAVE_AND_LAUNCH_ANYWAY_LABEL,
         "launch_plain": core.LAUNCH_PLAIN_LABEL,
@@ -2740,8 +2739,8 @@ class Api(object):
                 break
         if match is None:
             return {"ok": False, "needs_save": True,
-                    "message": "Save these settings as a named config first (Save as "
-                               "new config), then create the one-click shortcut."}
+                    "message": "Save these settings as a named config first (Save "
+                               "config), then create the one-click shortcut."}
         if core.configs_differ(fields_to_config(fields), core.follow_lab_room(
                 match, core.lab_presets_from_store(self.store_extra))):
             return {"ok": False, "needs_save": True,

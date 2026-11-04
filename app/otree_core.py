@@ -82,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.11.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -14299,8 +14299,9 @@ SAVE_OFFER_CHANGED = "changed"
 SAVE_OFFER_SAME = "same"
 SAVE_DIALOG_COPY = "copy"
 
+# The big Save button at the top, in every state, both faces (Julian, 2026-11-04). The dialog it
+# opens says "Save as new" where that describes the option (SAVE_AS_NEW_TITLE, save_dialog_state).
 SAVE_CONFIG_LABEL = "Save config..."
-SAVE_AS_NEW_LABEL = "Save as new config..."
 SAVE_CONFIG_TITLE = "Save config"
 SAVE_AS_NEW_TITLE = "Save as new config"
 SAVE_OFFER_UNSAVED_LINE = "This isn't saved yet. It will be saved as:"
@@ -14493,13 +14494,6 @@ def launch_save_action(mode, ticked, researcher, warnings=False):
     if mode == SAVE_MODE_NEW and not str(researcher or "").strip():
         return {"label": label, "enabled": False, "reason": SAVE_NEEDS_RESEARCHER}
     return {"label": label, "enabled": True, "reason": ""}
-
-
-def save_button_label(preset):
-    """The main Save button: "Save as new config..." once a saved config is on screen,
-    "Save config..." when nothing is saved yet. It never changes with the dirty state,
-    so the header does not move while someone types."""
-    return SAVE_AS_NEW_LABEL if preset and not is_builtin(preset) else SAVE_CONFIG_LABEL
 
 
 def save_dialog_state(fields, config_name, presets, extra=None, lab_presets=None, os_user="",

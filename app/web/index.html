@@ -681,7 +681,7 @@ input::placeholder{color:var(--faint)}
 .btn:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .link{background:none;border:0;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;padding:0}
 .link:hover{color:var(--accent)}
-/* "Save as new config" takes the app's PINK ACCENT when the form has unsaved
+/* "Save config" takes the app's PINK ACCENT when the form has unsaved
    changes, so it reads as "you have changes to save" rather than a passive
    reminder AND re-skins with the theme via the accent token. Emphasis is COLOUR
    ONLY (fill, text, border colour, glow): font-size, font-WEIGHT, padding and
@@ -1050,7 +1050,7 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 .btn-launch:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi));box-shadow:0 6px 26px rgba(var(--accent-rgb),.5),inset 0 1px 0 rgba(255,255,255,.18)}
 .btn-launch:active{transform:translateY(1px)}
 /* Launch is the one action in the launch bar (Save one-click shortcut moved to the
-   header, next to Save as new config). */
+   header, next to Save config). */
 .launchbar .btn-launch{margin-left:auto}
 
 /* ============================ MODALS ============================ */
@@ -1591,7 +1591,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
         <p class="sub" id="cfgSub"></p>
       </div>
       <!-- "Save one-click shortcut": always visible on the config page, the same
-           size as "Save as new config..." and right next to it (Julian,
+           size as "Save config..." and right next to it (Julian,
            2026-10-01: people do it once but must recognise it). A GHOST button
            since 2026-10-08 (S2): the frequent action stands out, the once-only
            one recedes. Hovering it shows what it gives you (the info-tip
@@ -2275,7 +2275,6 @@ var UI_TEXT={
   unsaved_changes:"Unsaved changes",
   unsaved_settings:"Unsaved settings",
   save_config_label:"Save config...",
-  save_as_new_label:"Save as new config...",
   save_and_launch:"Save and launch",
   save_and_launch_anyway:"Save and launch anyway",
   launch_plain:"Launch",
@@ -3889,7 +3888,7 @@ DELETE_ACTIONS.scr=function(key){
 DELETE_WORDING.scr=function(name){return escapeHtml(UI_TEXT.script_delete_confirm).replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
 DELETE_BACK.scr=function(){openLabSettings("scripts");};
 
-/* ---- unsaved-changes (dirty) tracking for the "Save as new config" button ----
+/* ---- unsaved-changes (dirty) tracking for the "Save config" button ----
    A light flag: snapshot the whole form whenever a config is loaded or saved,
    then compare on every edit. When they differ the button gets .dirty (bigger +
    amber). No dirty flag existed before, so this is the surfaced one. */
@@ -3900,8 +3899,7 @@ function isFormDirty(){return (cleanSnapshot!==null&&formSnapshot()!==cleanSnaps
 function updateDirtyState(){
   var b=el("saveAsBtn");if(!b)return;
   b.classList.toggle("dirty",isFormDirty());
-  var row=currentConfigRow();
-  b.textContent=(row&&!row.builtin)?UI_TEXT.save_as_new_label:UI_TEXT.save_config_label;
+  b.textContent=UI_TEXT.save_config_label;   /* every state: core.SAVE_CONFIG_LABEL */
   renderConfigSubline();   /* the amber dot + "Unsaved changes" in the header */
   _adminSummaryLater();
 }

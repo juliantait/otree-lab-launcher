@@ -47,7 +47,7 @@ extra.
 | Config dropdown | `select_config` | loads that saved config's fields |
 | Browse (project) | `pick_project_folder` | native folder dialog → validate → show apps |
 | Browse (participant file) | `pick_participant_file` | native file dialog |
-| Save config... / Save as new config... | `save_dialog_state`, `save_config_as` | the same rules as the launch row (`core.save_config_choice`): new, or Replace (old version to Deleted configs) |
+| Save config... | `save_dialog_state`, `save_config_as` | the same rules as the launch row (`core.save_config_choice`): new, or Replace (old version to Deleted configs) |
 | Before you launch, save row | `launch_save_offer`, `launch(save=...)` | saves those fields first, then launches them; a failed save does not launch |
 | Sidebar click, delete, Quit, window close | `unsaved_question` | Save / Discard / Cancel when the form has unsaved work |
 | History > Config edits | `config_history` | read-only edit log |
@@ -89,7 +89,7 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
   the rest are all `name = core.name` aliases). What remains duplicated is only
   the Tk GUI layer. `export_bat_text` (the standalone `.bat` export) is not wired
   to any button in either face — only the tests call it.
-- "Save as new…" uses a small inline name field in the modal (not
+- The Save dialog uses a small inline name field in the modal (not
   `window.prompt`), so it works the same in the pywebview window and the
   browser-mode server.
 - Design spec: the full design spec that bossman keeps outside this repo (ask

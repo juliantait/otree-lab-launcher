@@ -419,8 +419,8 @@ differs from what is saved, and the Save button turns pink. Each
 config in the list on the left shows its folder, who saved it and when it was
 last launched ("Never run" until then).
 
-**Saving when you are ready.** The Save button at the top stays visible. It reads **Save
-config...** until a saved config is on screen, then **Save as new config...**. It works the
+**Saving when you are ready.** The **Save config...** button at the top stays visible and always
+reads the same. On a saved config with no edits it saves a copy under a new name. It works the
 same as the save row in **Before you launch**, which appears only when something is unsaved:
 
 - Nothing saved yet: **"This isn't saved yet. It will be saved as:"**, ticked, named after the

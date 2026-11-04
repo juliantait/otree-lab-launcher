@@ -2693,7 +2693,7 @@ class LauncherApp(object):
                                   fg=COLORS["warn"], font=self.fonts.small)
         Tooltip(self.dirty_dot, lambda: core.UNSAVED_CHANGES_TEXT).attach(self.dirty_dot)
 
-        # "Save as new config...": ALWAYS packed (S9, 2026-10-08), so nothing in
+        # "Save config...": ALWAYS packed (S9, 2026-10-08), so nothing in
         # the header ever moves; it takes the accent fill while the setup is
         # worth saving (_apply_save_affordance). A plain tk.Button because ttk
         # ignores a fill colour on the Windows theme; on macOS (aqua) tk ignores
@@ -2708,7 +2708,7 @@ class LauncherApp(object):
             activeforeground=COLORS["text"], disabledforeground=COLORS["faint"])
         self.banner.pack(side="right", padx=(8, 0))
         # "Save one-click shortcut": ALWAYS visible on the config page, right next
-        # to Save as new config (Julian, 2026-10-01: people do it once but must
+        # to Save config (Julian, 2026-10-01: people do it once but must
         # recognise it); a GHOST button since S2 (no fill, no border) so the
         # frequent action stands out. Hovering it says what it gives you
         # (core.ui_tip("one_click_shortcut")).
@@ -4394,7 +4394,7 @@ class LauncherApp(object):
         self.inline_status.on_show_log = self.reveal_activity_log
 
         # Launch is the ONE action in this bar. "Save one-click shortcut" lives in
-        # the header, next to "Save as new config..." (see _build_main).
+        # the header, next to "Save config..." (see _build_main).
         self.launch_button = tk.Button(
             bar, text="Launch", command=self.launch, font=self.fonts.launch,
             bg=COLORS["accent"], fg="#ffffff", activebackground=COLORS["accent_dark"],
@@ -4953,7 +4953,7 @@ class LauncherApp(object):
     def _needs_save(self):
         """True when the on-screen setup is not a saved, named config: a brand-new
         blank setup or the built-in default with a project folder chosen, or a
-        config that has been changed (dirty). Drives the gentle Save-as-new
+        config that has been changed (dirty). Drives the gentle Save button
         affordance and the save reminder at launch."""
         try:
             has_folder = bool(self.var["project_path"].get().strip())
@@ -4967,7 +4967,7 @@ class LauncherApp(object):
         return self.dirty
 
     def _apply_save_affordance(self):
-        """Paint 'Save as new config...' (always packed, rightmost, with Save
+        """Paint 'Save config...' (always packed, rightmost, with Save
         one-click shortcut to its left as on the web face): the accent fill
         while the setup is worth saving, plain otherwise. COLOUR only, so the
         header never moves. Where tk cannot fill a button (macOS aqua) the
@@ -4975,7 +4975,6 @@ class LauncherApp(object):
         if not hasattr(self, "banner"):
             return
         needs = self._needs_save()
-        self.banner.configure(text=core.save_button_label(self._selected_preset()))
         if self._button_fill_ok:
             if needs:
                 self.banner.configure(
@@ -5923,7 +5922,7 @@ class LauncherApp(object):
         # (database_id "", db_mode LAB); Save As pins it to that database's id.
         self.load_fields(blank, None)
         self.inline_status.set("muted", "")
-        self.log("New blank config. Choose a project folder, then Save as new.", "info")
+        self.log("New blank config. Choose a project folder, then Save config.", "info")
 
     # -- this computer's lab (machine.json home_lab) ----------------------
 
@@ -7248,7 +7247,7 @@ class LauncherApp(object):
         # says "<name> (changed)". A brand-new unsaved scratch has nothing to stamp.
         if self.selected_index is None:
             self.log("These settings are not a saved config, so no config was stamped. "
-                     "Use Save as new to keep them.", "muted")
+                     "Use Save config to keep them.", "muted")
             return
         preset = self.presets[self.selected_index]
         # The built-in Lab default is a launch TEMPLATE you launch FROM, never a
@@ -7256,7 +7255,7 @@ class LauncherApp(object):
         # "not a saved config" guidance in the log and do not stamp it.
         if is_builtin(preset):
             self.log("The Lab default is a launch template, so nothing was stamped. "
-                     "Use Save as new to keep these settings.", "muted")
+                     "Use Save config to keep these settings.", "muted")
             return
         if core.launch_differs_from_config(cfg, preset, self.lab_presets):
             self.log('"%s" ran with unsaved changes, so its saved settings were not marked '
