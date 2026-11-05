@@ -82,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.11.1"
+APP_VERSION = "1.12.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -558,6 +558,12 @@ def normalize_stored_lab(raw):
     scripts = normalize_lab_scripts(raw.get(LAB_SCRIPTS_KEY))
     if scripts:
         entry[LAB_SCRIPTS_KEY] = scripts
+    # The same for environment variables: only what differs from the built-in suggestions.
+    env_vars = stored_lab_env_vars(raw.get(LAB_ENV_VARS_KEY))
+    if env_vars:
+        entry[LAB_ENV_VARS_KEY] = env_vars
+    if raw.get(LAB_ENV_ADD_OWN_KEY):
+        entry[LAB_ENV_ADD_OWN_KEY] = True
     # The same for the default port: only when it is not the usual one.
     port = _parse_launch_port(raw.get("default_port"))
     if port is not None and str(port) != DEFAULT_CONFIG["port"]:
@@ -931,6 +937,15 @@ DEFAULT_CONFIG = {
     "script_choices": {},
     "extra_scripts": [],
     "launch_order": [],
+    # Tools (2026-11-05): the ids of the tools ticked in Advanced. Empty = every tool
+    # off, not written when empty, and a config without the key means the same.
+    "launch_tools": [],
+    # Environment variables (2026-11-05): ``env_var_choices`` = the lab's variables this
+    # config selected, {name: value}, an empty value is selected but not set.
+    # ``extra_env_vars`` = the config's own [{name, value, enabled}]. Neither is written
+    # when empty (see config_for_storage and launch_env_vars).
+    "env_var_choices": {},
+    "extra_env_vars": [],
 }
 
 # The launch port option, both faces. General on purpose: app/ and docs/ ship
@@ -1027,6 +1042,15 @@ def normalize_config(cfg):
             continue
         if key == LAUNCH_ORDER_KEY:
             out[key] = normalize_launch_order(value)
+            continue
+        if key == LAUNCH_TOOLS_KEY:
+            out[key] = normalize_launch_tools(value)
+            continue
+        if key == ENV_VAR_CHOICES_KEY:
+            out[key] = normalize_env_var_choices(value)
+            continue
+        if key == EXTRA_ENV_VARS_KEY:
+            out[key] = normalize_extra_env_vars(value)
             continue
         if isinstance(default, bool):
             value = bool(value)
@@ -1434,6 +1458,19 @@ def build_env(cfg, base_env=None, label_file=None):
     else:
         env["OTREE_LAB_LABEL_FILE"] = label_file
 
+    # Tools: never a stale inherited value. Of the tools' values the server only ever
+    # gets the lab session; the seat selection is for scripts and does not touch oTree.
+    for key in list(env):
+        if key.upper() in LAUNCH_TOOL_ENV_KEYS:
+            del env[key]
+    session = launch_tool_env(cfg).get(TOOL_ENV_SESSION)
+    if session:
+        env[TOOL_ENV_SESSION] = session
+
+    # The variables this config selected. Any other inherited variable stays as it was.
+    # Reserved names never get here (launch_env_vars), so this cannot override the above.
+    _apply_env_vars(env, launch_env_vars(cfg))
+
     return env
 
 
@@ -1454,6 +1491,12 @@ def launcher_env_keys(cfg, label_file=None):
     keys.append("OTREE_LAB_ROOM_NAME")
     if c["seat_mode"] != SEAT_NONE and label_file:
         keys.append("OTREE_LAB_LABEL_FILE")
+    # From the raw config: the typed value is not a config field. Also what puts it on
+    # a Mac server window's exported line (build_server_launch).
+    if launch_tool_env(cfg).get(TOOL_ENV_SESSION):
+        keys.append(TOOL_ENV_SESSION)
+    # The selected variables, also on a Mac server window's exported line.
+    keys.extend(launch_env_vars(cfg))
     return keys
 
 
@@ -1461,8 +1504,10 @@ def describe_env_value(key, value):
     """A log-safe rendering of one environment variable."""
     if key == "DATABASE_URL":
         return mask_database_url(value)
-    if key in SECRET_ENV_KEYS:
+    if key in SECRET_ENV_KEYS or env_var_is_secret(key):
         return MASKED_PASSWORD
+    if isinstance(value, str):
+        return _URL_LOGIN.sub(r"\1" + MASKED_PASSWORD + "@", value)
     return value
 
 
@@ -2676,6 +2721,9 @@ def default_preset():
     preset["script_choices"] = {}
     preset["extra_scripts"] = []
     preset["launch_order"] = []
+    preset["launch_tools"] = []
+    preset["env_var_choices"] = {}
+    preset["extra_env_vars"] = []
     preset["name"] = "Lab default"
     preset["created"] = now_iso()
     preset["last_run"] = None
@@ -2751,10 +2799,12 @@ def config_for_storage(preset):
     preset = dict(preset or {})
     n = normalize_config(preset)
     out = {k: v for k, v in preset.items() if k not in CONFIG_DB_FIELDS}
-    # Launch scripts: stored only when there is something to store.
-    for key in SCRIPT_CONFIG_KEYS:
+    # Launch scripts and tools: stored only when there is something to store.
+    for key in SCRIPT_CONFIG_KEYS + (LAUNCH_TOOLS_KEY,) + ENV_VAR_CONFIG_KEYS:
         if not out.get(key, True):
             del out[key]
+    # What was typed for one launch never reaches the store.
+    out.pop(LAUNCH_RUN_KEY, None)
     db_id = str(preset.get("database_id", "") or "").strip()
     if db_id:
         out["database_id"] = db_id
@@ -2930,6 +2980,8 @@ def stored_labs_from_presets(lab_presets, info=None):
             entry["suggested_database"] = suggested
         entry[SERVICES_KEY] = p.get(SERVICES_KEY) or []
         entry[LAB_SCRIPTS_KEY] = p.get(LAB_SCRIPTS_KEY) or []
+        entry[LAB_ENV_VARS_KEY] = p.get(LAB_ENV_VARS_KEY) or []
+        entry[LAB_ENV_ADD_OWN_KEY] = bool(p.get(LAB_ENV_ADD_OWN_KEY))
         out.append(normalize_stored_lab(entry))
         seen.add(p["id"])
     for lab_id, entry in existing.items():
@@ -3106,6 +3158,9 @@ def unique_name(name, presets):
 # keeps that room, and warns when it differs from the lab default. Configs saved
 # before this flag existed have no key and keep their literal room.
 ROOM_FOLLOWS_LAB_KEY = "room_follows_lab"
+ROOM_MISMATCH_TEXT = ("This config uses the room '%s'. The participant shortcuts open '%s', "
+                      "the lab default.")
+ROOM_USE_DEFAULT_LABEL = "Use the lab default"
 
 
 def follow_lab_room(preset, lab_presets=None):
@@ -3205,9 +3260,59 @@ def _session_database_label(cfg):
     return database_summary_label(c)
 
 
+SESSION_REASON_MAX = 400
+_URL_LOGIN_RE = re.compile(r"(://)[^/@\s]+@")
+
+
+PROJECT_CHOOSE_FIRST_TIP = "Choose a project folder first"
+PROJECT_MISSING_TIP = "The folder is not there. Browse to find it first"
+PROJECT_MISSING_LINE = "The folder moved or was deleted. Browse to find it, or pick another study."
+PROJECT_MISSING_SHORT = "folder not found"
+
+
+def project_folder_missing(path):
+    """A path is set and is not a folder. A network path (\\\\server\\...) is never checked
+    here: this runs for every row of the sidebar, and a dead share can block for many
+    seconds. The launch itself still checks it."""
+    text = str(path or "").strip()
+    if not text or text.startswith(("\\\\", "//")):
+        return False
+    try:
+        return not os.path.isdir(text)
+    except (OSError, ValueError):
+        return True
+
+
+def launch_button_block(path):
+    """Why Launch is off on the main page ("" = it is on). Only the page's button: the
+    pre-launch checks still run, and a one-click shortcut never reads this."""
+    if not str(path or "").strip():
+        return PROJECT_CHOOSE_FIRST_TIP
+    return PROJECT_MISSING_TIP if project_folder_missing(path) else ""
+
+
+def session_failure_reason(text, cfg=None):
+    """One line for the history: the first line of the message, shortened, with no secret
+    in it. A login in a web address goes, and so does any password this config holds, in
+    case a tool's error repeated one. Never raises."""
+    try:
+        lines = str(text or "").strip().splitlines()
+        line = " ".join(lines[0].split()) if lines else ""
+        line = _URL_LOGIN_RE.sub(r"\1***@", line)
+        for key in ("admin_password", "db_password", "pg_password"):
+            secret = str((cfg or {}).get(key, "") or "")
+            if len(secret) >= 4:   # a shorter one would garble ordinary words
+                line = line.replace(secret, "***")
+        if len(line) > SESSION_REASON_MAX:
+            line = line[:SESSION_REASON_MAX - 3].rstrip() + "..."
+        return line
+    except Exception:  # noqa: BLE001 - the history is fail-soft
+        return ""
+
+
 def build_session_entry(cfg, config_name="", author="", outcome="ok",
                         server_ready_seconds=None, resetdb=None,
-                        lab_presets=None, when=None, config_changed=False):
+                        lab_presets=None, when=None, config_changed=False, reason=""):
     """One session-history record (a plain dict) for a single launch.
 
     Pure and shared by BOTH faces so the JSONL lines are identical in shape. It
@@ -3215,7 +3320,9 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
     ``outcome`` is normalised to "ok"/"fail". ``server_ready_seconds`` is how long
     the server took to answer the readiness poll (None when not measured).
     ``config_changed`` True = these settings were NOT the saved config's: the form was
-    edited and launched without saving (the key is only written then).
+    edited and launched without saving (the key is only written then). ``reason``: why a
+    launch failed, one line with no secret (:func:`session_failure_reason`); written only
+    for a failed launch that has one.
     """
     c = normalize_config(cfg)
     author = str(author or "").strip()
@@ -3246,12 +3353,20 @@ def build_session_entry(cfg, config_name="", author="", outcome="ok",
     }
     if config_changed:
         entry["config_changed"] = True
+    if entry["outcome"] == "fail":
+        clean = session_failure_reason(reason, cfg)
+        if clean:
+            entry["reason"] = clean
+    # Only for a tool that was on; a blank value is still written, so History can tell
+    # "on, left blank" from "off".
+    entry.update(_session_tool_fields(cfg))
+    entry.update(_session_env_fields(cfg))
     return entry
 
 
 def record_session(cfg, config_name="", author="", outcome="ok",
                    server_ready_seconds=None, resetdb=None, lab_presets=None,
-                   path=None, config_changed=False):
+                   path=None, config_changed=False, reason=""):
     """Append ONE JSON line to data/launch_history.jsonl for a launch.
 
     FAIL-SOFT by contract: every error (a bad path, a full disk, a serialisation
@@ -3266,7 +3381,7 @@ def record_session(cfg, config_name="", author="", outcome="ok",
         entry = build_session_entry(
             cfg, config_name=config_name, author=author, outcome=outcome,
             server_ready_seconds=server_ready_seconds, resetdb=resetdb,
-            lab_presets=lab_presets, config_changed=config_changed)
+            lab_presets=lab_presets, config_changed=config_changed, reason=reason)
         # The version of the study that ran (a git repository only): the commit
         # ties a dataset to the code that produced it.
         version = study_version(entry.get("project"))
@@ -4384,15 +4499,48 @@ def local_changes_note(porcelain, limit=3):
             "edits." % shown)
 
 
-def _local_changes_hint(folder):
-    """local_changes_note for ``folder``, or "" when git status fails (never
-    raises). Not via _git_text: its strip() would eat the first status column."""
+# The one local change the launcher made itself (Julian, 2026-11-05). The word "settings.py"
+# is a link to the block viewer in both faces, hence the three parts.
+LOCAL_CHANGES_BLOCK_PARTS = ("This folder has local changes: lab block appended to ",
+                             "settings.py", ".")
+LOCAL_CHANGES_BLOCK_NOTE = "".join(LOCAL_CHANGES_BLOCK_PARTS)
+LOCAL_CHANGES_BLOCK_LINK_TIP = "View what the launcher added to settings.py"
+
+
+def _porcelain_paths(porcelain):
+    """The tracked paths in ``git status --porcelain`` text."""
+    paths = []
+    for line in (porcelain or "").splitlines():
+        if len(line) < 4 or line[:2] in ("??", "!!"):
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path.strip().strip('"'))
+    return paths
+
+
+def local_changes_hint(folder):
+    """``(note, lab_block_only)`` for ``folder``. ``lab_block_only`` True: the only local
+    change is the launcher's own block, and the note says just that. Any other edit, or
+    any doubt, keeps local_changes_note's wording. ``("", False)`` when git status fails
+    (never raises). Not via _git_text: its strip() would eat the first status column."""
     try:
         code, output = _run_git(["-C", folder, "status", "--porcelain",
                                  "--untracked-files=no"], timeout=30)
     except (OSError, ValueError, subprocess.SubprocessError):
-        return ""
-    return local_changes_note(output) if code == 0 else ""
+        return "", False
+    if code != 0:
+        return "", False
+    paths = _porcelain_paths(output)
+    if len(paths) == 1 and lab_block_only_change(folder, paths) is not None:
+        return LOCAL_CHANGES_BLOCK_NOTE, True
+    return local_changes_note(output), False
+
+
+def _local_changes_hint(folder):
+    """The note of :func:`local_changes_hint` alone."""
+    return local_changes_hint(folder)[0]
 
 
 def git_update_study(folder):
@@ -4408,7 +4556,10 @@ def git_update_study(folder):
       * ``"current"``  -> nothing new (HEAD did not move). ``message`` is
                           "Nothing new: already up to date."
                           ``note`` is a grey hint naming local edits
-                          (local_changes_note) when the folder has any, else "".
+                          (local_changes_hint) when the folder has any, else "".
+                          ``note_lab_block`` True: the only local change is the lab
+                          block; the faces link "settings.py" to the block viewer and
+                          put GIT_PULL_KEEPS_EDITS behind a tip.
       * ``"updated"``  -> HEAD moved. ``message`` is "Pulled N changed files.",
                           ``files`` lists each changed file (added / modified /
                           deleted, +/- lines), ``commit`` holds the date and
@@ -4435,7 +4586,7 @@ def git_update_study(folder):
               "reason": "", "reason_code": "", "output": "", "files": [],
               "file_count": 0, "commit_count": 0, "commit": {},
               "conflict_files": [], "old_head": "", "new_head": "", "note": "",
-              "login_action": False, "fresh_copy": False, "options": [],
+              "note_lab_block": False, "login_action": False, "fresh_copy": False, "options": [],
               "lab_block": False, "backups": []}
 
     def failed(code, reason, output=""):
@@ -4679,8 +4830,9 @@ def _describe_pull(result, folder, old):
     new = _git_text(folder, "rev-parse", "HEAD") or ""
     result.update(ok=True, old_head=old, new_head=new)
     if new == old:
+        note, block_only = local_changes_hint(folder)
         result.update(status="current", message="Nothing new: already up to date.",
-                      note=_local_changes_hint(folder))
+                      note=note, note_lab_block=block_only)
         return result
     files = git_changed_files(folder, old, new)
     count_raw = _git_text(folder, "rev-list", "--count",
@@ -4767,8 +4919,11 @@ GIT_FRESH_COPY_LOCKED_HINT = (
 STUDY_SERVER_RUNNING_TEXT = ("A session of this study is still running on port %s. "
                              "Stop it first, then try again.")
 # The one-click shortcut's line for the same state.
-HEADLESS_UPDATE_PROBLEM = ("A newer version of this study is available on GitHub "
-                           "(not downloaded yet).")
+HEADLESS_UPDATE_PROBLEM = "There have been updates to this study."
+# What is online and not pulled yet: the short hash + when, for the box and the amber line.
+UPDATE_LATEST_COMMIT_TEXT = "Latest commit: %s, %s."
+UPDATE_COMMIT_TODAY_TEXT = "today at %02d:%02d"
+_UPDATE_COMMIT_LOG_RE = re.compile(r"^([0-9a-f]{4,40}) (\S+)$")
 # The one-click shortcut's line when a git study folder could not be compared
 # with its online copy (project_update_status ``unchecked``). A plain folder
 # (not git) never gets it.
@@ -4908,6 +5063,44 @@ def _local_changes_message(files):
         _short_file_list(files, limit=3), "was" if len(files) == 1 else "were")
 
 
+def update_commit_when(commit_time, now=None):
+    """When a commit was made, in the words of the PC showing it: "today at 14:32" on its own
+    today, else the date, "3 Nov 2026". ``commit_time`` is a datetime or an ISO 8601 text
+    (what git's %cI gives), in any time zone; it is read in the time zone of ``now``, the
+    aware local time (default: this PC's). "" when it cannot be read."""
+    now = now if now is not None else _dt.datetime.now().astimezone()
+    if now.tzinfo is None:
+        now = now.astimezone()
+    try:
+        when = commit_time if isinstance(commit_time, _dt.datetime) else \
+            _dt.datetime.fromisoformat(str(commit_time).replace("Z", "+00:00"))
+        local = when.astimezone(now.tzinfo)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+    if local.date() == now.date():
+        return UPDATE_COMMIT_TODAY_TEXT % (local.hour, local.minute)
+    return format_saved_date(local.replace(tzinfo=None).isoformat())
+
+
+def update_latest_commit_line(commit_hash, commit_time, now=None):
+    """ "Latest commit: a1b2c3d, today at 14:32." or "" when either part is missing."""
+    when = update_commit_when(commit_time, now)
+    return UPDATE_LATEST_COMMIT_TEXT % (commit_hash, when) if commit_hash and when else ""
+
+
+def _upstream_commit_line(folder):
+    """The line for the newest commit on the upstream ref, as the fetch just left it: read
+    locally, no network. "" when it cannot be read, and then the plain words stand alone."""
+    text = _git_text(folder, "log", "-1", "--format=%h %cI", "@{u}", timeout=10)
+    match = _UPDATE_COMMIT_LOG_RE.match(text or "")
+    return update_latest_commit_line(match.group(1), match.group(2)) if match else ""
+
+
+def is_update_problem(problem):
+    """Is this line of the one-click box the "there have been updates" one?"""
+    return str(problem).startswith(HEADLESS_UPDATE_PROBLEM)
+
+
 def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     """Is this study folder behind its online copy? For the background check both
     faces run when a project / config is selected (any git repository, whatever
@@ -4950,12 +5143,15 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     could not be compared with its online copy, one of
     :data:`UPDATE_UNCHECKED_REASONS` ("" when the check completed, or when there
     is nothing to compare: a plain folder, a repository with no remote at all).
+    ``latest_commit_line`` (state "behind" only, "" when it cannot be read) names the newest
+    commit not pulled yet, and is part of ``message``.
     The faces stay quiet about it; only the one-click shortcut names it
     (:func:`headless_ask_problems`). Bounded by ``timeout``; never raises."""
     folder = str(folder or "").strip()
     out = {"state": UPDATE_STATE_NONE, "is_repo": False, "message": "", "action": "",
            "action_label": "", "behind": 0, "ahead": 0, "dirty": False, "checked": "",
-           "checked_at": 0.0, "files": [], "reason": "", "unchecked": "", "options": []}
+           "checked_at": 0.0, "files": [], "reason": "", "unchecked": "", "options": [],
+           "latest_commit_line": ""}
     if not folder or not os.path.isdir(folder):
         return out
     try:
@@ -5035,18 +5231,26 @@ def project_update_status(folder, timeout=GIT_UPDATE_CHECK_TIMEOUT, now=None):
     if overlap is None and dirty:
         overlap = _tracked_changes(folder) or ["this folder"]   # could not tell: stay careful
     if overlap and lab_block_only_change(folder, overlap) is not None:
-        out.update(state=UPDATE_STATE_BEHIND, message=GIT_UPDATE_AVAILABLE_TEXT,
-                   action="git_pull", action_label=GIT_UPDATE_ACTION_LABEL,
-                   reason="lab_block")
+        out.update(state=UPDATE_STATE_BEHIND, action="git_pull",
+                   action_label=GIT_UPDATE_ACTION_LABEL, reason="lab_block",
+                   **_behind_words(folder))
     elif overlap:
         out.update(state=UPDATE_STATE_LOCAL_CHANGES, files=list(overlap),
                    message=_local_changes_message(overlap), reason="edited",
                    action="fresh_copy", action_label=GIT_FRESH_COPY_LABEL,
                    options=update_options("edited", overlap))
     else:
-        out.update(state=UPDATE_STATE_BEHIND, message=GIT_UPDATE_AVAILABLE_TEXT,
-                   action="git_pull", action_label=GIT_UPDATE_ACTION_LABEL)
+        out.update(state=UPDATE_STATE_BEHIND, action="git_pull",
+                   action_label=GIT_UPDATE_ACTION_LABEL, **_behind_words(folder))
     return out
+
+
+def _behind_words(folder):
+    """The amber line of a folder that can be pulled, with the commit when it can be read."""
+    line = _upstream_commit_line(folder)
+    return {"latest_commit_line": line,
+            "message": "%s %s" % (GIT_UPDATE_AVAILABLE_TEXT, line) if line
+            else GIT_UPDATE_AVAILABLE_TEXT}
 
 
 def update_status_after_pull(pull_result, now=None):
@@ -5735,6 +5939,15 @@ GITHUB_NO_TOKENS_TEXT = "No token on this computer"
 GITHUB_WHO_LABEL = "Added by"
 GITHUB_TOKEN_WHO_MISSING = "Enter or pick who is adding this token."
 GITHUB_TOKEN_LINK_LABEL = "Create the token on GitHub"
+# A token's optional name: what it is for. Stored with its entry, never the token.
+GITHUB_TOKEN_NAME_MAX = 60
+GITHUB_TOKEN_NAME_LABEL = "Name (optional)"
+GITHUB_TOKEN_NAME_PLACEHOLDER = "Lab read-only 2026"
+GITHUB_TOKEN_NAME_BUTTON = "Name"
+GITHUB_TOKEN_NAME_TITLE = "Name this token"
+GITHUB_TOKEN_NAME_PROMPT = "What is this token for? Leave it empty for no name."
+GITHUB_TOKEN_NAME_TOO_LONG = "A token's name can be at most %d characters." % GITHUB_TOKEN_NAME_MAX
+GITHUB_TOKEN_NAME_IS_TOKEN = "That looks like the token itself. A name says what it is for."
 GITHUB_NO_LOGIN_HINT = ("If the name is right, add a login with \"%s\"."
                         % GITHUB_LOGIN_ACTION_LABEL)
 # The login dialog's explanation (both faces show it behind the info tip).
@@ -6031,11 +6244,30 @@ def _legacy_github_login_info():
             "token_expires": str(info.get("token_expires") or "")}
 
 
+def _clean_token_name(name):
+    """One line. Longer text is cut only when read back from a file: a typed one is
+    refused by github_token_name_problem first."""
+    return " ".join(str("" if name is None else name).split())[:GITHUB_TOKEN_NAME_MAX]
+
+
+def github_token_name_problem(name, token=""):
+    """What is wrong with a token's name, or "". It must not be the token: names are
+    written to machine.json and shown on screen."""
+    clean = " ".join(str("" if name is None else name).split())
+    if len(clean) > GITHUB_TOKEN_NAME_MAX:
+        return GITHUB_TOKEN_NAME_TOO_LONG
+    if clean and ((token and clean == str(token).strip())
+                  or re.match(r"^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)", clean)):
+        return GITHUB_TOKEN_NAME_IS_TOKEN
+    return ""
+
+
 def _normalize_token_entry(raw):
     if not isinstance(raw, dict) or not str(raw.get("id") or "").strip():
         return None
     return {"id": str(raw.get("id")).strip(),
             "label": str(raw.get("label") or "").strip(),
+            "name": _clean_token_name(raw.get("name")),
             "added_by": str(raw.get("added_by") or "").strip(),
             "added_on": str(raw.get("added_on") or "").strip(),
             "seen_before": str(raw.get("seen_before") or "").strip(),
@@ -6126,9 +6358,9 @@ def github_token_who(entry):
 
 def github_token_text(entry, today=None):
     """One token as the faces show it: "Token, added 1 Oct 2026 by Julian ·
-    valid until 30 Sep 2027" (expiry only when known). Never the token, never a
-    GitHub account name."""
-    text = "Token, " + github_token_who(entry)
+    valid until 30 Sep 2027" (expiry only when known), with its name first instead of
+    "Token" when it has one. Never the token, never a GitHub account name."""
+    text = (entry.get("name") or "Token") + ", " + github_token_who(entry)
     if entry.get("expires"):
         text += " · %s %s" % ("expired" if _token_expired(entry, today) else "valid until",
                               format_day(entry["expires"]))
@@ -6136,22 +6368,51 @@ def github_token_text(entry, today=None):
 
 
 def github_token_rows(adopt=True, runner=None, today=None):
-    """The token list for Settings: ``[{"id", "text", "expired", "confirm"}]``
+    """The token list for Settings: ``[{"id", "name", "text", "expired", "confirm"}]``
     (``confirm`` is the in-app question the Delete button asks)."""
-    return [{"id": entry["id"], "text": github_token_text(entry, today),
+    return [{"id": entry["id"], "name": entry.get("name", ""),
+             "text": github_token_text(entry, today),
              "expired": _token_expired(entry, today),
              "confirm": github_delete_confirm_text(entry)}
             for entry in github_tokens(adopt=adopt, runner=runner, today=today)]
 
 
+def _token_called(entry):
+    """How a sentence names a token: 'Lab read-only 2026, added ...' or 'added ...'."""
+    who = github_token_who(entry)
+    return "%s, %s" % (entry["name"], who) if entry.get("name") else who
+
+
 def github_delete_confirm_text(entry):
     return ("Delete the GitHub token %s? Studies that only this token can open can "
-            "no longer be cloned or updated on this computer." % github_token_who(entry))
+            "no longer be cloned or updated on this computer." % _token_called(entry))
 
 
-def github_add_token(token, added_by, checker=None, runner=None, today=None):
+def github_rename_token(token_id, name):
+    """Give a token a name, change it, or clear it (empty). The token is not touched and
+    not needed: only its entry in machine.json. ``{"ok", "status", "message"}``."""
+    problem = github_token_name_problem(name)
+    if problem:
+        return {"ok": False, "status": "invalid", "message": problem}
+    entries = _stored_token_entries()
+    entry = next((e for e in entries if e["id"] == str(token_id or "")), None)
+    if entry is None:
+        return {"ok": False, "status": "not_found",
+                "message": "That token is no longer on this computer."}
+    entry["name"] = _clean_token_name(name)
+    try:
+        _save_token_entries(entries)
+    except Exception as error:
+        return {"ok": False, "status": "error",
+                "message": "Could not update this computer's token list: %s" % error}
+    return {"ok": True, "status": "ok", "message": (
+        'This token is now called "%s".' % entry["name"] if entry["name"]
+        else "This token has no name now.")}
+
+
+def github_add_token(token, added_by, checker=None, runner=None, today=None, name=""):
     """What the "Add token" dialog's Save does. ``added_by`` (who is adding it,
-    from the researcher roster or typed) is required.
+    from the researcher roster or typed) is required, ``name`` (what it is for) is not.
 
     Asks GitHub about the token first (unless the check is switched off): a
     REJECTED token is not stored (``ok`` False, status "rejected"). Otherwise the
@@ -6166,6 +6427,9 @@ def github_add_token(token, added_by, checker=None, runner=None, today=None):
         return {"ok": False, "status": "missing", "message": GITHUB_LOGIN_MISSING_MESSAGE}
     if not added_by:
         return {"ok": False, "status": "missing_who", "message": GITHUB_TOKEN_WHO_MISSING}
+    name_problem = github_token_name_problem(name, token)
+    if name_problem:
+        return {"ok": False, "status": "invalid_name", "message": name_problem}
     existing = github_tokens()
     for entry in existing:
         if entry["label"] and _github_stored_credential(runner=runner,
@@ -6185,7 +6449,7 @@ def github_add_token(token, added_by, checker=None, runner=None, today=None):
         return {"ok": False, "status": stored.get("status", "error"),
                 "message": stored.get("message", "")}
     entry = _normalize_token_entry({
-        "id": token_id, "label": label, "added_by": added_by,
+        "id": token_id, "label": label, "added_by": added_by, "name": name,
         "added_on": (today or _dt.date.today()).isoformat(),
         "expires": check.get("expires", ""), "checked": check["state"],
         "github_account": check.get("login", "")})
@@ -6226,7 +6490,7 @@ def github_delete_token(token_id, runner=None):
         return {"ok": False, "status": "error",
                 "message": "Could not update this computer's token list: %s" % error}
     return {"ok": True, "status": "ok",
-            "message": "Deleted the GitHub token %s." % github_token_who(entry)}
+            "message": "Deleted the GitHub token %s." % _token_called(entry)}
 
 
 def _github_stored_credential(runner=None, username=""):
@@ -7365,6 +7629,8 @@ def default_lab_presets():
             "suggested_database": raw.get("suggested_database"),
             SERVICES_KEY: raw.get(SERVICES_KEY) or [],
             LAB_SCRIPTS_KEY: raw.get(LAB_SCRIPTS_KEY) or [],
+            LAB_ENV_VARS_KEY: raw.get(LAB_ENV_VARS_KEY) or [],
+            LAB_ENV_ADD_OWN_KEY: bool(raw.get(LAB_ENV_ADD_OWN_KEY)),
             "builtin": False,
         }))
     return presets
@@ -7482,6 +7748,13 @@ def normalize_lab_preset(preset):
     out[SERVICES_KEY] = normalize_lab_services(out.get(SERVICES_KEY))
     # The lab's launch scripts.
     out[LAB_SCRIPTS_KEY] = normalize_lab_scripts(out.get(LAB_SCRIPTS_KEY))
+    # The lab's environment variables, what differs from the built-in suggestions.
+    out[LAB_ENV_VARS_KEY] = stored_lab_env_vars(out.get(LAB_ENV_VARS_KEY))
+    # Stored only when on, so an older file round-trips as it was.
+    if out.get(LAB_ENV_ADD_OWN_KEY):
+        out[LAB_ENV_ADD_OWN_KEY] = True
+    else:
+        out.pop(LAB_ENV_ADD_OWN_KEY, None)
     return out
 
 
@@ -9347,19 +9620,27 @@ def open_additional_services(services, open_url=None, log=None):
             except Exception as exc:  # noqa: BLE001 - a page must never stop a launch
                 error = "%s: %s" % (type(exc).__name__, exc)
         if error:
-            say("warn", "Could not open the additional service %s (%s): %s. The launch "
-                        "itself is fine." % (name, url, error))
+            say("warn", "Could not open the additional service %s (%s): %s. This does not "
+                        "stop the launch." % (name, url, error))
         else:
             say("ok", "Sent the additional service %s to the browser: %s" % (name, url))
         results.append({"name": name, "url": url, "ok": not error, "error": error})
     return results
 
 
-def open_launch_services(cfg, lab_presets=None, open_url=None, log=None):
+def open_launch_services(cfg, lab_presets=None, open_url=None, log=None, seq=None):
     """After a READY launch: open the config's effective services (if any).
     The one call all three launch paths (Tk, web, one-click shortcut) make,
     right after the admin/monitor page (when that is ticked). Each ticked
-    service opens on its own, whatever the admin-page tick says. Never raises."""
+    service opens on its own, whatever the admin-page tick says. Never raises.
+    With ``seq`` (a launch's :func:`run_launch_sequence`), only the websites still to
+    open, in their order: the ones placed earlier were opened at their place."""
+    if seq is not None:
+        rows = [row for row in seq["tail"] if row["source"] != "admin"]
+        opened = open_additional_services(
+            [{"name": row["name"], "url": row["detail"]} for row in rows],
+            open_url=open_url, log=log)
+        return opened
     try:
         services = effective_services(cfg, lab_presets)
     except Exception as exc:  # noqa: BLE001
@@ -9445,6 +9726,16 @@ TIMELINE_AVAILABLE_NONE = "Nothing else to add."
 SCRIPT_SHOW_LABEL = "Show script"
 SCRIPT_HIDE_LABEL = "Hide script"
 TIMELINE_COPY_LINK_LABEL = "Copy link"
+TIMELINE_COPIED_LABEL = "Copied"
+ADDRESS_SHOW_LABEL = "Show address"
+ADDRESS_HIDE_LABEL = "Hide address"
+# A row in What happens on launch says what happens. Stored data keeps the plain name.
+LAUNCH_PAGE_LABEL = "Open %s"
+TIMELINE_ADMIN_STAYS_TIP = ("The oTree admin page stays after Launch oTree server: it cannot "
+                            "open before the server exists.")
+TIMELINE_BLOCK_UP_TIP = "Move up"
+TIMELINE_BLOCK_DOWN_TIP = "Move down"
+ROOM_PEN_TIP = "Choose another room"
 SCRIPT_ADD_LABEL = "Add script"
 WEBSITE_ADD_LABEL = "Add website"
 ADD_FORM_CANCEL_LABEL = "Cancel"
@@ -9521,7 +9812,8 @@ OUTCOME_SKIPPED = "skipped"
 OUTCOME_NOT_RUN = "not_run"
 OUTCOME_SENT_BROWSER = "sent_browser"
 OUTCOME_OPEN_FAILED = "open_failed"
-OUTCOME_MARKS = {OUTCOME_FINISHED: MARK_OK, OUTCOME_PORT_ANSWERS: MARK_OK,
+OUTCOME_GIVEN = "given"
+OUTCOME_MARKS = {OUTCOME_GIVEN: MARK_NEUTRAL, OUTCOME_FINISHED: MARK_OK, OUTCOME_PORT_ANSWERS: MARK_OK,
                  OUTCOME_RUNNING: MARK_NEUTRAL, OUTCOME_SKIPPED: MARK_NEUTRAL,
                  OUTCOME_SENT_BROWSER: MARK_NEUTRAL, OUTCOME_FAILED: MARK_FAILED,
                  OUTCOME_OPEN_FAILED: MARK_WARN, OUTCOME_NOT_RUN: MARK_NOT_RUN}
@@ -9808,109 +10100,194 @@ def _launch_script_rows(c, presets):
 
 
 def _ordered_script_ids(rows, saved):
-    """The run order of the selected ``rows`` + the oTree row. Saved ids keep their
-    places; anything else goes by its default position: a lab script directly before
-    the oTree row or at the end, an own script last. With nothing saved this IS the
-    default order, so a config that never reordered follows the lab."""
+    """The run order of the selected ``rows`` (scripts and browser pages) + the oTree row.
+    Saved ids keep their places; anything else goes by its default position: a lab script
+    directly before the oTree row or after the steps, an own script after those, a browser
+    page last, the oTree admin page first among the pages. With nothing saved this IS the
+    default order, so a config that never reordered follows the lab, and pages open where
+    they always did. A saved order from before pages could move names no page, so it
+    gets the same result.
+
+    The one fixed rule: the oTree admin page stays after the oTree row, whatever was saved,
+    because it cannot open before the server exists."""
     selected = {row["id"]: row for row in rows if row["selected"]}
     order = [i for i in saved if i in selected or i == LAUNCH_OTREE_ROW_ID]
     if LAUNCH_OTREE_ROW_ID not in order:
         order.append(LAUNCH_OTREE_ROW_ID)
+
+    def steps_end():
+        """Where a step goes that has no place yet: before the pages that end the order."""
+        at = len(order)
+        while at > 0 and order[at - 1] in selected and selected[order[at - 1]]["kind"] == "page":
+            at -= 1
+        return at
     missing = [row for row in rows if row["selected"] and row["id"] not in order]
     for row in missing:
-        if row["source"] == "lab":
+        if row["kind"] == "script" and row["source"] == "lab":
             if row["position"] == SCRIPT_POSITION_BEFORE:
                 order.insert(order.index(LAUNCH_OTREE_ROW_ID), row["id"])
             else:
-                order.append(row["id"])
+                order.insert(steps_end(), row["id"])
     for row in missing:
-        if row["source"] == "own":
+        if row["kind"] == "script" and row["source"] == "own":
+            order.insert(steps_end(), row["id"])
+    for row in missing:
+        if row["kind"] == "page":
             order.append(row["id"])
+    if LAUNCH_ADMIN_ROW_ID in order:
+        if order.index(LAUNCH_ADMIN_ROW_ID) < order.index(LAUNCH_OTREE_ROW_ID):
+            order.remove(LAUNCH_ADMIN_ROW_ID)
+            order.insert(order.index(LAUNCH_OTREE_ROW_ID) + 1, LAUNCH_ADMIN_ROW_ID)
     return order
 
 
+def launch_page_label(name):
+    """What a browser page's row says: "Open FOG". The name itself stays plain."""
+    return LAUNCH_PAGE_LABEL % name
+
+
+def admin_page_url(cfg):
+    """The plain monitor address on this computer: the page the launch sends to the browser
+    (never a login)."""
+    c = normalize_config(cfg or {})
+    return "http://%s:%s%s" % (AUTOLOGIN_HOST, (c["port"] or "8000").strip(),
+                               room_monitor_path(c["room_name"].strip() or DEFAULT_ROOM_NAME))
+
+
+def _own_service_row_id(entry, taken):
+    """An own website's id in ``launch_order``. From its name and address, not its place in
+    the list: deleting another website must not hand this one's place to a third."""
+    base = "own-svc:" + _derived_service_id(entry["name"], entry["url"])
+    row_id, count = base, 1
+    while row_id in taken:
+        count += 1
+        row_id = "%s-%d" % (base, count)
+    taken.add(row_id)
+    return row_id
+
+
 def _page_rows(c, presets):
-    """The browser pages: selected (in their fixed opening order) and not selected."""
+    """The browser pages, selected and not selected, in their default opening order."""
     def page(row_id, source, name, url, selected, **more):
-        row = {"id": row_id, "kind": "page", "source": source, "name": name, "detail": url,
-               "selected": bool(selected), "movable": False, "can_remove": True,
+        row = {"id": row_id, "kind": "page", "source": source, "name": name,
+               "label": launch_page_label(name), "detail": url, "address": url,
+               "selected": bool(selected), "movable": True, "can_remove": True,
                "explicit": False, "can_reset": False, "can_delete": False, "tag": "",
                "wait_text": "", "duplicate": False}
         row.update(more)
         return row
-    rows = [page(LAUNCH_ADMIN_ROW_ID, "admin", OPENS_GROUP_ADMIN, "", c["open_browser"])]
+    rows = [page(LAUNCH_ADMIN_ROW_ID, "admin", OPENS_GROUP_ADMIN, "", c["open_browser"],
+                 address=admin_page_url(c))]
     for service in config_service_rows(c, presets):
         rows.append(page("svc:" + service["id"], "lab", service["name"], service["url"],
                          service["checked"], service_id=service["id"],
                          explicit=service["explicit"], can_reset=service["explicit"],
                          tag=service["tag"]))
+    taken = set()
     for index, entry in enumerate(c[EXTRA_SERVICES_KEY]):
-        rows.append(page("own-svc:%d" % index, "own", entry["name"], entry["url"],
+        rows.append(page(_own_service_row_id(entry, taken), "own", entry["name"], entry["url"],
                          entry["enabled"], index=index, can_delete=True))
-    seen = set()
-    for row in rows:
-        if row["selected"] and row["detail"]:
-            row["duplicate"] = row["detail"] in seen
-            seen.add(row["detail"])
     return rows
 
 
 def launch_timeline(cfg, lab_presets=None):
     """Advanced's two lists, all decided here::
 
-        {"timeline": selected rows in run order: scripts, the reset row (only when
-                     reset is on, directly before the oTree row, moves with it), the
-                     oTree row, then the browser pages,
+        {"timeline": selected rows in run order: scripts and browser pages, the reset row
+                     (only when reset is on, directly before the oTree row, moves with it)
+                     and the oTree row,
          "available": what is not selected, offered to add}
 
     Each row has ``id``, ``kind`` ("script" | "resetdb" | "otree" | "page"),
-    ``source`` ("lab" | "own" | "admin" | ""), ``name``, ``detail`` (script text or
-    web address), ``movable``, ``can_up``, ``can_down``, ``can_remove``, ``can_reset``,
-    ``can_delete``, ``tag``, ``explicit``, ``wait``, ``wait_port``, ``wait_text``."""
+    ``source`` ("lab" | "own" | "admin" | ""), ``name`` (the plain name), ``label`` (what the
+    row says), ``detail`` (script text or web address), ``address`` (a page's address, the
+    admin page's too), ``movable``, ``can_up``, ``can_down``, ``up_tip``, ``down_tip`` (why an
+    arrow is off, when a rule is the reason), ``block`` (True on the reset and oTree rows:
+    they move as one), ``can_remove``, ``can_reset``, ``can_delete``, ``tag``, ``explicit``,
+    ``wait``, ``wait_port``, ``wait_text``."""
     c = normalize_config(cfg or {})
     presets = _presets_or_default(lab_presets)
     scripts = _launch_script_rows(c, presets)
-    by_id = {row["id"]: row for row in scripts}
-    order = _ordered_script_ids(scripts, c[LAUNCH_ORDER_KEY])
+    pages = _page_rows(c, presets)
+    by_id = {row["id"]: row for row in scripts + pages}
+    order = _ordered_script_ids(scripts + pages, c[LAUNCH_ORDER_KEY])
     otree = {"id": LAUNCH_OTREE_ROW_ID, "kind": "otree", "source": "",
-             "name": LAUNCH_OTREE_ROW_NAME, "detail": "", "selected": True, "movable": True,
+             "name": LAUNCH_OTREE_ROW_NAME, "label": LAUNCH_OTREE_ROW_NAME, "detail": "",
+             "selected": True, "movable": True, "block": True,
              "can_remove": False, "explicit": False, "can_reset": False,
              "can_delete": False, "tag": "", "wait_text": ""}
-    moving = [otree if item == LAUNCH_OTREE_ROW_ID else by_id[item] for item in order]
     timeline = []
-    for index, row in enumerate(moving):
-        row = dict(row, can_up=index > 0, can_down=index < len(moving) - 1)
+    seen_urls = set()
+    last = len(order) - 1
+    for index, item in enumerate(order):
+        before = order[index - 1] if index else ""
+        after = order[index + 1] if index < last else ""
+        stuck_up = item == LAUNCH_ADMIN_ROW_ID and before == LAUNCH_OTREE_ROW_ID
+        stuck_down = item == LAUNCH_OTREE_ROW_ID and after == LAUNCH_ADMIN_ROW_ID
+        row = dict(otree if item == LAUNCH_OTREE_ROW_ID else by_id[item],
+                   can_up=index > 0 and not stuck_up,
+                   can_down=index < last and not stuck_down,
+                   up_tip=TIMELINE_ADMIN_STAYS_TIP if stuck_up else "",
+                   down_tip=TIMELINE_ADMIN_STAYS_TIP if stuck_down else "")
+        row.setdefault("label", row["name"])
+        if row["kind"] == "page" and row["detail"]:
+            # The same address opens once: the first one in run order.
+            row["duplicate"] = row["detail"] in seen_urls
+            seen_urls.add(row["detail"])
         if row["kind"] == "otree" and c["resetdb"]:
             timeline.append({"id": LAUNCH_RESETDB_ROW_ID, "kind": "resetdb", "source": "",
-                             "name": LAUNCH_RESETDB_ROW_NAME, "detail": "", "selected": True,
+                             "name": LAUNCH_RESETDB_ROW_NAME, "label": LAUNCH_RESETDB_ROW_NAME,
+                             "detail": "", "selected": True, "block": True,
                              "movable": False, "can_up": False, "can_down": False,
+                             "up_tip": "", "down_tip": "",
                              "can_remove": False, "explicit": False, "can_reset": False,
                              "can_delete": False, "tag": "", "wait_text": ""})
         timeline.append(row)
-    pages = _page_rows(c, presets)
-    for row in pages:
-        row.update(can_up=False, can_down=False)
-    timeline += [row for row in pages if row["selected"]]
-    available = [dict(row, can_up=False, can_down=False)
-                 for row in scripts + pages if not row["selected"]]
-    return {"timeline": timeline, "available": available}
+    env_rows = launch_env_var_rows(c, presets)
+    available = [dict(row, can_up=False, can_down=False, up_tip="", down_tip="",
+                      label=row.get("label", row["name"]))
+                 for row in scripts + pages + env_rows if not row["selected"]]
+    # Variables are not steps, so a selected one is not on the timeline: it has its own
+    # short list with a value box. ``env_can_add``: the Add button for a config's own.
+    return {"timeline": timeline, "available": available,
+            "env_vars": [row for row in env_rows if row["selected"]],
+            "env_can_add": env_var_add_allowed(c, presets, env_rows)}
 
 
 def move_launch_item(cfg, lab_presets, item_id, direction):
-    """The config's ``launch_order`` after moving a script or the oTree row one step
-    ("up" | "down") among what is selected. Moving back to the default order gives
-    ``[]``: following the lab again, and not an edit."""
+    """The config's ``launch_order`` after moving a row one step ("up" | "down") among what
+    is selected: a script, a browser page, or the oTree row (the reset row goes with it).
+    A move that would put the oTree admin page before the oTree row changes nothing. Moving
+    back to the default order gives ``[]``: following the lab again, and not an edit."""
     c = normalize_config(cfg or {})
     presets = _presets_or_default(lab_presets)
-    scripts = _launch_script_rows(c, presets)
-    order = _ordered_script_ids(scripts, c[LAUNCH_ORDER_KEY])
+    rows = _launch_script_rows(c, presets) + _page_rows(c, presets)
+    order = _ordered_script_ids(rows, c[LAUNCH_ORDER_KEY])
     item_id = str(item_id)
+    if item_id == LAUNCH_RESETDB_ROW_ID:
+        item_id = LAUNCH_OTREE_ROW_ID
     if item_id in order:
         index = order.index(item_id)
         other = index + (-1 if direction == "up" else 1)
         if 0 <= other < len(order):
-            order[index], order[other] = order[other], order[index]
-    return [] if order == _ordered_script_ids(scripts, []) else order
+            pair = {item_id, order[other]}
+            if pair != {LAUNCH_OTREE_ROW_ID, LAUNCH_ADMIN_ROW_ID}:
+                order[index], order[other] = order[other], order[index]
+    return _order_to_store(order, rows)
+
+
+def _order_to_store(order, rows):
+    """What goes in the config: nothing for the default order, and no pages at the end that
+    would land there anyway. So a config whose pages never moved stores what it always did,
+    and a page added later still goes last."""
+    if order == _ordered_script_ids(rows, []):
+        return []
+    default_pages = [r["id"] for r in rows if r["kind"] == "page" and r["selected"]]
+    if default_pages and order[-len(default_pages):] == default_pages:
+        short = order[:-len(default_pages)]
+        if _ordered_script_ids(rows, short) == order:
+            return short
+    return order
 
 
 def own_script_is_stored(preset, script_id):
@@ -9989,20 +10366,47 @@ def launch_caption(cfg, lab_presets=None):
     presets = _presets_or_default(lab_presets)
     count = sum(1 for row in _launch_script_rows(c, presets) if row["selected"])
     pages = services_caption(c, presets)
+    tools = len(c[LAUNCH_TOOLS_KEY])
+    if tools:
+        pages = "%s, %s" % (pages, "1 tool on" if tools == 1 else "%d tools on" % tools)
+    env_count = len(launch_env_vars(c))
+    if env_count:
+        pages = "%s, %s" % (pages, "1 variable set" if env_count == 1
+                            else "%d variables set" % env_count)
     if not count:
         return pages
     return "%s, %s" % ("1 script" if count == 1 else "%d scripts" % count, pages)
 
 
+def _pages_end_at(rows):
+    """Where the browser pages that end ``rows`` start (``len(rows)`` when none do)."""
+    at = len(rows)
+    while at > 0 and rows[at - 1]["kind"] == "page":
+        at -= 1
+    return at
+
+
 def launch_briefing_scripts(cfg, lab_presets=None):
-    """The launch popup's run list: scripts, the reset row and the oTree row in order
-    (the pages are its own list). ``[]`` with no script: the popup then says nothing
-    new."""
-    rows = [r for r in launch_timeline(cfg, lab_presets)["timeline"] if r["kind"] != "page"]
-    if not any(r["kind"] == "script" for r in rows):
+    """The launch popup's run list: every step in order, up to the browser pages that end
+    the launch (those are the popup's own list, :func:`launch_briefing_pages`). A website
+    placed earlier is a step here, so the two lists read top to bottom as what will happen.
+    ``[]`` with no script and no such website: the popup then says nothing new."""
+    rows = launch_timeline(cfg, lab_presets)["timeline"]
+    rows = [r for r in rows[:_pages_end_at(rows)] if not r.get("duplicate")]
+    if not any(r["kind"] in ("script", "page") for r in rows):
         return []
-    return [{"kind": r["kind"], "name": r["name"], "script": r["detail"],
+    return [{"kind": r["kind"], "name": r["label"], "plain_name": r["name"],
+             "script": "" if r["kind"] == "page" else r["detail"],
+             "url": r.get("address", "") if r["kind"] == "page" else "",
              "wait_text": r["wait_text"]} for r in rows]
+
+
+def launch_briefing_pages(cfg, lab_presets=None):
+    """The launch popup's list of browser pages: those that end the launch, in the order
+    they open. Plain names, under a heading that says they open."""
+    rows = launch_timeline(cfg, lab_presets)["timeline"]
+    return [{"name": r["name"], "url": r["address"], "source": r["source"]}
+            for r in rows[_pages_end_at(rows):] if not r.get("duplicate")]
 
 
 # -- running them ------------------------------------------------------------
@@ -10014,26 +10418,33 @@ def launch_script_env(cfg, project_path, base_env=None):
     build_env is NOT the base: it holds DATABASE_URL and the admin password. The
     launcher never writes to its own os.environ, but it can have inherited such
     values from the machine (a setx left over from the old batch file), so those are
-    removed too. Names compare in upper case because Windows' do. A Mac Terminal
-    window inherits nothing at all, so there only these three are exported in the
-    line (build_script_launch)."""
+    removed too, and so is an inherited tool value. Names compare in upper case because
+    Windows' do. A Mac Terminal window inherits nothing at all, so there only the pairs
+    are exported in the line (build_script_launch). A selected environment variable comes
+    with the pairs, and replaces an inherited one whatever its case."""
     env = {}
     for key, value in dict(os.environ if base_env is None else base_env).items():
         upper = key.upper()
-        if upper in DB_ENV_KEYS or upper.startswith("OTREE_") or upper == "PGPASSWORD":
+        if (upper in DB_ENV_KEYS or upper.startswith("OTREE_") or upper == "PGPASSWORD"
+                or upper in LAUNCH_TOOL_ENV_KEYS):
             continue
         env[key] = value
-    env.update(launch_script_env_pairs(cfg, project_path))
+    _apply_env_vars(env, launch_script_env_pairs(cfg, project_path))
     return env
 
 
 def launch_script_env_pairs(cfg, project_path):
-    """The three variables, as a dict."""
+    """The variables a script gets, as a dict: the three, plus what a tool that is on
+    provides, plus the config's selected variables. Passed as values, never written into
+    the script's text."""
     c = normalize_config(cfg or {})
     port = launch_port(c)
-    return {SCRIPT_ENV_PORT: str(port if port is not None else c["port"]),
-            SCRIPT_ENV_ROOM: c["room_name"],
-            SCRIPT_ENV_PROJECT: str(project_path)}
+    pairs = {SCRIPT_ENV_PORT: str(port if port is not None else c["port"]),
+             SCRIPT_ENV_ROOM: c["room_name"],
+             SCRIPT_ENV_PROJECT: str(project_path)}
+    pairs.update(launch_tool_env(cfg or {}))
+    pairs.update(launch_env_vars(cfg or {}))
+    return pairs
 
 
 def _batch_title_text(name):
@@ -10156,6 +10567,32 @@ def build_script_launch(name, wrapper, project_path, env_pairs, platform_name=No
             "description": "background process (no terminal emulator found)"}
 
 
+def spawn_background_server(cmd, on_line=None, **kwargs):
+    """Start the server where no terminal window exists (Linux with no terminal emulator).
+    In its own session and writing to its own file, so it outlives the launcher: a server on
+    the launcher's pipe dies at its next line of output once the launcher has gone, and one
+    in the launcher's session goes with a Ctrl-C (PRINCIPLES 15). ``on_line`` gets its output
+    while the launcher is there. Raises OSError when it cannot start."""
+    log = os.path.join(_launch_scripts_folder(), "server.log")
+    with open(log, "ab") as output:
+        process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=output,
+                                   stderr=subprocess.STDOUT, start_new_session=True, **kwargs)
+    if on_line is not None:
+        def follow():
+            with open(log, "r", encoding="utf-8", errors="replace") as source:
+                while True:
+                    line = source.readline()
+                    if line:
+                        if line.strip():
+                            on_line(line.rstrip())
+                    elif process.poll() is not None:
+                        return
+                    else:
+                        time.sleep(0.3)
+        threading.Thread(target=follow, name="server-log", daemon=True).start()
+    return process
+
+
 def _spawn_script_window(spec, env):
     """Start a built script launch. Raises OSError when it cannot start."""
     kwargs = {"cwd": spec["cwd"], "env": env, "shell": False}
@@ -10169,7 +10606,7 @@ def _spawn_script_window(spec, env):
     if spec["kind"] == "linux-background" and spec.get("log"):
         with open(spec["log"], "ab") as output:
             return subprocess.Popen(spec["cmd"], stdin=subprocess.DEVNULL, stdout=output,
-                                    stderr=subprocess.STDOUT, **kwargs)
+                                    stderr=subprocess.STDOUT, start_new_session=True, **kwargs)
     return subprocess.Popen(spec["cmd"], **kwargs)
 
 
@@ -10364,9 +10801,43 @@ def _script_stop_message(seq, problem):
     head = problem
     if not seq.get("otree_started"):
         head += " The oTree server was not started and the database was not reset."
-    head += " Later steps did not run and nothing was sent to the browser."
+    sent = _pages_sent_note(seq)
+    head += (" Later steps did not run. " + sent) if sent else (
+        " Later steps did not run and nothing was sent to the browser.")
     note = launch_running_note(seq)
     return head + (" " + note if note else "")
+
+
+def _pages_sent_note(seq):
+    """Which pages this launch has handed to the browser so far ("" when none): a website
+    placed before a step that failed is already open, and the report says so."""
+    names = [row["name"] for row in seq["rows"]
+             if row["kind"] == "page" and row["outcome"] == OUTCOME_SENT_BROWSER]
+    return "Already sent to the browser: %s." % ", ".join(names) if names else ""
+
+
+def _open_page_row(row, seq):
+    """One browser page at its place in the order. Only ever "sent to the browser", and a
+    page that cannot be sent is one warning: it never stops the launch."""
+    if row["source"] == "admin":
+        opener = seq.get("open_admin")
+        if opener is None:
+            return
+        try:
+            result = opener(seq["ready_timeout"])
+        except Exception as error:  # noqa: BLE001 - a page must never stop a launch
+            seq["say"]("warn", "Could not open the oTree admin page: %s. This does not stop "
+                               "the launch." % error)
+            result = {"ok": False, "method": "manual", "server_ready": True, "reason": str(error),
+                      "monitor_url": row.get("address", "")}
+        seq["dashboard"] = result
+        answer = bool(result.get("ok"))
+    else:
+        opened = open_additional_services([{"name": row["name"], "url": row["detail"]}],
+                                          open_url=seq.get("open_url"), log=seq["say"])
+        answer = bool(opened and opened[0]["ok"])
+    _set_row(row, OUTCOME_SENT_BROWSER if answer else OUTCOME_OPEN_FAILED,
+             TEXT_SENT_BROWSER if answer else TEXT_OPEN_FAILED)
 
 
 def _script_track(row):
@@ -10375,11 +10846,20 @@ def _script_track(row):
 
 
 def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, on_wait=None,
-                        platform_name=None, spawn=None, base_env=None):
+                        platform_name=None, spawn=None, base_env=None, open_admin=None,
+                        open_url=None):
     """The one sequence Tk, web and the one-click shortcut all run, in place of their
-    old reset + start step. Goes through the timeline up to, not including, the
-    browser pages; the caller opens those after this returns ``ready``, which keeps
-    them last.
+    old reset + start step. Goes through the timeline in its order, websites included: a
+    website before oTree simply opens, one after oTree opens when the server is ready. It
+    stops before ``seq["tail"]``, the pages that end the launch from the admin page on (or
+    all that end it, when the admin page is earlier or off). The caller opens those after
+    this returns ``ready``, with :func:`open_launch_services`; in the default order that is
+    all of them, and the flow is what it always was.
+
+    ``open_admin(ready_timeout)`` opens the admin page and returns
+    open_dashboard_authenticated's answer. It is called here only when the admin page is
+    placed before a later step (the answer is kept in ``seq["dashboard"]``; the caller then
+    does not open it again), and only after the server answered.
 
     ``start_otree(started_names)`` does the reset + server start, and returns None
     when it worked or ``{"step": "resetdb" | "otree", "code": exit code or None,
@@ -10391,9 +10871,10 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
     failure: nothing later runs, what started stays running); ``otree_failed``;
     ``not_ready``.
 
-    With no script at all this adds no wait: the old flow, unchanged. With scripts it
-    waits for readiness itself, so scripts run and the sentinels are read before any
-    page opens; the caller's own readiness wait then returns at once.
+    With nothing to do between the server start and the tail this adds no wait: the old
+    flow, unchanged. Otherwise it waits for readiness itself, so later steps run and the
+    sentinels are read before any later page opens; the caller's own readiness wait then
+    returns at once.
     """
     timeline = launch_timeline(cfg, lab_presets)["timeline"]
     rows = []
@@ -10414,7 +10895,8 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
     seq = {"ok": False, "stage": "", "message": "", "rows": rows, "started": [], "failure": None,
            "cfg": cfg, "project": project_path, "platform": platform_name or sys.platform,
            "spawn": spawn, "say": say, "count": 0, "folder": "", "otree_started": False,
-           "ready_timeout": READINESS_TIMEOUT,
+           "ready_timeout": READINESS_TIMEOUT, "open_admin": open_admin, "open_url": open_url,
+           "dashboard": None, "tail": [],
            "env": launch_script_env(cfg, project_path, base_env)}
 
     def stop(problem):
@@ -10422,14 +10904,20 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
         say("err", seq["message"])
         return seq
 
+    for line in launch_tool_lines(cfg):
+        say("info", line)
+
     scripts_exist = any(row["kind"] == "script" for row in rows)
     otree_row = [row for row in rows if row["kind"] == "otree"][0]
     reset_row = next((row for row in rows if row["kind"] == "resetdb"), None)
 
-    def run_scripts(script_rows):
-        for row in script_rows:
+    def run_steps(step_rows):
+        for row in step_rows:
             problem = _recheck_scripts(seq)
             if not problem:
+                if row["kind"] == "page":
+                    _open_page_row(row, seq)
+                    continue
                 try:
                     problem = _run_one_script(_script_track(row), seq)
                 except OSError as error:
@@ -10440,9 +10928,18 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
         return ""
 
     index = rows.index(reset_row) if reset_row else rows.index(otree_row)
-    before = [row for row in rows[:index] if row["kind"] == "script"]
-    after = [row for row in rows[rows.index(otree_row) + 1:] if row["kind"] == "script"]
-    problem = run_scripts(before) or _recheck_scripts(seq)
+    before = rows[:index]
+    after = rows[rows.index(otree_row) + 1:]
+    # What the caller opens: the pages that end the launch, from the admin page on when it
+    # is among them, so the caller's "admin page, then websites" stays in order.
+    tail_at = _pages_end_at(after)
+    for at in range(tail_at, len(after)):
+        if after[at]["source"] == "admin":
+            tail_at = at
+            break
+    seq["tail"] = after[tail_at:]
+    after = after[:tail_at]
+    problem = run_steps(before) or _recheck_scripts(seq)
     if problem:
         return stop(problem)
 
@@ -10457,7 +10954,7 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
                 _set_row(reset_row, OUTCOME_FINISHED, TEXT_FINISHED)
             _set_row(otree_row, OUTCOME_FAILED, "failed: did not start")
         message = str(failure.get("message", ""))
-        note = launch_running_note(seq)
+        note = " ".join(bit for bit in (_pages_sent_note(seq), launch_running_note(seq)) if bit)
         if note:
             message = message.replace("Nothing was started", "The oTree server was not started")
             message += " " + note
@@ -10468,7 +10965,7 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
     seq["otree_started"] = True
     _set_row(otree_row, OUTCOME_RUNNING, "started, not checked yet")
 
-    if scripts_exist:
+    if scripts_exist or after:
         ready = wait_for_server(AUTOLOGIN_HOST, normalize_config(cfg)["port"], on_wait=on_wait) \
             if on_wait is not None else wait_for_server(AUTOLOGIN_HOST, normalize_config(cfg)["port"])
         if not ready:
@@ -10479,26 +10976,30 @@ def run_launch_sequence(cfg, lab_presets, project_path, start_otree, log=None, o
             if problem:
                 return stop(problem)
             seq["otree_started"] = False
-            seq["message"] = launch_running_note(seq)
+            seq["message"] = " ".join(
+                bit for bit in (_pages_sent_note(seq), launch_running_note(seq)) if bit)
             return seq
         _set_row(otree_row, OUTCOME_PORT_ANSWERS, "answering on port %s"
                  % normalize_config(cfg)["port"])
-        problem = run_scripts(after) or _recheck_scripts(seq)
+        problem = run_steps(after) or _recheck_scripts(seq)
         if problem:
             return stop(problem)
     seq.update(ok=True, stage=SEQUENCE_READY)
     return seq
 
 
-def recheck_launch_scripts(seq):
+def recheck_launch_scripts(seq, dashboard=None, services=None):
     """After the pages were sent, the launch's last look at the sentinels. Returns the
     failure message, or "" when the launch stands. A crash after this is not tracked
-    by anyone (said in the docs)."""
+    by anyone (said in the docs). ``dashboard`` and ``services`` as for
+    :func:`finish_launch_report`, so the message names only what really went out."""
+    _mark_page_rows(seq, dashboard, services)
     problem = _recheck_scripts(seq)
     if not problem:
         return ""
     seq.update(ok=False, stage=SEQUENCE_SCRIPT_FAILED)
-    head = problem + " The pages had already been sent to the browser."
+    sent = _pages_sent_note(seq)
+    head = problem + (" " + sent if sent else "")
     note = launch_running_note(seq)
     seq["message"] = head + (" " + note if note else "")
     seq["say"]("err", seq["message"])
@@ -10510,7 +11011,7 @@ def finish_launch_report(seq, dashboard=None, services=None, ready=None):
     activity log. ``dashboard`` = open_dashboard_authenticated's result, ``services`` =
     open_launch_services', ``ready`` = did oTree answer. A page is only ever "sent to the
     browser": nothing tells the launcher the page really appeared."""
-    results = {str(item.get("url", "")): item for item in (services or [])}
+    _mark_page_rows(seq, dashboard, services)
     for row in seq["rows"]:
         if row["kind"] == "otree" and row["outcome"] == OUTCOME_RUNNING:
             if ready is True:
@@ -10518,6 +11019,27 @@ def finish_launch_report(seq, dashboard=None, services=None, ready=None):
                          % normalize_config(seq["cfg"])["port"])
             elif ready is False:
                 _set_row(row, OUTCOME_FAILED, "failed: did not become ready")
+    if not seq.get("reported") and _launch_has_report(seq):
+        seq["reported"] = True
+        levels = {MARK_OK: "ok", MARK_NEUTRAL: "info", MARK_FAILED: "err", MARK_WARN: "warn",
+                  MARK_NOT_RUN: "info"}
+        seq["say"]("info", LAUNCH_REPORT_TITLE + ":")
+        for row in seq["rows"]:
+            seq["say"](levels[row["mark"]], "  %s %s: %s" % (
+                MARK_GLYPHS[row["mark"]], row.get("label", row["name"]), row["text"]))
+            for fact in row.get("facts", ()):
+                seq["say"]("info", "      " + fact)
+            if row.get("failed_script"):
+                seq["say"]("info", "      Script text:")
+                for line in row["failed_script"].splitlines():
+                    seq["say"]("info", "        " + line)
+    return seq["rows"]
+
+
+def _mark_page_rows(seq, dashboard=None, services=None):
+    """What the caller opened: ``dashboard`` for the admin page, ``services`` for the rest."""
+    results = {str(item.get("url", "")): item for item in (services or [])}
+    for row in seq["rows"]:
         if row["kind"] != "page":
             continue
         answer = None
@@ -10529,45 +11051,128 @@ def finish_launch_report(seq, dashboard=None, services=None, ready=None):
         if answer is not None:
             _set_row(row, OUTCOME_SENT_BROWSER if answer else OUTCOME_OPEN_FAILED,
                      TEXT_SENT_BROWSER if answer else TEXT_OPEN_FAILED)
-    if not seq.get("reported") and _launch_has_scripts(seq):
-        seq["reported"] = True
-        levels = {MARK_OK: "ok", MARK_NEUTRAL: "info", MARK_FAILED: "err", MARK_WARN: "warn",
-                  MARK_NOT_RUN: "info"}
-        seq["say"]("info", LAUNCH_REPORT_TITLE + ":")
-        for row in seq["rows"]:
-            seq["say"](levels[row["mark"]], "  %s %s: %s" % (
-                MARK_GLYPHS[row["mark"]], row["name"], row["text"]))
-            for fact in row.get("facts", ()):
-                seq["say"]("info", "      " + fact)
-            if row.get("failed_script"):
-                seq["say"]("info", "      Script text:")
-                for line in row["failed_script"].splitlines():
-                    seq["say"]("info", "        " + line)
-    return seq["rows"]
+
+
+OPEN_WEBSITE_LABEL = "Open"
+OPEN_WEBSITE_TIP = "Open this address in your browser"
+OPEN_WEBSITE_SENT = "Sent %s to the browser."
+OPEN_WEBSITE_FAILED = "Could not send %s to the browser: %s"
+TRY_SCRIPT_LABEL = "Try it"
+TRY_SCRIPT_TITLE = "Try this script"
+TRY_SCRIPT_CONFIRM = ("This runs the script for real on this computer, in its own window, with the "
+                      "text shown here, the text saved in Settings. It gets %s, %s and %s and "
+                      "nothing else. Once it has started, the launcher cannot stop it: close its "
+                      "window yourself if you need to.")
+TRY_SCRIPT_RUN_LABEL = "Run it"
+TRY_SCRIPT_CANCEL_LABEL = "Cancel"
+TRY_SCRIPT_STARTED = "Started the script %s in its own window."
+TRY_SCRIPT_DONE_OK = "Try it: %s finished, exit code 0."
+TRY_SCRIPT_DONE_FAILED = "Try it: %s stopped with exit code %s. Its window stays open so you can read why."
+TRY_SCRIPT_STILL_RUNNING = ("Try it: %s is still running after %d s, so the launcher stopped "
+                            "watching it. It keeps running in its own window.")
+TRY_SCRIPT_NO_WINDOW = "Try it: the window for %s did not open within %d s."
+TRY_SCRIPT_NOT_THERE = "That script is not in this lab any more."
+TRY_SCRIPT_WATCH_SECONDS = 120.0
+
+
+def open_website(url, open_url=None):
+    """Open one address on request: a website row's Open button. Sent to the browser and
+    nothing more is known. Returns ``{"ok", "message"}``. Never raises."""
+    ok, message, cleaned = validate_service_url(url)
+    if not ok:
+        return {"ok": False, "message": message}
+    opened = open_additional_services([{"name": cleaned, "url": cleaned}], open_url=open_url)
+    if opened and opened[0]["ok"]:
+        return {"ok": True, "message": OPEN_WEBSITE_SENT % cleaned}
+    return {"ok": False, "message": OPEN_WEBSITE_FAILED % (cleaned, opened[0]["error"] if opened else "")}
+
+
+def try_lab_script(lab_presets, lab_id, script_id, cfg=None, spawn=None, platform_name=None,
+                   base_env=None, watch=None):
+    """Try it, on a script row in Settings: run the script as SAVED, in its own window, with
+    the three always-there variables and nothing else, and wait a while for its exit code.
+
+    It only starts things (PRINCIPLES 15): nothing here can stop the window, and after
+    ``watch`` seconds the launcher simply stops looking. The tools, a config's own variables
+    and the database settings do not reach it. Blocks while it watches, so a face runs it on
+    a worker. Returns ``{"ok", "code", "message"}``. Never raises."""
+    script = next((s for s in lab_scripts(lab_presets, lab_id) if s["id"] == str(script_id)), None)
+    if script is None:
+        return {"ok": False, "code": None, "message": TRY_SCRIPT_NOT_THERE}
+    c = normalize_config(cfg or {})
+    project = c["project_path"].strip()
+    if not project or not os.path.isdir(project):
+        project = os.path.expanduser("~")
+    only = {"port": c["port"], "room_name": c["room_name"], "lab": c["lab"]}
+    name = script["name"]
+    seconds = TRY_SCRIPT_WATCH_SECONDS if watch is None else float(watch)
+    try:
+        folder = _launch_scripts_folder()
+        platform_used = platform_name or sys.platform
+        files = launch_script_files(folder, 1, name, script["script"], platform_used)
+        spec = build_script_launch(name, files["wrapper"], project,
+                                   launch_script_env_pairs(only, project), platform_used,
+                                   files["log"])
+        (spawn or _spawn_script_window)(spec, launch_script_env(only, project, base_env))
+    except Exception as error:  # noqa: BLE001 - said to the user
+        return {"ok": False, "code": None, "message": "Try it: %s could not start (%s)." % (name, error)}
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        code = read_script_exit(files["sentinel"])
+        if code is not None:
+            if code == 0:
+                return {"ok": True, "code": 0, "message": TRY_SCRIPT_DONE_OK % name}
+            return {"ok": False, "code": code, "message": TRY_SCRIPT_DONE_FAILED % (name, code)}
+        waited = time.monotonic() - started
+        if waited >= SCRIPT_WINDOW_OPEN_TIMEOUT and not os.path.exists(files["started"]):
+            return {"ok": False, "code": None,
+                    "message": TRY_SCRIPT_NO_WINDOW % (name, SCRIPT_WINDOW_OPEN_TIMEOUT)}
+        time.sleep(0.1)
+    return {"ok": True, "code": None, "message": TRY_SCRIPT_STILL_RUNNING % (name, seconds)}
+
+
+def try_script_confirm(lab_presets, lab_id, script_id):
+    """What the confirm box shows: the saved text, which is the text that runs."""
+    script = next((s for s in lab_scripts(lab_presets, lab_id) if s["id"] == str(script_id)), None)
+    if script is None:
+        return {"ok": False, "message": TRY_SCRIPT_NOT_THERE}
+    return {"ok": True, "title": TRY_SCRIPT_TITLE, "name": script["name"], "script": script["script"],
+            "text": TRY_SCRIPT_CONFIRM % (SCRIPT_ENV_PORT, SCRIPT_ENV_ROOM, SCRIPT_ENV_PROJECT),
+            "run_label": TRY_SCRIPT_RUN_LABEL, "cancel_label": TRY_SCRIPT_CANCEL_LABEL}
 
 
 def _launch_has_scripts(seq):
     return any(row["kind"] == "script" for row in (seq or {}).get("rows", []))
 
 
+def _launch_has_report(seq):
+    """A script, or a website placed before the pages that end the launch: then the order
+    itself is part of what happened, and the plain list of pages would not say it."""
+    rows = (seq or {}).get("rows", [])
+    return _launch_has_scripts(seq) or any(
+        row["kind"] == "page" for row in rows[:_pages_end_at(rows)])
+
+
 def launch_box_report(seq):
-    """What the result box gets: the report only when the launch had a script. A launch
-    with none keeps the plain browser-pages list (Julian, 2026-11-04). A failed script
-    always means there was one, so a loud failure is unaffected."""
-    return launch_report(seq) if _launch_has_scripts(seq) else []
+    """What the result box gets: the report only when the launch had a script or a website
+    placed among the steps. A launch with neither keeps the plain browser-pages list
+    (Julian, 2026-11-04). A failed script always means there was one, so a loud failure is
+    unaffected."""
+    return launch_report(seq) if _launch_has_report(seq) else []
 
 
 def launch_report(seq):
-    """The rows the result box shows: ``[{"kind", "name", "outcome", "mark", "glyph",
+    """The rows the result box shows: ``[{"kind", "name", "label", "outcome", "mark", "glyph",
     "text", "facts", "script", "url"}]``; ``script`` only on a failed row, ``url`` only
-    on a website."""
-    out = []
+    on a browser page. ``label`` says what the row did ("Open FOG"), ``name`` is plain."""
+    out = _tool_report_rows((seq or {}).get("cfg"))
     for row in (seq or {}).get("rows", []):
-        out.append({"kind": row["kind"], "name": row["name"], "outcome": row["outcome"],
+        out.append({"kind": row["kind"], "name": row["name"],
+                    "label": row.get("label", row["name"]), "outcome": row["outcome"],
                     "mark": row["mark"], "glyph": MARK_GLYPHS[row["mark"]], "text": row["text"],
                     "facts": list(row.get("facts", ())),
                     "script": row.get("failed_script", ""),
-                    "url": row["detail"] if row["kind"] == "page" else ""})
+                    "url": row.get("address", "") if row["kind"] == "page" else ""})
     return out
 
 
@@ -10593,7 +11198,7 @@ def launch_report_lines(seq):
     one-click box."""
     lines = []
     for row in launch_report(seq):
-        lines.append("%s %s: %s" % (row["glyph"], row["name"], row["text"]))
+        lines.append("%s %s: %s" % (row["glyph"], row.get("label", row["name"]), row["text"]))
         lines.extend("    " + fact for fact in row["facts"])
         if row["script"]:
             lines.append("    Script text:")
@@ -10602,10 +11207,433 @@ def launch_report_lines(seq):
 
 
 def launch_report_text(seq):
-    """The report as a block of text with a heading ("" with no script in it)."""
-    if not _launch_has_scripts(seq):
+    """The report as a block of text with a heading ("" with nothing to report)."""
+    if not _launch_has_report(seq):
         return ""
     return "\n".join([LAUNCH_REPORT_TITLE + ":"] + launch_report_lines(seq))
+
+
+# ---------------------------------------------------------------------------
+# Tools (2026-11-05): optional helpers ticked in Advanced, off by default. A tool that
+# is off changes nothing. A tool that is on adds a box to Before you launch (or to the
+# one-click shortcut's small box) and provides what was typed as environment variables.
+#
+#   * Ticks: LAUNCH_TOOLS_KEY in the config, written only when not empty.
+#   * Typed values: per launch. They travel on the launch's own cfg dict under
+#     LAUNCH_RUN_KEY, which is not a config field: normalize_config drops it, so it can
+#     reach neither a saved config nor a config comparison. Launch history keeps them.
+#   * The seat selection has nothing to do with the room: seat_mode, seat_excluded and
+#     resolve_seats are not read here and do not read this. It takes the lab's seat list
+#     in the order written in it (not sorted_seats).
+# ---------------------------------------------------------------------------
+
+LAUNCH_TOOLS_KEY = "launch_tools"
+LAUNCH_RUN_KEY = "launch_run"
+TOOL_SEATS = "seat_selection"
+TOOL_LAB_SESSION = "lab_session"
+TOOL_IDS = (TOOL_SEATS, TOOL_LAB_SESSION)
+TOOL_ENV_SEATS = "LAB_SEATS"
+TOOL_ENV_SEAT_COUNT = "LAB_SEAT_COUNT"
+TOOL_ENV_SESSION = "OTREE_LAB_SESSION"
+LAUNCH_TOOL_ENV_KEYS = (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT, TOOL_ENV_SESSION)
+
+LAB_SESSION_MAX_LENGTH = 40
+_LAB_SESSION_RE = re.compile(r"^[A-Za-z0-9 ._-]*$")
+_SEAT_NUMBER_RE = re.compile(r"^[0-9]{1,6}$")
+
+TOOLS_TITLE = "Tools"
+TOOLS_LABEL_SEATS = "Seat selection"
+TOOLS_LABEL_SESSION = "Lab session number"
+TOOL_SEATS_INPUT_LABEL = "Number of seats"
+TOOL_SESSION_INPUT_LABEL = "Lab session number"
+TOOL_SEATS_PICK_HINT = "Click a seat to swap it. This does not change the participant list."
+TOOL_SEATS_BOX_TITLE = "Computers to start (scripts only)"
+BROWSER_MODE_GONE_TITLE = "The launcher was closed"
+BROWSER_MODE_GONE_TEXT = "Start it again from its shortcut. A server it started keeps running."
+PARTICIPANT_LINE_EXCLUDED = "Participant list: %d of %d seats (%s excluded)"
+PARTICIPANT_LINE_DEFAULT = "Participant list: lab default, %d seats"
+PARTICIPANT_LINE_EDITED = "Participant list: %d of %d seats"
+PARTICIPANT_LINE_FILE = "Participant list: from your file, %d seats"
+PARTICIPANT_LINE_NONE = "Participant list: no seat board"
+TOOL_SEATS_BLANK_HINT = "Blank = 0 seats."
+TOOL_SESSION_BLANK_HINT = "Blank is fine."
+TOOL_VARIABLES_LINK = "Variables for scripts"
+TOOL_HELP_LINK = "How to read it in oTree"
+SEAT_NUMBER_INVALID = "Number of seats must be a whole number, like 12."
+SEAT_NUMBER_CLAMPED = "This lab has %d seats, so %d are selected."
+SEAT_NO_LIST_NOTE = "This lab has no seat list, so scripts get only the number."
+LAB_SESSION_INVALID = ("Lab session number can only hold letters, digits, spaces, hyphens, "
+                       "underscores and dots.")
+LAB_SESSION_TOO_LONG = "Lab session number can be at most %d characters." % LAB_SESSION_MAX_LENGTH
+TOOL_LINE_SESSION = "Lab session: %s (saved in History)"
+TOOL_LINE_SESSION_BLANK = "Lab session: none"
+TOOL_LINE_SEATS = "Seats for scripts: %d (%s)"
+TOOL_LINE_SEATS_NONE = "Seats for scripts: 0"
+TOOL_LINE_SEATS_NO_LIST = "Seats for scripts: %d (this lab has no seat list)"
+HISTORY_COLUMN_SESSION = "Lab session"
+HISTORY_COLUMN_SEATS = "Seats for scripts"
+TOOL_BOX_TITLE = "Before this launch"
+TOOL_BOX_INTRO = ("If you don't want to type these in, turn them off in Advanced. "
+                  "Leaving them blank is fine: no computers are started (seats = 0) and no "
+                  "session number is set.")
+TOOL_BOX_INTRO_SEATS = ("If you don't want to type this in, turn it off in Advanced. Leaving it "
+                        "blank is fine: no computers are started (seats = 0).")
+TOOL_BOX_INTRO_SESSION = ("If you don't want to type this in, turn it off in Advanced. Leaving "
+                          "it blank is fine: no session number is set.")
+TOOL_BOX_NO_WINDOW = ("This config has %s on, so the shortcut has to ask for values, but it "
+                      "could not open a window on this computer (%s). Nothing was started. Turn "
+                      "the tool off in Advanced, or launch from the launcher window.")
+HEADLESS_TOOLS_NO_BOX_EXIT = 14
+
+
+class ToolBoxUnavailable(Exception):
+    """The one-click shortcut needs the Tools box and cannot show a window."""
+
+LAUNCH_TOOL_ROWS = (
+    {"id": TOOL_SEATS, "name": TOOLS_LABEL_SEATS,
+     "tip": "For scripts that start computers. Adds a Number of seats box and the seat map "
+            "to Before you launch. Scripts get %s and %s. The oTree room and its seat list "
+            "do not change." % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT)},
+    {"id": TOOL_LAB_SESSION, "name": TOOLS_LABEL_SESSION,
+     "tip": "Adds a box to Before you launch. The value goes to oTree and to scripts as %s "
+            "and is kept in History." % TOOL_ENV_SESSION},
+)
+
+# The two help popups, both faces. A block is ("p", text) or ("code", text).
+LAB_SESSION_HELP = {
+    "title": TOOLS_LABEL_SESSION,
+    "blocks": (
+        ("p", "What you type goes to the oTree server and to scripts as %s. It is also "
+              "saved in History." % TOOL_ENV_SESSION),
+        ("p", "To read it in oTree, add this to SESSION_CONFIG_DEFAULTS in settings.py "
+              "(with import os at the top):"),
+        ("code", "lab_session=os.environ.get('%s', '')" % TOOL_ENV_SESSION),
+        ("p", "Read it in your code with:"),
+        ("code", "player.session.config.get('lab_session')"),
+        ("p", "It appears in the wide export as session.config.lab_session for each "
+              "participant."),
+        ("p", "If it is not set, nothing breaks: the value is empty."),
+        ("p", "The value is fixed when the server starts. A second session in the same launch "
+              "gets the same value. A new value needs a relaunch."),
+        ("p", "On oTree's Create session page it shows as a box under Configure session, "
+              "filled in with this value. A change there goes into that session only; History "
+              "keeps what was typed at launch."),
+        ("p", "The launcher does not check whether your study reads it."),
+    ),
+}
+SCRIPT_VARIABLES_HELP = {
+    "title": TOOL_VARIABLES_LINK,
+    "intro": "Every script gets these as environment variables, in its own window.",
+    "columns": ("Variable", "Holds", "Needs"),
+    "rows": (
+        (SCRIPT_ENV_PORT, "The port of this launch", "Always there"),
+        (SCRIPT_ENV_ROOM, "The oTree room", "Always there"),
+        (SCRIPT_ENV_PROJECT, "The study folder", "Always there"),
+        (TOOL_ENV_SEATS, "The selected seats, comma separated, like A1,A2,A5", TOOLS_LABEL_SEATS),
+        (TOOL_ENV_SEAT_COUNT, "How many seats were selected. 0 when left blank",
+         TOOLS_LABEL_SEATS),
+        (TOOL_ENV_SESSION, "The lab session number. Not set when left blank", TOOLS_LABEL_SESSION),
+        ("Your variables", "Each environment variable selected in Advanced, under its own name",
+         "Selected, with a value"),
+    ),
+    "notes": (
+        "Read them as $%s on a Mac or Linux and as %%%s%% in a Windows script. Keep them in "
+        "quotes on a Mac or Linux: \"$%s\"." % (TOOL_ENV_SEATS, TOOL_ENV_SEATS, TOOL_ENV_SESSION),
+        "A tool that is off provides nothing and removes any old value, with no warning.",
+        "Windows has no empty variables: with no seats selected %s is not defined there, so "
+        "check %s first." % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT),
+    ),
+}
+
+
+def normalize_launch_tools(raw):
+    """The ticked tools, known ids only, in one fixed order, so two configs with the same
+    ticks always compare equal. Anything else (a stray type, an id from a newer launcher)
+    counts as not ticked."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    wanted = {str(item) for item in raw}
+    return [tool for tool in TOOL_IDS if tool in wanted]
+
+
+def launch_tools_on(cfg):
+    """The tools this config has on, from a raw or a normalized config."""
+    return normalize_launch_tools((cfg or {}).get(LAUNCH_TOOLS_KEY))
+
+
+def validate_lab_session(text):
+    """``(ok, clean value, message)``. Blank is valid."""
+    clean = str("" if text is None else text).strip()
+    if len(clean) > LAB_SESSION_MAX_LENGTH:
+        return False, "", LAB_SESSION_TOO_LONG
+    if not _LAB_SESSION_RE.match(clean):
+        return False, "", LAB_SESSION_INVALID
+    return True, clean, ""
+
+
+def parse_seat_number(text):
+    """``(ok, number, message)``. Blank is 0. Whole numbers only: no sign, no decimals."""
+    clean = str("" if text is None else text).strip()
+    if not clean:
+        return True, 0, ""
+    if not _SEAT_NUMBER_RE.match(clean):
+        return False, 0, SEAT_NUMBER_INVALID
+    return True, int(clean), ""
+
+
+def tool_seat_list(cfg, lab_presets=None):
+    """The lab's whole seat list, as written in it, each label once. Seat exclusions and
+    the seat mode do not apply: this is not the room's list."""
+    seen, out = set(), []
+    for seat in lab_default_seats(cfg, lab_presets):
+        if seat not in seen:
+            seen.add(seat)
+            out.append(seat)
+    return out
+
+
+def seat_tool_state(cfg, lab_presets=None, typed="", picked=None):
+    """The seat selection as it stands. ``typed`` is the Number of seats box. ``picked`` is
+    the seats after a click on the map (None = the number decides, the first N of the
+    list). Returns ``{"seats", "has_list", "selected" (list order), "count", "typed" (what
+    the box should now show), "note", "error"}``."""
+    seats = tool_seat_list(cfg, lab_presets)
+    state = {"seats": seats, "has_list": bool(seats), "selected": [], "count": 0,
+             "typed": str("" if typed is None else typed).strip(), "note": "", "error": ""}
+    if not seats:
+        state["note"] = SEAT_NO_LIST_NOTE
+    if picked is not None and seats:
+        chosen = {str(seat) for seat in picked}
+        state["selected"] = [seat for seat in seats if seat in chosen]
+        state["count"] = len(state["selected"])
+        state["typed"] = str(state["count"])
+        return state
+    ok, number, message = parse_seat_number(state["typed"])
+    if not ok:
+        state["error"] = message
+        return state
+    if not seats:
+        state["count"] = number
+        return state
+    if number > len(seats):
+        state["note"] = SEAT_NUMBER_CLAMPED % (len(seats), len(seats))
+        number = len(seats)
+        state["typed"] = str(number)
+    state["selected"] = seats[:number]
+    state["count"] = number
+    return state
+
+
+def _tool_seats_line(selected, count):
+    if selected:
+        return TOOL_LINE_SEATS % (count, ", ".join(selected))
+    return TOOL_LINE_SEATS_NO_LIST % count if count else TOOL_LINE_SEATS_NONE
+
+
+def _tool_session_line(value):
+    return TOOL_LINE_SESSION % value if value else TOOL_LINE_SESSION_BLANK
+
+
+def seats_out_of_participant_list(cfg, lab_presets=None):
+    """The seats of the lab's list that this launch's participant list leaves out, in list
+    order. Only drawn on the Seat selection map, which stays free to pick them."""
+    c = normalize_config(cfg or {})
+    if effective_seat_mode(c, lab_presets) != SEAT_EDIT:
+        return []
+    out = set(c["seat_excluded"])
+    return [seat for seat in tool_seat_list(cfg, lab_presets) if seat in out]
+
+
+def participant_list_line(cfg, lab_presets=None):
+    """One line naming the participant list this launch uses. Read beside the Seat selection
+    tool, whose map is a different thing."""
+    c = normalize_config(cfg or {})
+    mode = effective_seat_mode(c, lab_presets)
+    if mode == SEAT_NONE:
+        return PARTICIPANT_LINE_NONE
+    used = resolve_seats(c, lab_presets)
+    if mode == SEAT_FILE:
+        return PARTICIPANT_LINE_FILE % len(used)
+    if mode == SEAT_EDIT:
+        out = seats_out_of_participant_list(c, lab_presets)
+        total = len(used) + len(out)
+        if out:
+            shown = ", ".join(out[:6]) + (" and %d more" % (len(out) - 6) if len(out) > 6 else "")
+            return PARTICIPANT_LINE_EXCLUDED % (len(used), total, shown)
+        return PARTICIPANT_LINE_EDITED % (len(used), total)
+    return PARTICIPANT_LINE_DEFAULT % len(used)
+
+
+def launch_tools_state(cfg, lab_presets=None, values=None):
+    """What the launch screen shows for the tools that are on, both faces render this.
+    ``values``: ``{"lab_session": text, "seat_number": text, "seats_picked": list or None}``.
+
+    Returns ``{"any", "ok", "error" (the first problem), "lines", "session": {...} or None,
+    "seats": {...} or None, "run": what with_launch_run stores}``."""
+    values = values or {}
+    tools = launch_tools_on(cfg)
+    answer = {"any": bool(tools), "ok": True, "error": "", "lines": [], "session": None,
+              "seats": None, "run": {}, "participant_line": ""}
+    if TOOL_LAB_SESSION in tools:
+        ok, clean, message = validate_lab_session(values.get("lab_session"))
+        answer["session"] = {"label": TOOL_SESSION_INPUT_LABEL, "value": clean, "error": message,
+                             "max_length": LAB_SESSION_MAX_LENGTH,
+                             "hint": TOOL_SESSION_BLANK_HINT}
+        answer["run"]["lab_session"] = clean
+        if ok:
+            answer["lines"].append(_tool_session_line(clean))
+    if TOOL_SEATS in tools:
+        seats = seat_tool_state(cfg, lab_presets, values.get("seat_number"),
+                                values.get("seats_picked"))
+        seats.update(label=TOOL_SEATS_INPUT_LABEL, hint=TOOL_SEATS_BLANK_HINT,
+                     pick_hint=TOOL_SEATS_PICK_HINT, box_title=TOOL_SEATS_BOX_TITLE,
+                     excluded=seats_out_of_participant_list(cfg, lab_presets))
+        answer["seats"] = seats
+        answer["participant_line"] = participant_list_line(cfg, lab_presets)
+        answer["run"]["seats"] = list(seats["selected"])
+        answer["run"]["seat_count"] = seats["count"]
+        if not seats["error"]:
+            answer["lines"].append(_tool_seats_line(seats["selected"], seats["count"]))
+    for part in (answer["session"], answer["seats"]):
+        if part and part["error"]:
+            answer.update(ok=False, error=answer["error"] or part["error"])
+    return answer
+
+
+def with_launch_run(cfg, lab_presets=None, values=None):
+    """``(problem, cfg)``: the launch's cfg with the typed values on it, checked here so
+    no face can launch with a value that was refused on screen. A problem returns the cfg
+    untouched. With every tool off the very same dict comes back. A problem with the
+    config's environment variables stops it here too."""
+    env_problems = env_var_problems(cfg)
+    if env_problems:
+        return env_problems[0], cfg
+    state = launch_tools_state(cfg, lab_presets, values)
+    if not state["ok"]:
+        return state["error"], cfg
+    if not state["any"]:
+        return "", cfg
+    return "", dict(cfg, **{LAUNCH_RUN_KEY: state["run"]})
+
+
+def launch_tool_env(cfg):
+    """What the tools that are on provide. Nothing for a tool that is off, whatever else
+    is on the dict. Seat selection on and blank: count 0, list empty. Lab session blank:
+    not set at all."""
+    cfg = cfg or {}
+    tools = launch_tools_on(cfg)
+    run = cfg.get(LAUNCH_RUN_KEY) or {}
+    env = {}
+    if TOOL_SEATS in tools:
+        env[TOOL_ENV_SEATS] = ",".join(str(seat) for seat in run.get("seats") or [])
+        env[TOOL_ENV_SEAT_COUNT] = str(int(run.get("seat_count") or 0))
+    if TOOL_LAB_SESSION in tools and run.get("lab_session"):
+        env[TOOL_ENV_SESSION] = str(run["lab_session"])
+    return env
+
+
+def launch_tool_lines(cfg):
+    """One line per tool that is on, from what was typed: the activity log, the launch
+    box. Says only what is true: the launcher never knows whether a study reads the value."""
+    cfg = cfg or {}
+    tools = launch_tools_on(cfg)
+    run = cfg.get(LAUNCH_RUN_KEY) or {}
+    lines = []
+    if TOOL_LAB_SESSION in tools:
+        lines.append(_tool_session_line(run.get("lab_session") or ""))
+    if TOOL_SEATS in tools:
+        lines.append(_tool_seats_line(run.get("seats") or [], int(run.get("seat_count") or 0)))
+    return lines
+
+
+def _tool_report_rows(cfg):
+    """The tools' rows at the top of the launch report. Neutral mark: given, not checked."""
+    rows = []
+    for line in launch_tool_lines(cfg):
+        name, _, text = line.partition(": ")
+        rows.append({"kind": "tool", "name": name, "outcome": OUTCOME_GIVEN, "mark": MARK_NEUTRAL,
+                     "glyph": MARK_GLYPHS[MARK_NEUTRAL], "text": text, "facts": [], "script": "",
+                     "url": ""})
+    # Said as set, not as used: the launcher never knows whether a study reads it.
+    names = list(launch_env_vars(cfg or {}))
+    if names:
+        rows.append({"kind": "tool", "name": ENV_VARS_TITLE, "outcome": OUTCOME_GIVEN,
+                     "mark": MARK_NEUTRAL, "glyph": MARK_GLYPHS[MARK_NEUTRAL],
+                     "text": "set: " + ", ".join(names), "facts": [], "script": "", "url": ""})
+    return rows
+
+
+def _session_tool_fields(cfg):
+    """The launch-history keys of the tools that were on."""
+    cfg = cfg or {}
+    tools = launch_tools_on(cfg)
+    run = cfg.get(LAUNCH_RUN_KEY) or {}
+    fields = {}
+    if TOOL_LAB_SESSION in tools:
+        fields["lab_session"] = str(run.get("lab_session") or "")
+    if TOOL_SEATS in tools:
+        fields["tool_seat_count"] = int(run.get("seat_count") or 0)
+        fields["tool_seats"] = [str(seat) for seat in run.get("seats") or []]
+    return fields
+
+
+def history_tool_columns(entries):
+    """The History columns the tools add: ``[(key, title)]``, only for a tool that was on in
+    at least one of ``entries``."""
+    columns = []
+    if any("lab_session" in entry for entry in entries or ()):
+        columns.append(("lab_session", HISTORY_COLUMN_SESSION))
+    if any("tool_seat_count" in entry for entry in entries or ()):
+        columns.append(("tool_seats", HISTORY_COLUMN_SEATS))
+    if any(entry.get(HISTORY_ENV_KEY) for entry in entries or ()):
+        columns.append((HISTORY_ENV_KEY, HISTORY_COLUMN_ENV))
+    return columns
+
+
+def history_tool_cell(entry, key):
+    """One History cell. "" for a launch that had the tool off; "(blank)" when on and blank."""
+    if key == HISTORY_ENV_KEY:
+        return history_env_cell(entry)
+    if key == "lab_session":
+        if "lab_session" not in entry:
+            return ""
+        return entry["lab_session"] or "(blank)"
+    if "tool_seat_count" not in entry:
+        return ""
+    seats = entry.get("tool_seats") or []
+    count = entry.get("tool_seat_count") or 0
+    return "%s: %s" % (count, ", ".join(seats)) if seats else str(count)
+
+
+def launch_tools_ui_text():
+    """The words the page needs for the Tools list and the help popups."""
+    return {"title": TOOLS_TITLE, "tip": ui_tip("launch_tools"),
+            "rows": [dict(row) for row in LAUNCH_TOOL_ROWS],
+            "session_id": TOOL_LAB_SESSION, "seats_id": TOOL_SEATS,
+            "variables_link": TOOL_VARIABLES_LINK, "help_link": TOOL_HELP_LINK,
+            "session_help": {"title": LAB_SESSION_HELP["title"],
+                             "blocks": [list(block) for block in LAB_SESSION_HELP["blocks"]]},
+            "env_help": {"title": ENV_VARS_HELP["title"],
+                         "blocks": [list(block) for block in ENV_VARS_HELP["blocks"]]},
+            "variables_help": {"title": SCRIPT_VARIABLES_HELP["title"],
+                               "intro": SCRIPT_VARIABLES_HELP["intro"],
+                               "columns": list(SCRIPT_VARIABLES_HELP["columns"]),
+                               "rows": [list(row) for row in SCRIPT_VARIABLES_HELP["rows"]],
+                               "notes": list(SCRIPT_VARIABLES_HELP["notes"])}}
+
+
+def tool_box_intro(tools):
+    """The plain words of the one-click box, for the tools that are on."""
+    if TOOL_SEATS in tools and TOOL_LAB_SESSION in tools:
+        return TOOL_BOX_INTRO
+    return TOOL_BOX_INTRO_SEATS if TOOL_SEATS in tools else TOOL_BOX_INTRO_SESSION
+
+
+def tool_box_no_window(tools, why):
+    """The loud failure when the box cannot be shown."""
+    names = " and ".join({TOOL_SEATS: TOOLS_LABEL_SEATS, TOOL_LAB_SESSION: TOOLS_LABEL_SESSION}[t]
+                         for t in tools)
+    return TOOL_BOX_NO_WINDOW % (names, why)
 
 
 # ---------------------------------------------------------------------------
@@ -10665,6 +11693,606 @@ def study_shortcut_name(lab_label):
     """
     label = str(lab_label or "").strip()
     return ("Study Room " + label.title()) if label else "Study Room"
+
+
+# ---------------------------------------------------------------------------
+# Environment variables (2026-11-05, Julian's design): an advanced thing most people
+# never see, built like the lab scripts.
+#
+#   LAB level (lab_info.json, each lab): "env_vars": [{name, value, hidden}], hidden by
+#       default. The built-in suggestions (BUILTIN_ENV_VARS) are in every lab without being
+#       stored; only a changed state is. A lab where nobody did anything stores nothing.
+#   CONFIG level (saved_configs.json): "env_var_choices" {name: value} = selected, and
+#       "extra_env_vars" [{name, value, enabled}] = the config's own. Neither is written
+#       when empty, and there is no schema bump.
+#
+# Visible = offered in Advanced under Not selected, also for a new config. Selecting shows
+# a value box. Only a selected variable with a value is set, for the server and for scripts.
+# Hidden works as for scripts: tidiness, not a security boundary. A selected variable stays
+# selected when the lab hides or removes it, or the config moves to another lab; its row
+# stays on screen with a tag. So what a launch sets depends on the config alone, and a
+# one-click shortcut asks nothing.
+#
+# Reserved names: never set, whatever a file says. A problem in a config (hand edited, or
+# saved by a launcher with another reserved list) blocks the launch and names the variable.
+# Any other variable that was inherited and not selected stays as it was.
+# ---------------------------------------------------------------------------
+
+LAB_ENV_VARS_KEY = "env_vars"
+ENV_VAR_CHOICES_KEY = "env_var_choices"
+EXTRA_ENV_VARS_KEY = "extra_env_vars"
+ENV_VAR_CONFIG_KEYS = (ENV_VAR_CHOICES_KEY, EXTRA_ENV_VARS_KEY)
+ENV_VAR_NAME_MAX = 100
+ENV_VAR_VALUE_MAX = 1000
+_ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_VAR_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_ENV_VAR_SECRET_RE = re.compile(r"pass|pwd|secret|token|credential|key", re.I)
+
+# What the launcher itself sets for the server or for scripts. A test holds this equal to
+# what build_env and launch_script_env_pairs really set.
+ENV_VAR_LAUNCHER_NAMES = tuple(dict.fromkeys(
+    DB_ENV_KEYS + OTREE_ENV_KEYS + SEAT_ENV_KEYS + SECRET_ENV_KEYS + LAUNCH_TOOL_ENV_KEYS
+    + (SCRIPT_ENV_PORT, SCRIPT_ENV_ROOM, SCRIPT_ENV_PROJECT)))
+# What the launch or the promises on screen depend on. PATH finds otree; the Windows and
+# Python names start it; PORT and the two OTREE_ ones would make oTree ignore what the
+# screen says about the port and the database.
+ENV_VAR_OTHER_RESERVED = (
+    "PATH", "PATHEXT", "VIRTUAL_ENV", "CONDA_PREFIX", "DJANGO_SETTINGS_MODULE", "PORT",
+    "OTREE_IN_MEMORY", "OTREE_EPHEMERAL",
+    "PGPASSWORD", "PGHOST", "PGPORT", "PGUSER", "PGDATABASE",
+    "COMSPEC", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "TMPDIR",
+    "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "USER", "USERNAME", "LOGNAME",
+    "SHELL", "PWD", "OLDPWD", "IFS", "ENV", "BASH_ENV")
+# Whole families: PYTHON* (PYTHONPATH, PYTHONHOME...), the loaders, the launcher's own.
+ENV_VAR_RESERVED_PREFIXES = ("PYTHON", "LD_", "DYLD_", "OTREE_LAB_")
+
+ENV_VARS_TITLE = "Environment variables"
+ENV_VARS_CARD_TITLE = ENV_VARS_TITLE
+ENV_VARS_BRIEFING_TITLE = "Environment variables set"
+ENV_VARS_SETTINGS_INTRO = ("Ticked variables show in Advanced, not selected. Nothing is set "
+                           "until a config selects one and gives it a value.")
+ENV_VARS_NONE_SHOWN = "None shown"
+ENV_VAR_ADD_LABEL = "Add variable"
+ENV_VAR_ADD_OWN_LABEL = "Add your own variable"
+ENV_VAR_NAME_LABEL = "Name"
+ENV_VAR_NAME_HINT = "Usually in capitals, like MY_FOLDER."
+ENV_VAR_VALUE_LABEL = "Value"
+ENV_VAR_DEFAULT_LABEL = "Default or example value"
+ENV_VAR_DEFAULT_HINT = "Fills the value box when someone selects it. They can change it."
+ENV_VAR_SHOW_LABEL = "Show in configs"
+ENV_VAR_VALUE_PLACEHOLDER = "Empty = not set"
+ENV_VAR_SEE_MORE = "See more"
+ENV_VAR_BROWSE = "Browse..."
+ENV_VAR_BROWSE_NONE = "No folder chosen. You can also type the path in the box."
+ENV_VAR_BROWSE_TITLE = "Choose the folder for %s"
+ENV_VAR_DESCRIPTION_LABEL = "Short description (optional)"
+ENV_VAR_DESCRIPTION_MAX = 200
+ENV_VAR_FOLDER_LABEL = "This is a folder"
+ENV_VAR_FOLDER_MISSING = "The folder for %s does not exist: %s"
+ENV_VAR_FOLDER_MISSING_HINT = ("The launch can still go ahead. Create the folder, or choose "
+                               "another one in Advanced.")
+ENV_VAR_FOLDER_CHECK_SECONDS = 2.0
+ENV_VAR_HELP_LINK = "How to read one in oTree"
+ENV_VAR_DELETE_CONFIRM = ("Remove %s from this lab? A config that selected it keeps it until "
+                          "someone clears the tick.")
+ENV_VAR_TAG_HIDDEN = "(your choice, hidden in the lab)"
+ENV_VAR_TAG_NOT_IN_LAB = "(not in this lab)"
+ENV_VAR_NAME_EMPTY = "Give the variable a name."
+ENV_VAR_NAME_INVALID = ("\"%s\" cannot be a variable name. Use letters, digits and "
+                        "underscores, and do not start with a digit.")
+ENV_VAR_NAME_TOO_LONG = "A variable name can be at most %d characters." % ENV_VAR_NAME_MAX
+ENV_VAR_NAME_RESERVED = ("%s cannot be set here: the launcher sets it itself or the launch "
+                         "depends on it. Pick another name.")
+ENV_VAR_NAME_DUPLICATE = ("%s is already in the list. Names count as the same whatever their "
+                          "capitals, because Windows treats them that way.")
+ENV_VAR_VALUE_CONTROL = "The value of %s cannot hold line breaks or control characters."
+ENV_VAR_VALUE_TOO_LONG = "The value of %%s can be at most %d characters." % ENV_VAR_VALUE_MAX
+ENV_VAR_BUILTIN_DELETE = "%s is a built-in suggestion: clear its tick to hide it."
+ENV_VAR_GONE = "That variable is not in this lab any more."
+HISTORY_ENV_KEY = "env_vars"
+HISTORY_COLUMN_ENV = "Variables set"
+HEADLESS_ENV_VARS_EXIT = 15
+
+OTREE_DATA_FOLDER_NAME = "OTREE_DATA_FOLDER"
+BUILTIN_ENV_VARS = (
+    {"name": OTREE_DATA_FOLDER_NAME,
+     "folder": True,
+     "tip": "Choose a folder for your data. The Download data button of the oTree template, "
+            "if your study has one, saves your files there.",
+     "guide": (
+         ("p", "Choose a folder on the computer that runs oTree. It must already exist: the "
+               "button never creates it, and a missing folder is an error that names it."),
+         ("p", "In the oTree template, the Download data button on the experimenter dashboard "
+               "then saves up to three files there, for all sessions in the database: "
+               "SENSITIVE always, ANONYMOUS only if there is something to remove, PAYMENTS "
+               "with as many columns as exist. Each goes in a subfolder of that name."),
+         ("p", "It never overwrites a file: if a name is taken, the whole set moves to the "
+               "next number."),
+         ("p", "With no folder set, that button gives one browser download per file, with "
+               "visible links."),
+         ("p", "Not every study has this button."),
+         ("p", "Keep the folder outside your study folder: bank details in a study folder "
+               "can end up in git."),
+         ("p", "The running server reads the variable, so a change needs a relaunch."),
+         ("p", "To use the folder in a button of your own study, read it with:"),
+         ("code", "os.environ.get('%s', '')" % OTREE_DATA_FOLDER_NAME),
+     )},
+)
+
+ENV_VARS_HELP = {
+    "title": ENV_VARS_TITLE,
+    "blocks": (
+        ("p", "A selected variable with a value goes to the oTree server and to scripts. An "
+              "empty one is not set."),
+        ("p", "To read one in oTree (with import os at the top of the file):"),
+        ("code", "os.environ.get('%s', '')" % OTREE_DATA_FOLDER_NAME),
+        ("p", "The value is fixed when the server starts. A change needs a relaunch."),
+        ("p", "The launcher sets it. It does not check whether your study reads it."),
+    ),
+}
+
+
+def _env_var_upper(name):
+    return str(name).upper()
+
+
+def env_var_is_secret(name):
+    """Does this name look like it holds a secret? Its value is then masked on screen and
+    in the logs, and History keeps only the name."""
+    return bool(_ENV_VAR_SECRET_RE.search(str(name)))
+
+
+def env_var_is_reserved(name):
+    """Compared in upper case: Windows treats names that way."""
+    upper = _env_var_upper(name)
+    return (upper in ENV_VAR_LAUNCHER_NAMES or upper in ENV_VAR_OTHER_RESERVED
+            or upper.startswith(ENV_VAR_RESERVED_PREFIXES))
+
+
+def env_var_name_problem(name):
+    """What is wrong with this name, or ""."""
+    clean = str("" if name is None else name).strip()
+    if not clean:
+        return ENV_VAR_NAME_EMPTY
+    if len(clean) > ENV_VAR_NAME_MAX:
+        return ENV_VAR_NAME_TOO_LONG
+    if not _ENV_VAR_NAME_RE.match(clean):
+        return ENV_VAR_NAME_INVALID % clean
+    if env_var_is_reserved(clean):
+        return ENV_VAR_NAME_RESERVED % clean
+    return ""
+
+
+def env_var_value_problem(name, value):
+    """What is wrong with this value, or "". Tabs count: a Mac Terminal window gets the
+    export line as typed input."""
+    text = str("" if value is None else value)
+    if _ENV_VAR_CONTROL_RE.search(text):
+        return ENV_VAR_VALUE_CONTROL % name
+    if len(text) > ENV_VAR_VALUE_MAX:
+        return ENV_VAR_VALUE_TOO_LONG % name
+    return ""
+
+
+def _clean_env_description(text):
+    """One line, for a tip: longer text is cut (the forms stop it first)."""
+    return " ".join(str("" if text is None else text).split())[:ENV_VAR_DESCRIPTION_MAX]
+
+
+def validate_env_var(name, value="", taken=(), description="", folder=False):
+    """``(ok, message, {"name", "value", "description", "folder"})``. ``taken`` = names
+    already in the list. The name keeps the capitals it was typed with; the value is kept
+    exactly as typed."""
+    clean = str("" if name is None else name).strip()
+    text = str("" if value is None else value)
+    problem = env_var_name_problem(clean) or env_var_value_problem(clean, text)
+    if not problem and _env_var_upper(clean) in {_env_var_upper(n) for n in taken}:
+        problem = ENV_VAR_NAME_DUPLICATE % clean
+    if problem:
+        return False, problem, None
+    return True, "", {"name": clean, "value": text,
+                      "description": _clean_env_description(description),
+                      "folder": bool(folder)}
+
+
+def normalize_env_var_choices(raw):
+    """A config's selected lab variables, ``{name: value}``, in a fixed order so two configs
+    with the same choices compare equal. Only the shape is settled here:
+    env_var_problems judges the content, so a bad entry stays visible instead of silently
+    vanishing. ``False`` = an older form of "not selected"."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for name in sorted(raw, key=str):
+        clean = str(name).strip()
+        value = raw[name]
+        if not clean or value is False:
+            continue
+        out[clean] = "" if value is None or value is True else str(value)
+    return out
+
+
+def normalize_extra_env_vars(raw):
+    """A config's own variables as ``[{name, value, enabled}]``, in their own order."""
+    out = []
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        value = item.get("value")
+        out.append({"name": name, "value": "" if value is None else str(value),
+                    "enabled": bool(item.get("enabled", True)),
+                    "description": _clean_env_description(item.get("description")),
+                    "folder": bool(item.get("folder", False))})
+    return out
+
+
+def _builtin_env_var(name):
+    upper = _env_var_upper(name)
+    for builtin in BUILTIN_ENV_VARS:
+        if _env_var_upper(builtin["name"]) == upper:
+            return builtin
+    return None
+
+
+def stored_lab_env_vars(raw):
+    """A lab's list as lab_info.json holds it: valid entries, each name once, hidden unless
+    it says otherwise. A built-in suggestion in its usual state is not stored."""
+    out, seen = [], set()
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        if not isinstance(item, dict):
+            continue
+        ok, _message, entry = validate_env_var(item.get("name"), item.get("value"), (),
+                                               item.get("description"), item.get("folder"))
+        if not ok or _env_var_upper(entry["name"]) in seen:
+            continue
+        seen.add(_env_var_upper(entry["name"]))
+        builtin = _builtin_env_var(entry["name"])
+        hidden = bool(item.get("hidden", True))
+        stored = {"name": entry["name"], "value": entry["value"], "hidden": hidden}
+        if builtin:
+            # Its words and its folder mark come from the code, so only these two can differ.
+            stored["name"] = builtin["name"]
+            if hidden and not entry["value"]:
+                continue
+        else:
+            if entry["description"]:
+                stored["description"] = entry["description"]
+            if entry["folder"]:
+                stored["folder"] = True
+        out.append(stored)
+    return out
+
+
+def env_var_guide(name):
+    """The See more guide of a built-in variable, ``{"title", "blocks"}``, or None. A
+    variable added by a lab or a config has only its description."""
+    builtin = _builtin_env_var(name)
+    if not builtin or not builtin.get("guide"):
+        return None
+    return {"title": builtin["name"], "blocks": [list(block) for block in builtin["guide"]]}
+
+
+def lab_env_var_rows(preset):
+    """Everything a lab offers, for Settings: the built-in suggestions first (hidden unless
+    the lab changed that), then its own. ``[{name, value, hidden, builtin, tip, guide
+    (True = See more), folder, description}]``."""
+    stored = stored_lab_env_vars((preset or {}).get(LAB_ENV_VARS_KEY))
+    by_name = {_env_var_upper(item["name"]): item for item in stored}
+    rows = []
+    for builtin in BUILTIN_ENV_VARS:
+        item = by_name.pop(_env_var_upper(builtin["name"]), None) or {}
+        rows.append({"name": builtin["name"], "value": item.get("value", ""),
+                     "hidden": item.get("hidden", True), "builtin": True, "tip": builtin["tip"],
+                     "guide": bool(builtin.get("guide")), "folder": bool(builtin.get("folder")),
+                     "description": ""})
+    for item in stored:
+        if _env_var_upper(item["name"]) in by_name:
+            rows.append({"name": item["name"], "value": item["value"], "hidden": item["hidden"],
+                         "builtin": False, "tip": item.get("description", ""), "guide": False,
+                         "folder": bool(item.get("folder")),
+                         "description": item.get("description", "")})
+    return rows
+
+
+def lab_env_vars(lab_presets, lab_id):
+    """The variables of lab ``lab_id``, hidden ones included (``[]`` for an unknown lab,
+    localhost or another host)."""
+    preset = find_lab_preset(lab_id, lab_presets) if lab_presets else None
+    if preset is None or preset.get("deleted"):
+        return []
+    return lab_env_var_rows(preset)
+
+
+def _store_lab_env_vars(target, rows):
+    target[LAB_ENV_VARS_KEY] = stored_lab_env_vars(rows)
+
+
+def add_lab_env_var(lab_presets, lab_id, name, value="", hidden=True, description="",
+                    folder=False):
+    """Add a variable to a lab. Returns ``(ok, message, presets, variable)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    rows = lab_env_var_rows(target)
+    ok, message, entry = validate_env_var(name, value, [row["name"] for row in rows],
+                                          description, folder)
+    if not ok:
+        return False, message, presets, None
+    entry["hidden"] = bool(hidden)
+    _store_lab_env_vars(target, rows + [entry])
+    return True, "Added %s to %s." % (entry["name"], target["name"]), presets, entry
+
+
+def update_lab_env_var(lab_presets, lab_id, name, value=None, hidden=None, description=None,
+                       folder=None):
+    """Change one variable's default value, tick, description or folder mark. The name is
+    what configs keep, so it stays. A built-in's words and mark come from the code. ``None``
+    leaves a field as it is. Returns ``(ok, message, presets, variable)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets, None
+    rows = lab_env_var_rows(target)
+    for row in rows:
+        if row["name"] != str(name):
+            continue
+        if value is not None:
+            problem = env_var_value_problem(row["name"], value)
+            if problem:
+                return False, problem, presets, None
+            row["value"] = str(value)
+        if hidden is not None:
+            row["hidden"] = bool(hidden)
+        if description is not None and not row["builtin"]:
+            row["description"] = _clean_env_description(description)
+        if folder is not None and not row["builtin"]:
+            row["folder"] = bool(folder)
+        _store_lab_env_vars(target, rows)
+        return True, "Saved %s." % row["name"], presets, row
+    return False, ENV_VAR_GONE, presets, None
+
+
+def delete_lab_env_var(lab_presets, lab_id, name):
+    """Remove one of a lab's own variables. Returns ``(ok, message, presets)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets
+    rows = lab_env_var_rows(target)
+    for row in rows:
+        if row["name"] != str(name):
+            continue
+        if row["builtin"]:
+            return False, ENV_VAR_BUILTIN_DELETE % row["name"], presets
+        _store_lab_env_vars(target, [other for other in rows if other is not row])
+        return True, "Removed %s from %s." % (row["name"], target["name"]), presets
+    return False, ENV_VAR_GONE, presets
+
+
+def env_vars_summary(lab_presets):
+    """The collapsed Settings card: the names shown in configs, each once."""
+    names = []
+    for preset in (lab_presets or []):
+        if preset.get("deleted"):
+            continue
+        for row in lab_env_var_rows(preset):
+            if not row["hidden"] and row["name"] not in names:
+                names.append(row["name"])
+    return ", ".join(names) if names else ENV_VARS_NONE_SHOWN
+
+
+def _env_var_row(name, source, selected, value="", **more):
+    row = {"id": "env:%s:%s" % (source, name), "kind": "env_var", "source": source, "name": name,
+           "detail": "", "tip": "", "selected": bool(selected), "movable": False,
+           "can_remove": True, "explicit": False, "can_reset": False, "can_delete": False,
+           "can_edit": False, "tag": "", "wait_text": "", "value": value, "default": "",
+           "secret": env_var_is_secret(name), "problem": "", "guide": False, "folder": False}
+    row.update(more)
+    return row
+
+
+def launch_env_var_rows(cfg, lab_presets=None):
+    """Every variable this config can see. A hidden one that is not selected is out. A
+    selected one always has a row, also if the lab no longer offers it. A config's own
+    variable wins from a lab's of the same name, so a name is never listed twice."""
+    c = normalize_config(cfg or {})
+    choices = {_env_var_upper(name): name for name in c[ENV_VAR_CHOICES_KEY]}
+    own = c[EXTRA_ENV_VARS_KEY]
+    own_names = {_env_var_upper(item["name"]) for item in own}
+    rows, offered = [], set()
+    for var in lab_env_vars(_presets_or_default(lab_presets), c["lab"]):
+        upper = _env_var_upper(var["name"])
+        offered.add(upper)
+        name = choices.get(upper)
+        if name is None and (upper in own_names or var["hidden"]):
+            continue
+        rows.append(_env_var_row(
+            name or var["name"], "lab", name is not None,
+            c[ENV_VAR_CHOICES_KEY].get(name, ""), default=var["value"], tip=var["tip"],
+            guide=var["guide"], folder=var["folder"],
+            tag=ENV_VAR_TAG_HIDDEN if var["hidden"] else ""))
+    for upper, name in choices.items():
+        if upper not in offered:
+            # A lab no longer offers it, but a built-in still has its own words.
+            builtin = _builtin_env_var(name) or {}
+            rows.append(_env_var_row(name, "lab", True, c[ENV_VAR_CHOICES_KEY][name],
+                                     tag=ENV_VAR_TAG_NOT_IN_LAB, tip=builtin.get("tip", ""),
+                                     guide=bool(builtin.get("guide")),
+                                     folder=bool(builtin.get("folder"))))
+    for item in own:
+        builtin = _builtin_env_var(item["name"]) or {}
+        rows.append(_env_var_row(item["name"], "own", item["enabled"], item["value"],
+                                 can_delete=True, tip=item["description"] or builtin.get("tip", ""),
+                                 guide=bool(builtin.get("guide")),
+                                 folder=item["folder"] or bool(builtin.get("folder"))))
+    problems = dict(_env_var_row_problems(c))
+    for row in rows:
+        if row["selected"]:
+            row["problem"] = problems.get(_env_var_upper(row["name"]), "")
+    return rows
+
+
+LAB_ENV_ADD_OWN_KEY = "env_add_own"
+LAB_ENV_ADD_OWN_LABEL = "Researchers can add their own variables"
+LAB_ENV_ADD_OWN_TIP = ("On: every config on this lab shows Add your own variable in Advanced. Off: "
+                       "no Add button. A config that already has its own variable keeps it.")
+
+
+def env_var_add_allowed(cfg, lab_presets, rows=None):
+    """Is "Add your own variable" offered? A lab decides (its Settings tick, off by default).
+    Localhost and Other host have no lab to decide and no lab manager to ask, so there it is
+    always offered. Off only hides the button: a config's own variables keep their rows."""
+    c = normalize_config(cfg or {})
+    if c["lab"] in (LAB_LOCAL, LAB_CUSTOM):
+        return True
+    preset = find_lab_preset(c["lab"], _presets_or_default(lab_presets))
+    return bool(preset and not preset.get("deleted") and preset.get(LAB_ENV_ADD_OWN_KEY))
+
+
+def set_lab_env_add_own(lab_presets, lab_id, on):
+    """The lab's tick. Stored only when on. Returns ``(ok, message, presets)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets
+    if on:
+        target[LAB_ENV_ADD_OWN_KEY] = True
+    else:
+        target.pop(LAB_ENV_ADD_OWN_KEY, None)
+    return True, "Saved.", presets
+
+
+def _env_var_row_problems(c):
+    """``[(upper name, problem)]`` for what is selected, the first problem of each name."""
+    found, seen = [], set()
+    entries = [(name, value) for name, value in c[ENV_VAR_CHOICES_KEY].items()]
+    entries += [(item["name"], item["value"]) for item in c[EXTRA_ENV_VARS_KEY]
+                if item["enabled"]]
+    for name, value in entries:
+        upper = _env_var_upper(name)
+        problem = env_var_name_problem(name) or env_var_value_problem(name, value)
+        if not problem and upper in seen:
+            problem = ENV_VAR_NAME_DUPLICATE % name
+        seen.add(upper)
+        if problem and upper not in {item[0] for item in found}:
+            found.append((upper, problem))
+    return found
+
+
+def env_var_problems(cfg):
+    """Why this config's variables block a launch, in plain words (``[]`` = no problem). An
+    empty value is not a problem. Reads the config alone."""
+    return [problem for _upper, problem in _env_var_row_problems(normalize_config(cfg or {}))]
+
+
+def launch_env_vars(cfg):
+    """What this launch sets: ``{name: value}``, selected with a value, reserved or broken
+    names and values left out, each name once. Whitespace alone counts as empty."""
+    c = normalize_config(cfg or {})
+    entries = [(name, value) for name, value in c[ENV_VAR_CHOICES_KEY].items()]
+    entries += [(item["name"], item["value"]) for item in c[EXTRA_ENV_VARS_KEY]
+                if item["enabled"]]
+    out, seen = {}, set()
+    for name, value in entries:
+        upper = _env_var_upper(name)
+        if (upper in seen or not value.strip() or env_var_name_problem(name)
+                or env_var_value_problem(name, value)):
+            continue
+        seen.add(upper)
+        out[name] = value
+    return out
+
+
+def _apply_env_vars(env, values):
+    """Put ``values`` into ``env``. An inherited variable of the same name goes first,
+    whatever its case: Windows has one variable per name, regardless of capitals."""
+    wanted = {_env_var_upper(name) for name in values}
+    for key in [key for key in env if _env_var_upper(key) in wanted]:
+        del env[key]
+    env.update(values)
+
+
+def env_var_folder_warnings(cfg, lab_presets=None):
+    """Before you launch: a selected folder variable whose folder is not there, as
+    ``[{"title", "hint"}]``. Only a warning: what reads the variable reports its own error.
+    A folder that cannot be checked in time (a dead network share) is not reported."""
+    set_now = launch_env_vars(cfg)
+    found = []
+    for row in launch_env_var_rows(cfg, lab_presets):
+        value = set_now.get(row["name"])
+        if not (row["selected"] and row["folder"] and value):
+            continue
+        answer = _bounded_call(lambda path=value: [os.path.isdir(path)],
+                               ENV_VAR_FOLDER_CHECK_SECONDS)
+        if answer == [False]:
+            found.append({"title": ENV_VAR_FOLDER_MISSING
+                          % (row["name"], describe_env_value(row["name"], value)),
+                          "hint": ENV_VAR_FOLDER_MISSING_HINT})
+    return found
+
+
+def launch_env_lines(cfg):
+    """One line per variable this launch sets, secrets masked. Says set, not used."""
+    return ["%s = %s" % (name, describe_env_value(name, value))
+            for name, value in launch_env_vars(cfg).items()]
+
+
+def _session_env_fields(cfg):
+    """The launch-history key: names, and the value unless it is masked (then ``None``)."""
+    values = launch_env_vars(cfg)
+    if not values:
+        return {}
+    return {HISTORY_ENV_KEY: {name: (None if env_var_is_secret(name)
+                                     else describe_env_value(name, value))
+                              for name, value in values.items()}}
+
+
+def history_env_cell(entry):
+    """The History cell: ``NAME=value, TOKEN (value hidden)``. "" for a launch that set none."""
+    values = (entry or {}).get(HISTORY_ENV_KEY)
+    if not isinstance(values, dict):
+        return ""
+    return ", ".join("%s (value hidden)" % name if value is None else "%s=%s" % (name, value)
+                     for name, value in values.items())
+
+
+def env_var_changes(old, new):
+    """The edit log's rows for what a Replace changed in both config keys. The value of a
+    secret-looking name is never written; a login inside a URL is masked."""
+    def selected(cfg):
+        found = dict(cfg[ENV_VAR_CHOICES_KEY])
+        found.update({item["name"]: item["value"] for item in cfg[EXTRA_ENV_VARS_KEY]
+                      if item["enabled"]})
+        return found
+    a, b = selected(normalize_config(old)), selected(normalize_config(new))
+    rows = []
+    for name in sorted(set(a) | set(b), key=str):
+        if a.get(name) == b.get(name):
+            continue
+        field = 'variable "%s"' % name
+        if env_var_is_secret(name):
+            rows.append({"field": field, "changed": True})
+        else:
+            rows.append({"field": field, "old": _log_value("env", a.get(name, "")),
+                         "new": _log_value("env", b.get(name, ""))})
+    return rows
+
+
+def env_vars_ui_text():
+    """The words the page needs for the Advanced list and the Settings card."""
+    return {"title": ENV_VARS_TITLE, "card": ENV_VARS_CARD_TITLE,
+            "intro": ENV_VARS_SETTINGS_INTRO, "add": ENV_VAR_ADD_LABEL,
+            "add_own": ENV_VAR_ADD_OWN_LABEL, "name": ENV_VAR_NAME_LABEL,
+            "name_hint": ENV_VAR_NAME_HINT, "value": ENV_VAR_VALUE_LABEL,
+            "default": ENV_VAR_DEFAULT_LABEL, "default_hint": ENV_VAR_DEFAULT_HINT,
+            "show": ENV_VAR_SHOW_LABEL, "placeholder": ENV_VAR_VALUE_PLACEHOLDER,
+            "help_link": ENV_VAR_HELP_LINK, "delete_confirm": ENV_VAR_DELETE_CONFIRM,
+            "value_max": ENV_VAR_VALUE_MAX, "see_more": ENV_VAR_SEE_MORE,
+            "browse": ENV_VAR_BROWSE, "browse_none": ENV_VAR_BROWSE_NONE,
+            "description": ENV_VAR_DESCRIPTION_LABEL,
+            "description_max": ENV_VAR_DESCRIPTION_MAX, "folder": ENV_VAR_FOLDER_LABEL,
+            "guides": {builtin["name"]: env_var_guide(builtin["name"])
+                       for builtin in BUILTIN_ENV_VARS if builtin.get("guide")}}
 
 
 def launch_briefing(cfg, lab_presets=None):
@@ -10789,15 +12417,20 @@ def launch_briefing(cfg, lab_presets=None):
         "opens_admin_label": OPENS_GROUP_ADMIN,
         # The plain monitor address on this computer, for the popup's Copy link
         # (the same page open_dashboard_authenticated opens; never a login).
-        "opens_admin_url": "http://%s:%s%s" % (AUTOLOGIN_HOST, port,
-                                               room_monitor_path(room)),
+        "opens_admin_url": admin_page_url(c),
         "services": [{"name": s["name"], "url": s["url"]} for s in _services],
         "services_title": SERVICES_BRIEFING_TITLE,
         "services_title_launched": SERVICES_BRIEFING_TITLE_LAUNCHED,
-        # The launch scripts + oTree in run order ([] with no script: nothing new to
-        # say). Each script shows its text.
+        # The launch scripts + oTree in run order, with any website placed among them
+        # ([] with neither: nothing new to say). Each script shows its text.
         "scripts_run": launch_briefing_scripts(c, resolved_presets),
+        # The browser pages that end the launch, in the order they open.
+        "pages": launch_briefing_pages(c, resolved_presets),
         "scripts_title": SCRIPTS_BRIEFING_TITLE,
+        # The environment variables this launch sets, secrets masked ([] = none; the
+        # card then says nothing about them).
+        "env_lines": launch_env_lines(c),
+        "env_title": ENV_VARS_BRIEFING_TITLE,
     }
 
 
@@ -11693,7 +13326,7 @@ def lab_room_mismatch(cfg, lab_presets=None):
 
         {config_room, lab_room, lab_label, message}
 
-    describing a YELLOW, non-blocking warning with a one-click "Use new default".
+    describing a YELLOW, non-blocking warning with a one-click "Use the lab default".
     The config stays fully runnable as-is; both faces call this so they agree on
     when the warning fires (only on a real difference, silent when they match).
     """
@@ -11714,8 +13347,9 @@ def lab_room_mismatch(cfg, lab_presets=None):
         "config_room": config_room,
         "lab_room": lab_room,
         "lab_label": lab_label,
-        "message": ("The lab default room is now '%s' (this config uses '%s'). Use it?"
-                    % (lab_room, config_room)),
+        # What is true: the config has its own room. The launcher cannot tell whether the
+        # default ever changed (no old default is stored), so it never says "is now".
+        "message": ROOM_MISMATCH_TEXT % (config_room, lab_room),
     }
 
 
@@ -12144,10 +13778,12 @@ def headless_ask_problems(cfg, lab_presets=None, update_checker=None, db_checker
     problems = []
     update_state = (found.get("update") or {}).get("state")
     if update_state == UPDATE_STATE_BEHIND:
-        problems.append(HEADLESS_UPDATE_PROBLEM)
+        line = (found.get("update") or {}).get("latest_commit_line")
+        problems.append("%s %s" % (HEADLESS_UPDATE_PROBLEM, line) if line
+                        else HEADLESS_UPDATE_PROBLEM)
     elif update_state == UPDATE_STATE_LOCAL_CHANGES:
         # Newer online, but a pull cannot move this folder forward: say so, no
-        # Git pull choice (headless_run offers it only for HEADLESS_UPDATE_PROBLEM).
+        # Git pull choice (headless_run offers it only for is_update_problem).
         problems.append(HEADLESS_LOCAL_CHANGES_PROBLEM)
     else:
         unchecked = headless_update_unchecked(c["project_path"].strip(),
@@ -14057,6 +15693,11 @@ ROOM_HELP = ("If the lab PCs already have shortcuts that open a room, put that r
              "name here so participants land in it; otherwise leave it as study.")
 
 UI_TIPS = {
+    "env_vars": "Variables a study or script can read. Tick one to show it in Advanced, not "
+                "selected. Nothing is set until a config selects it and gives it a value.",
+    "launch_tools": "Optional helpers, off by default. A tool that is off changes nothing. A "
+                    "tool that is on adds a box to Before you launch and gives its value to "
+                    "scripts as an environment variable.",
     "link_check": "Checked from this computer once the server was up: the link's address "
                   "is one of this computer's addresses, and the server answers on it. "
                   "A firewall on this computer is not tested this way: if the "
@@ -14143,7 +15784,10 @@ UI_TIPS = {
     "timeline": "Everything that happens on launch, top to bottom. Scripts run in their "
                 "own window, in the project folder, in the shell of this computer, and "
                 "get OTREE_LAB_PORT, OTREE_LAB_ROOM and OTREE_LAB_PROJECT. Any script that "
-                "fails stops the launch. Browser pages always open last.",
+                "fails stops the launch and nothing after it opens. A website opens where "
+                "it is placed. Before oTree it simply opens, after oTree it opens when the "
+                "server is ready. The oTree admin page stays after oTree.",
+    "local_changes_block": "Git pull does not undo local edits.",
 }
 
 
@@ -14304,6 +15948,10 @@ SAVE_DIALOG_COPY = "copy"
 SAVE_CONFIG_LABEL = "Save config..."
 SAVE_CONFIG_TITLE = "Save config"
 SAVE_AS_NEW_TITLE = "Save as new config"
+SAVE_CHANGES_TITLE = "Save changes"
+SAVE_COPY_TITLE = "Save a copy as"
+SAVE_NEW_CHOICE = "Save as new"
+SAVE_REPLACE_CHOICE_NOTE = "The old version goes to Deleted configs."
 SAVE_OFFER_UNSAVED_LINE = "This isn't saved yet. It will be saved as:"
 SAVE_OFFER_CHANGED_LINE = "%s has unsaved changes"
 SAVE_OFFER_SAME_LINE = "Same as %s"
@@ -14504,7 +16152,10 @@ def save_dialog_state(fields, config_name, presets, extra=None, lab_presets=None
     kind = (SAVE_OFFER_CHANGED if changed
             else (SAVE_DIALOG_COPY if preset is not None else SAVE_OFFER_UNSAVED))
     state = _save_form_state(kind, fields, preset, presets, extra, os_user)
-    state["title"] = SAVE_AS_NEW_TITLE if preset is not None else SAVE_CONFIG_TITLE
+    state["title"] = (SAVE_CHANGES_TITLE if changed
+                      else SAVE_COPY_TITLE if preset is not None else SAVE_CONFIG_TITLE)
+    state["new_choice"] = SAVE_NEW_CHOICE
+    state["replace_choice_note"] = SAVE_REPLACE_CHOICE_NOTE
     state["lead"] = str(lead or "")
     same = identical_saved_config(fields, presets, lab_presets, skip=preset)
     state["same_line"] = SAVE_OFFER_SAME_LINE % same.get("name", "") if same is not None else ""
@@ -14598,7 +16249,7 @@ def save_config_choice(host, mode, name, researcher, fields, target="", lab_pres
         warning = record_config_change(CONFIG_ACTION_REPLACE, clean, who,
                                        config_field_changes(state["old"], state["preset"]))
     return {"ok": True, "message": "", "name": clean, "mode": mode, "warning": warning,
-            "preset": state["preset"]}
+            "preset": state["preset"], "copy_id": state["copy_id"]}
 
 
 def _undo_new_config(host, before):
@@ -14618,7 +16269,8 @@ def unsaved_work_question(fields, config_name, presets, lab_presets=None):
             break
     if preset is None:
         c = normalize_config(fields or {})
-        dirty = bool(c["project_path"].strip() or c[EXTRA_SCRIPTS_KEY] or c["extra_services"])
+        dirty = bool(c["project_path"].strip() or c[EXTRA_SCRIPTS_KEY] or c["extra_services"]
+                     or c[LAUNCH_TOOLS_KEY] or c[ENV_VAR_CHOICES_KEY] or c[EXTRA_ENV_VARS_KEY])
     else:
         dirty = configs_differ(fields, follow_lab_room(preset, lab_presets))
     if not dirty:
@@ -14708,6 +16360,11 @@ def config_field_changes(old, new):
         if key == EXTRA_SCRIPTS_KEY:
             rows += own_script_changes(a.get(key), b.get(key))
             continue
+        if key == ENV_VAR_CHOICES_KEY:
+            rows += env_var_changes(a, b)
+            continue
+        if key == EXTRA_ENV_VARS_KEY:
+            continue    # env_var_changes covers both keys
         rows += _value_changes("", key, a.get(key), b.get(key))
     return rows
 
@@ -14893,7 +16550,72 @@ def delete_config_keeping_copy(host, name, when=None):
     preset = state["preset"]
     warning = record_config_change(CONFIG_ACTION_DELETE, wanted, preset.get("author", ""), [
         {"field": "config", "old": "saved", "new": "deleted"}])
-    return {"ok": True, "message": "", "warning": warning, "preset": preset}
+    return {"ok": True, "message": "", "warning": warning, "preset": preset,
+            "copy_id": state["id"]}
+
+
+UNDO_LABEL = "Undo"
+UNDO_NOTICE_SECONDS = 20
+UNDO_DELETED_NOTICE = "Deleted \u201c%s\u201d."
+UNDO_REPLACED_NOTICE = "Replaced \u201c%s\u201d."
+UNDO_REPLACE_DONE = ("Put back the previous version of \u201c%s\u201d. The version you replaced it "
+                     "with is in Deleted configs.")
+UNDO_GONE = "That copy is no longer in Deleted configs, so there is nothing to undo."
+
+
+def undo_config_change(host, copy_id, name="", keep_order=False):
+    """Undo a Delete or a Replace from its notice, through the same copy Deleted configs
+    holds. A delete: :func:`recover_deleted_config`, under the original name, or the usual
+    -RECOVERED name when that name was taken since (the message says so). A replace: the
+    config of that name gets its previous version back; the version it had goes to Deleted
+    configs, so nothing is lost either way. Never touches the form.
+
+    Returns ``{"ok", "message", "warning", "name", "renamed", "preset"}``."""
+    entries = _read_deleted_entries()
+    entry = next((e for e in entries if e.get("id") == copy_id), None)
+    failure = {"ok": False, "warning": "", "name": "", "renamed": False, "preset": None}
+    if entry is None:
+        return dict(failure, message=UNDO_GONE)
+    wanted = str(name or entry["config"].get("name", "")).strip()
+    current = saved_config_named(wanted, host.presets)
+    if entry.get("reason") != DELETED_REASON_REPLACED or current is None:
+        return recover_deleted_config(host, copy_id, keep_order=keep_order)
+    state = {"copy": "", "undo": None}
+
+    def apply():
+        preset = saved_config_named(wanted, host.presets)
+        if preset is None:
+            return RECOVER_GONE
+        try:
+            state["copy"] = _keep_deleted_copy(preset, DELETED_REASON_REPLACED)
+        except Exception as error:  # noqa: BLE001 - said to the user; nothing changed
+            return REPLACE_COPY_FAILED % error
+        kept = copy.deepcopy(preset)
+        state["undo"] = lambda: (preset.clear(), preset.update(kept))
+        state["preset"] = preset
+        preset.clear()
+        preset.update(copy.deepcopy(entry["config"]))
+        preset["builtin"] = False
+        return ""
+    try:
+        problem = host._mutate_store(apply)
+    except Exception as error:  # noqa: BLE001 - said to the user, nothing claimed
+        if state["undo"]:
+            state["undo"]()
+        _drop_deleted_copy(state["copy"])
+        return dict(failure, message=RECOVER_FAILED % error)
+    if problem:
+        return dict(failure, message=problem)
+    warning = ""
+    try:
+        _change_deleted_entries(lambda items: items.__setitem__(
+            slice(None), [e for e in items if e.get("id") != copy_id]))
+    except Exception as error:  # noqa: BLE001 - the config is back; only the list is stale
+        warning = RECOVER_LIST_WARNING % error
+    logged = record_config_change(CONFIG_ACTION_RECOVER, wanted, state["preset"].get("author", ""), [
+        {"field": "config", "old": "replaced", "new": "previous version back"}])
+    return {"ok": True, "message": UNDO_REPLACE_DONE % wanted, "warning": warning or logged,
+            "name": wanted, "renamed": False, "preset": state["preset"]}
 
 
 def config_is_in_deleted_list(name):
@@ -14983,11 +16705,15 @@ def _deleted_config_details(config, lab_presets=None):
         scripts = [r["name"] for r in _launch_script_rows(c, presets) if r["selected"]]
     except Exception:  # noqa: BLE001 - a list to read must not fail on an old entry
         scripts = [s.get("name", "") for s in normalize_extra_scripts(config.get(EXTRA_SCRIPTS_KEY))]
-    return [["Study folder", c["project_path"]],
-            ["Lab", (lab or {}).get("name") or c["lab"]],
-            ["Room", c["room_name"]],
-            ["Database", _session_database_label(c)],
-            ["Scripts", ", ".join(scripts) if scripts else "None"]]
+    details = [["Study folder", c["project_path"]],
+               ["Lab", (lab or {}).get("name") or c["lab"]],
+               ["Room", c["room_name"]],
+               ["Database", _session_database_label(c)],
+               ["Scripts", ", ".join(scripts) if scripts else "None"]]
+    variables = list(launch_env_vars(c))   # names only: a value can be a secret
+    if variables:
+        details.append([ENV_VARS_TITLE, ", ".join(variables)])
+    return details
 
 
 def _deleted_when(stamp):

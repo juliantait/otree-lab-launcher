@@ -111,8 +111,10 @@ Credential Manager, the macOS Keychain). The launcher itself **never stores a
 token**: it hands what you paste to that system store and runs git, which uses
 what the computer has stored. **No GitHub username is asked for or shown.** For
 each token the launcher remembers only **who added it** (a name from the
-researcher list), **when**, and the token's **expiry date**; Settings shows it as
-*Token, added 1 Oct 2026 by Julian · valid until 30 Sep 2027*. **A computer can
+researcher list), **when**, the token's **expiry date** and, if you give one, a
+**name** that says what it is for; Settings shows it as
+*Token, added 1 Oct 2026 by Julian · valid until 30 Sep 2027*, or with a name
+*Lab read-only 2026, added 1 Oct 2026 by Julian · valid until 30 Sep 2027*. **A computer can
 hold several tokens** (3d).
 
 **Git never asks for a login by itself**, on Windows or on a Mac: the launcher
@@ -165,8 +167,10 @@ Fine-grained tokens -> Generate new token*, with the same choices.
 
 1. **Gear -> Settings -> GitHub -> Add token**
 2. **Added by: pick your name** from the list (or type a new one; it joins the
-   researcher list). **Paste the token. Save.** (No GitHub username: GitHub
-   ignores it for a token.)
+   researcher list). **Name** is optional: what the token is for, like
+   *Lab read-only 2026*. **Paste the token. Save.** (No GitHub username: GitHub
+   ignores it for a token.) To name an existing token later, click **Name** on its
+   row; you do not need the token for that.
 
 The launcher asks GitHub once whether it accepts the token:
 

@@ -58,6 +58,9 @@ INDEX_HTML = os.path.join(HERE, "web", "index.html")
 # watchdog does not fire at all while the tab reports itself hidden (see
 # BrowserBridge._heartbeat_watchdog): a hidden tab is expected to be throttled.
 # The interval constant is exported so the served page and the watchdog stay in step.
+# The beacon only starts CLOSE_GRACE_SECONDS: pagehide also fires on a reload or on a typed
+# address, and a new page load or beat calls it off.
+CLOSE_GRACE_SECONDS = 10.0
 HEARTBEAT_INTERVAL_MS = 1500
 HEARTBEAT_TIMEOUT = 60.0
 HEARTBEAT_CHECK_INTERVAL = 1.5
@@ -266,6 +269,26 @@ def _ui_text():
         "script_show": core.SCRIPT_SHOW_LABEL,
         "script_hide": core.SCRIPT_HIDE_LABEL,
         "timeline_copy_link": core.TIMELINE_COPY_LINK_LABEL,
+        "timeline_copied": core.TIMELINE_COPIED_LABEL,
+        "project_missing_line": core.PROJECT_MISSING_LINE,
+        "project_missing_short": core.PROJECT_MISSING_SHORT,
+        "project_missing_tip": core.PROJECT_MISSING_TIP,
+        "project_choose_first": core.PROJECT_CHOOSE_FIRST_TIP,
+        "undo": core.UNDO_LABEL,
+        "undo_seconds": core.UNDO_NOTICE_SECONDS,
+        "undo_deleted": core.UNDO_DELETED_NOTICE,
+        "undo_replaced": core.UNDO_REPLACED_NOTICE,
+        "open_website": core.OPEN_WEBSITE_LABEL,
+        "open_website_tip": core.OPEN_WEBSITE_TIP,
+        "try_script": core.TRY_SCRIPT_LABEL,
+        "lab_env_add_own": core.LAB_ENV_ADD_OWN_LABEL,
+        "lab_env_add_own_tip": core.LAB_ENV_ADD_OWN_TIP,
+        "browser_gone_title": core.BROWSER_MODE_GONE_TITLE,
+        "browser_gone_text": core.BROWSER_MODE_GONE_TEXT,
+        "address_show": core.ADDRESS_SHOW_LABEL,
+        "address_hide": core.ADDRESS_HIDE_LABEL,
+        "local_changes_block_parts": list(core.LOCAL_CHANGES_BLOCK_PARTS),
+        "local_changes_block_link_tip": core.LOCAL_CHANGES_BLOCK_LINK_TIP,
         "website_add_own": core.WEBSITE_ADD_OWN_LABEL,
         "script_include": core.SCRIPT_INCLUDE_LABEL,
         "script_hidden": core.SCRIPT_HIDDEN_LABEL,
@@ -315,6 +338,11 @@ def _ui_text():
         "clone_folder_missing": core.CLONE_FOLDER_MISSING_TEXT,
         "github_add_token": core.GITHUB_ADD_TOKEN_LABEL,
         "github_delete_token": core.GITHUB_DELETE_TOKEN_LABEL,
+        "github_token_name_label": core.GITHUB_TOKEN_NAME_LABEL,
+        "github_token_name_placeholder": core.GITHUB_TOKEN_NAME_PLACEHOLDER,
+        "github_token_name_button": core.GITHUB_TOKEN_NAME_BUTTON,
+        "github_token_name_prompt": core.GITHUB_TOKEN_NAME_PROMPT,
+        "github_token_name_max": core.GITHUB_TOKEN_NAME_MAX,
         "github_tokens_row": core.GITHUB_TOKENS_ROW_LABEL,
         "github_no_tokens": core.GITHUB_NO_TOKENS_TEXT,
         "github_who_label": core.GITHUB_WHO_LABEL,
@@ -364,6 +392,8 @@ def _ui_text():
         "config_history": core.CONFIG_HISTORY_LABEL,
         "config_history_note": core.CONFIG_HISTORY_NOTE,
         "config_history_empty": core.CONFIG_HISTORY_EMPTY,
+        "tools": core.launch_tools_ui_text(),
+        "env_vars": core.env_vars_ui_text(),
     }
 
 
@@ -403,7 +433,8 @@ def project_status(path):
             # tree that is not the launcher's own; since 2026-10-01 whatever the
             # GitHub Organisation Sync setting): the page hides the button for a
             # plain folder.
-            "is_repo": _study_is_git_repo(path)}
+            "is_repo": _study_is_git_repo(path),
+            "missing": core.project_folder_missing(path)}
 
 
 def _github_sync_on():
@@ -448,13 +479,16 @@ def _lab_rows(presets):
     settings table while staying in the store JSON (core.soft_delete_lab_preset).
     """
     return [{"id": p["id"], "name": p["name"], "ip": p["ip"],
-             "seats": p["seats"], "display": p["display"],
+             "seats": p["seats"], "display": p["display"], "cols": p.get("cols", 0),
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
              "default_port": p["default_port"],
              # The lab's additional services (Settings -> Additional services).
              "services": core.normalize_lab_services(p.get(core.SERVICES_KEY)),
              # The lab's launch scripts (Settings -> Launch scripts).
-             "scripts": core.normalize_lab_scripts(p.get(core.LAB_SCRIPTS_KEY))}
+             "scripts": core.normalize_lab_scripts(p.get(core.LAB_SCRIPTS_KEY)),
+             # Its environment variables, built-in suggestions included.
+             "env_vars": core.lab_env_var_rows(p),
+             core.LAB_ENV_ADD_OWN_KEY: bool(p.get(core.LAB_ENV_ADD_OWN_KEY))}
             for p in presets if not p.get("deleted")]
 
 
@@ -490,6 +524,8 @@ def preset_row(preset):
         "lab": cfg.get("lab", ""),
         # The loaded project's folder name, or "" when no project is set.
         "folder": folder,
+        # The folder is gone: a faint line on the sidebar row.
+        "folder_missing": (not builtin) and core.project_folder_missing(project_path),
     }
 
 
@@ -944,12 +980,7 @@ class Api(object):
         # The full preset list (incl. hidden ones) + the Postgres admin config
         # feed the Lab Settings page. Both live in the store's extra, read here
         # through the existing core helpers (no new logic).
-        lab_presets = [
-            {"id": p["id"], "name": p["name"], "ip": p["ip"],
-             "seats": p["seats"], "display": p["display"], "default_port": p["default_port"],
-             "default_room": p["default_room"], "shortcut_label": p["shortcut_label"]}
-            for p in all_presets
-        ]
+        lab_presets = _lab_rows(all_presets)
         pg_admin = core.pg_admin_from_store(self.store_extra)
         setup_needed = core.setup_needed()
         state = {
@@ -1178,7 +1209,8 @@ class Api(object):
         log = [["ok", said]]
         if result["warning"]:
             log.append(["warn", result["warning"]])
-        return {"ok": True, "configs": [preset_row(p) for p in self.presets],
+        return {"ok": True, "copy_id": result.get("copy_id", ""),
+                "configs": [preset_row(p) for p in self.presets],
                 "selected": result["name"], "mode": result["mode"],
                 "warning": result["warning"], "log": log}
 
@@ -1236,7 +1268,17 @@ class Api(object):
         if not self.presets:
             self.presets = [core.default_preset()]
         return {"ok": True, "configs": [preset_row(p) for p in self.presets],
-                "selected": self.presets[0].get("name"), "warning": result["warning"]}
+                "selected": self.presets[0].get("name"), "warning": result["warning"],
+                "copy_id": result.get("copy_id", "")}
+
+    @api_call
+    def undo_config_change(self, copy_id, name=""):
+        """Undo from the notice after a Delete or a Replace (core.undo_config_change)."""
+        result = core.undo_config_change(self, copy_id, name)
+        if not result["ok"]:
+            return {"ok": False, "message": result["message"]}
+        return {"ok": True, "message": result["message"], "warning": result["warning"],
+                "name": result["name"], "configs": [preset_row(p) for p in self.presets]}
 
     @api_call
     def deleted_configs(self):
@@ -1425,7 +1467,8 @@ class Api(object):
                     self._db_list(), core.default_database_id(self.store_extra)),
                 "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra)),
                 "services": core.services_summary(presets),
-                "scripts": core.scripts_summary(presets)}
+                "scripts": core.scripts_summary(presets),
+                "env_vars": core.env_vars_summary(presets)}
 
     @api_call
     def admin_summary(self, fields=None):
@@ -1477,11 +1520,16 @@ class Api(object):
         except (TypeError, ValueError):
             limit = 200
         entries = core.read_sessions(limit=limit)
+        # The tools' columns, only for a tool that was on in one of these launches.
+        columns = core.history_tool_columns(entries)
         for entry in entries:
             # The study version that ran, as one short label (core words it).
             entry["version_label"] = core.study_version_label(entry.get("study_version"))
             entry["config_label"] = core.session_config_label(entry)
-        return {"ok": True, "entries": entries}
+            entry["tool_cells"] = {key: core.history_tool_cell(entry, key)
+                                   for key, _title in columns}
+        return {"ok": True, "entries": entries,
+                "tool_columns": [{"key": key, "title": title} for key, title in columns]}
 
     @api_call
     def app_version(self):
@@ -1609,7 +1657,8 @@ class Api(object):
         on = core.github_clone_enabled(sync)
         tokens = core.github_tokens(adopt=with_login)
         return {"ok": True, "enabled": on, "org": sync["org"] if on else "",
-                "tokens": [{"id": e["id"], "text": core.github_token_text(e),
+                "tokens": [{"id": e["id"], "name": e.get("name", ""),
+                            "text": core.github_token_text(e),
                             "confirm": core.github_delete_confirm_text(e)}
                            for e in tokens],
                 "summary": core.github_summary(sync, tokens),
@@ -1645,22 +1694,29 @@ class Api(object):
         return {"ok": True, "enabled": stored["enabled"], "org": stored["org"]}
 
     @api_call
-    def github_add_token(self, token, added_by):
+    def github_add_token(self, token, added_by, name=""):
         """Add one GitHub token (core.github_add_token): core asks GitHub ONCE
         whether it accepts it (a rejected one is not stored), then hands it to the
         SYSTEM credential store under its own label. ``added_by`` joins the shared
         researcher roster, as everywhere else. The token is never logged
         (api_call logs no arguments), never written to a launcher file and never
         part of the result."""
-        result = dict(core.github_add_token(token, added_by))
+        result = dict(core.github_add_token(token, added_by, name=name))
         if result.get("ok"):
-            name = str(added_by or "").strip()
+            who = str(added_by or "").strip()
             try:
-                self._mutate_store(lambda: core.add_researcher(self.store_extra, name))
+                self._mutate_store(lambda: core.add_researcher(self.store_extra, who))
             except Exception:
                 pass                       # the token is stored; the roster can wait
             result["researchers"] = core.list_researchers(self.store_extra, self.presets)
             result["github"] = self._github_state()
+        return result
+
+    @api_call
+    def github_rename_token(self, token_id, name):
+        """Name a token from its row, without the token itself."""
+        result = dict(core.github_rename_token(token_id, name))
+        result["github"] = self._github_state()
         return result
 
     @api_call
@@ -2406,6 +2462,34 @@ class Api(object):
                 "labs": _lab_tiles(presets, config_lab),
                 "configs": [preset_row(p) for p in self.presets]}
 
+    @api_call
+    def open_website(self, url):
+        """A website row's Open button."""
+        return core.open_website(url)
+
+    @api_call
+    def try_script_confirm(self, lab_id, script_id):
+        return core.try_script_confirm(self._labs(), lab_id, script_id)
+
+    @api_call
+    def try_lab_script(self, lab_id, script_id, fields=None):
+        """Try it in Settings, after the page's confirm: runs the script as saved, on a worker,
+        and tells the page when there is an exit code (window.pywOnTryScript). Nothing here can
+        stop it (PRINCIPLES 15)."""
+        cfg = fields_to_config(fields or {})
+        labs = self._labs()
+
+        def work():
+            self._callback("pywOnTryScript", core.try_lab_script(labs, lab_id, script_id, cfg))
+        self._spawn(work, "try-script")
+        return {"ok": True}
+
+    @api_call
+    def set_lab_env_add_own(self, lab_id, on):
+        """The lab's tick: researchers can add their own variables."""
+        return self._lab_service_change(
+            lambda presets: core.set_lab_env_add_own(presets, lab_id, bool(on)))
+
     # -- additional services (2026-10-30) -----------------------------------
 
     def _lab_service_change(self, change):
@@ -2430,7 +2514,8 @@ class Api(object):
         presets = core.lab_presets_from_store(self.store_extra)
         return {"ok": answer.get("ok", False), "message": answer.get("message", ""),
                 "presets": _lab_rows(presets), "summary": core.services_summary(presets),
-                "scripts_summary": core.scripts_summary(presets)}
+                "scripts_summary": core.scripts_summary(presets),
+                "env_vars_summary": core.env_vars_summary(presets)}
 
     @api_call
     def add_lab_service(self, lab_id, name, url, include_by_default=False):
@@ -2543,6 +2628,52 @@ class Api(object):
         """Remove a script from a lab."""
         return self._lab_service_change(lambda presets: core.delete_lab_script(
             presets, lab_id, script_id))
+
+    @api_call
+    def add_lab_env_var(self, lab_id, name, value="", hidden=True, description="", folder=False):
+        """Add a variable to a lab (Settings -> Environment variables)."""
+        return self._lab_service_change(lambda presets: core.add_lab_env_var(
+            presets, lab_id, name, value, hidden=bool(hidden), description=description,
+            folder=bool(folder)))
+
+    @api_call
+    def update_lab_env_var(self, lab_id, name, value=None, hidden=None, description=None,
+                           folder=None):
+        """Change a lab variable's default value, tick, description or folder mark."""
+        return self._lab_service_change(lambda presets: core.update_lab_env_var(
+            presets, lab_id, name, value=value, hidden=hidden, description=description,
+            folder=folder))
+
+    @api_call
+    def delete_lab_env_var(self, lab_id, name):
+        """Remove one of a lab's own variables."""
+        return self._lab_service_change(lambda presets: core.delete_lab_env_var(
+            presets, lab_id, name))
+
+    @api_call
+    def validate_env_var(self, name, value="", taken=None, description="", folder=False):
+        """Check a config's own variable before the page adds it."""
+        ok, message, entry = core.validate_env_var(name, value, taken or (), description, folder)
+        return {"ok": ok, "message": message, "variable": entry}
+
+    @api_call
+    def pick_env_folder(self, name, current=""):
+        """A folder variable's Browse: the same pickers as the clone folder. In browser mode
+        the local tkinter dialog, in the app pywebview's. ``path`` is "" on cancel or when no
+        dialog could open, and the page keeps the box to type in."""
+        start = current if current and os.path.isdir(current) else ""
+        if getattr(self, "browser_mode", False):
+            path = _native_folder_dialog_subprocess(helper=_build_folder_dialog_helper(
+                core.ENV_VAR_BROWSE_TITLE % name, start))
+        else:
+            try:
+                import webview
+                path = self._dialog_path(self.window.create_file_dialog(
+                    webview.FOLDER_DIALOG, directory=start))
+            except Exception:
+                LOG.exception("variable folder dialog failed")
+                path = ""
+        return {"ok": True, "path": os.path.normpath(path) if path else ""}
 
     def _store_lab_presets(self, presets):
         """Store new lab presets AND re-derive the built-in Lab default's room
@@ -2865,6 +2996,13 @@ class Api(object):
         return briefing
 
     @api_call
+    def launch_tools_state(self, fields, values=None):
+        """What Before you launch shows for the tools that are on (core decides, the page
+        only renders). Nothing here is stored: the values live until this launch."""
+        cfg = fields_to_config(fields or {})
+        return core.launch_tools_state(cfg, core.lab_presets_from_store(self.store_extra), values)
+
+    @api_call
     def launch_issues(self, fields, config_name=""):
         """Everything to tell the user before a launch, as ONE ordered list.
 
@@ -2904,6 +3042,10 @@ class Api(object):
                 issue["fix"] = "choose_folder"
                 issue["fix_label"] = "Choose folder…"
             issues.append(issue)
+        if folder_problem:
+            # While no usable folder is chosen, that is the whole story: warnings about a
+            # database or an address cannot be acted on yet, and a folder may change them.
+            return {"ok": True, "issues": issues}
         block_state = self._block_state(cfg)
         # While the block is missing (and seats are used) it is the ONE issue:
         # adding it also defines the room, so the "room is not defined" warning
@@ -2927,6 +3069,9 @@ class Api(object):
                         "a timestamped .bak backup (fully revertible).",
                 "fix": "refresh_block", "fix_label": "Refresh lab block",
                 "info": "block"})
+        for warning in core.env_var_folder_warnings(cfg, lab_presets):
+            issues.append({"level": "warn", "title": warning["title"], "hint": warning["hint"],
+                           "fix": "", "fix_label": "", "info": ""})
         for failure in core.preflight_failures(core.preflight(cfg, core.load_lab_info())):
             if failure.get("check") in blocked_checks:
                 continue
@@ -2995,7 +3140,7 @@ class Api(object):
                 "level": "warn", "title": mismatch["message"],
                 "hint": "Existing saved configs keep their room; this switches only "
                         "this config. You can also just launch as-is.",
-                "fix": "use_lab_room", "fix_label": "Use new default", "info": "",
+                "fix": "use_lab_room", "fix_label": core.ROOM_USE_DEFAULT_LABEL, "info": "",
                 "lab_room": mismatch["lab_room"]})
         return {"ok": True, "issues": issues}
 
@@ -3057,6 +3202,7 @@ class Api(object):
                 problems.append(
                     "oTree only accepts letters, numbers and underscores in a "
                     "seat label. These would be rejected: %s" % ", ".join(bad[:6]))
+        problems.extend(core.env_var_problems(cfg))
         return problems
 
     def _project_needs_block(self, cfg):
@@ -3071,7 +3217,7 @@ class Api(object):
         return bool(state.get("readable")) and not state.get("has_block")
 
     @api_call
-    def launch(self, fields, force=False, config_name="", save=None):
+    def launch(self, fields, force=False, config_name="", save=None, tools=None):
         """Validate, run the pre-launch preflight, then launch on a worker thread.
 
         Validation errors and preflight failures are RETURNED to the page (which
@@ -3088,12 +3234,19 @@ class Api(object):
         fields first and launches under the saved name. It comes after every check, so
         saving never gets past a blocker; a failed save returns ``save_error`` and does
         not launch.
+
+        ``tools`` is what was typed for the tools that are on, for this launch only
+        (core.launch_tools_state). A refused value returns ``tools_error``: nothing is
+        saved or started.
         """
         cfg = fields_to_config(fields)
         project = cfg.get("project_path", "").strip()
         level, message = core.validate_project(project)
         if level == "error":
             return {"ok": False, "message": message}
+        problem, cfg = core.with_launch_run(cfg, self._labs(), tools)
+        if problem:
+            return {"ok": False, "tools_error": problem}
 
         if not force:
             results = core.preflight(cfg, core.load_lab_info())
@@ -3189,6 +3342,14 @@ class Api(object):
         return {"ok": True}
 
     @api_call
+    def page_closed(self):
+        """The page's beacon on pagehide (browser mode). Not a Quit: see page_went_away."""
+        went = getattr(self.window, "page_went_away", None)
+        if callable(went):
+            went()
+        return {"ok": True}
+
+    @api_call
     def quit(self):
         """Explicit, clean shutdown of the launcher's OWN web-UI server (the Quit
         button). Stops ONLY this Python process; it NEVER stops or kills any
@@ -3247,6 +3408,7 @@ class Api(object):
             if running:
                 self._status("err", running)
                 self._launch_result(False, running)
+                self._failure_reason = running
                 self._record_session(cfg, config_name, "fail", None)
                 return
             label_file, note = core.prepare_label_file(cfg)
@@ -3283,7 +3445,10 @@ class Api(object):
                     startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
                     popen_kwargs["startupinfo"] = startup
                 started["time"] = time.monotonic()
-                started["proc"] = subprocess.Popen(launch["cmd"], **popen_kwargs)
+                if launch.get("kind") == "linux-background":
+                    started["proc"] = core.spawn_background_server(launch["cmd"], **popen_kwargs)
+                else:
+                    started["proc"] = subprocess.Popen(launch["cmd"], **popen_kwargs)
                 started["launch"] = launch
                 self._log("ok", "otree prodserver started in its OWN terminal window (in the "
                                 "background). Watch that window for live server logs and any errors.")
@@ -3292,8 +3457,36 @@ class Api(object):
             def script_log(level, text):
                 self._log({"ok": "ok", "info": "muted", "err": "err"}.get(level, "warn"), text)
 
+            def open_admin(ready_timeout):
+                """Auto login (default ON): open the admin room monitor already
+                authenticated via a REAL form-login + one-shot localhost cookie relay
+                (core.open_dashboard_authenticated). oTree ignores Basic Auth, so the
+                old credentials-in-URL trick was dead; this replays a real login and
+                plants the session cookie in the SYSTEM DEFAULT BROWSER. With auto
+                login off, or if the login fails, it opens the plain login page and
+                the operator logs in by hand. Opened on localhost (the operator's own
+                machine); the per-seat participant links keep the lab host. Mirror of
+                the Tk otree_lab_launcher launch. The readiness poll lives in core
+                (wait_for_server), which RETURNS whether the server actually came up."""
+                self._log("muted", "Waiting for the server to respond, then opening the dashboard …")
+                answer = core.open_dashboard_authenticated(
+                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
+                    cfg.get("admin_username", ""), cfg.get("admin_password", ""),
+                    auto_login=cfg.get("auto_login", True),
+                    ready_timeout=ready_timeout,
+                    on_wait=lambda s: self._log(
+                        "muted", "Still waiting for the server to respond (%d s)…" % s))
+                if answer["method"] == "cookie":
+                    self._log("ok", "Sent the oTree dashboard to the browser, already logged in "
+                                    "(auto-login: form-login + cookie relay).")
+                else:
+                    self._log("info", "Sent the oTree dashboard login page to the browser. %s Log in with "
+                                      "the admin username and password shown here."
+                                      % answer["reason"])
+                return answer
+
             seq = core.run_launch_sequence(
-                cfg, presets, project, start_otree, log=script_log,
+                cfg, presets, project, start_otree, log=script_log, open_admin=open_admin,
                 on_wait=lambda s: self._log(
                     "muted", "Still waiting for the server to respond (%d s)…" % s))
             if seq["stage"] in (core.SEQUENCE_SCRIPT_FAILED, core.SEQUENCE_OTREE_FAILED):
@@ -3305,22 +3498,13 @@ class Api(object):
                 self._log("err", msg)
                 core.finish_launch_report(seq)
                 self._launch_result(False, msg, report=core.launch_box_report(seq))
-                if seq["stage"] == core.SEQUENCE_SCRIPT_FAILED:
-                    self._record_session(cfg, config_name, "fail", None)
+                self._failure_reason = msg
+                self._record_session(cfg, config_name, "fail", None)
                 return
             server_proc = started["proc"]
             launch = started["launch"]
             server_start = started["time"]
 
-            # Auto login (default ON): open the admin room monitor already
-            # authenticated via a REAL form-login + one-shot localhost cookie relay
-            # (core.open_dashboard_authenticated). oTree ignores Basic Auth, so the
-            # old credentials-in-URL trick was dead; this replays a real login and
-            # plants the session cookie in the SYSTEM DEFAULT BROWSER. With auto
-            # login off, or if the login fails, it opens the plain login page and
-            # the operator logs in by hand. Opened on localhost (the operator's own
-            # machine); the per-seat participant links keep the lab host. Mirror of
-            # the Tk otree_lab_launcher launch.
             self._remember_launch(cfg)
             monitor_url = "http://%s:%s%s" % (
                 core.AUTOLOGIN_HOST, cfg.get("port", "8000"),
@@ -3328,24 +3512,8 @@ class Api(object):
             result = {"ok": True, "method": "manual", "monitor_url": monitor_url,
                       "server_ready": False}
             if cfg.get("open_browser"):
-                # Open the dashboard the instant the server responds. The readiness
-                # poll lives in core.open_dashboard_authenticated (wait_for_server),
-                # which now RETURNS whether the server actually came up.
-                self._log("muted", "Waiting for the server to respond, then opening the dashboard …")
-                result = core.open_dashboard_authenticated(
-                    core.AUTOLOGIN_HOST, cfg.get("port", "8000"), cfg.get("room_name", ""),
-                    cfg.get("admin_username", ""), cfg.get("admin_password", ""),
-                    auto_login=cfg.get("auto_login", True),
-                    ready_timeout=seq["ready_timeout"],
-                    on_wait=lambda s: self._log(
-                        "muted", "Still waiting for the server to respond (%d s)…" % s))
-                if result["method"] == "cookie":
-                    self._log("ok", "Sent the oTree dashboard to the browser, already logged in "
-                                    "(auto-login: form-login + cookie relay).")
-                else:
-                    self._log("info", "Sent the oTree dashboard login page to the browser. %s Log in with "
-                                      "the admin username and password shown here."
-                                      % result["reason"])
+                # Already opened at its place in the order, or now (it waits for the server).
+                result = seq.get("dashboard") or open_admin(seq["ready_timeout"])
             else:
                 # No browser open: still confirm the server really came up before
                 # reporting success, so a crash is not mis-reported as "Launched".
@@ -3376,17 +3544,19 @@ class Api(object):
                 self._launch_result(False, msg, url=result.get("monitor_url", monitor_url),
                                     method=result.get("method", "manual"),
                                     report=core.launch_box_report(seq))
+                self._failure_reason = msg
                 self._record_session(cfg, config_name, "fail", None)
                 return
 
-            # Additional services: only now that the server is READY, right after
+            # The websites still to open: only now that the server is READY, right after
             # the admin page. A page that cannot open is one log line; it never
             # fails the launch (core.open_launch_services never raises).
             opened = core.open_launch_services(
-                cfg, presets,
+                cfg, presets, seq=seq,
                 log=lambda level, text: self._log(
                     {"ok": "ok", "info": "muted"}.get(level, "warn"), text))
-            late = core.recheck_launch_scripts(seq)
+            late = core.recheck_launch_scripts(
+                seq, dashboard=result if cfg.get("open_browser") else None, services=opened)
             core.finish_launch_report(
                 seq, dashboard=result if cfg.get("open_browser") else None, services=opened,
                 ready=True)
@@ -3395,9 +3565,11 @@ class Api(object):
                 self._launch_result(False, late, url=result.get("monitor_url", monitor_url),
                                     method=result.get("method", "manual"),
                                     report=core.launch_box_report(seq))
+                self._failure_reason = late
                 self._record_session(cfg, config_name, "fail", None)
                 return
 
+            self._failure_reason = ""
             matched = self._mark_run(cfg, config_name)
             self._record_session(cfg, config_name, "ok", time.monotonic() - server_start)
             self._status("ok", ("Launched: the oTree dashboard was sent to your browser. The "
@@ -3566,6 +3738,7 @@ class Api(object):
         Fail-soft in core, so it can never break a launch; logged alongside the
         _mark_run last_run stamp so every launch (success or ready-failure) is
         recorded. The author is the selected config's saved author when known.
+        ``self._failure_reason`` is why a failed one failed.
         Mirror of the Tk LauncherApp._record_session.
         """
         preset = self._find(config_name) if config_name else None
@@ -3574,7 +3747,8 @@ class Api(object):
             cfg, config_name=config_name, author=author, outcome=outcome,
             server_ready_seconds=ready_seconds,
             lab_presets=core.lab_presets_from_store(self.store_extra),
-            config_changed=core.launch_differs_from_config(cfg, preset, self._labs()))
+            config_changed=core.launch_differs_from_config(cfg, preset, self._labs()),
+            reason=getattr(self, "_failure_reason", ""))
 
     def _launched_config_state(self, matched):
         """Refreshed config rows + selected name for a live post-launch repaint.
@@ -3697,6 +3871,7 @@ class BrowserBridge(object):
         # does NOT fire from missed beats (a hidden tab is expected to be throttled).
         self._hb_hidden = False
         self._shutting_down = False
+        self._grace_mark = None
 
     def enable_self_shutdown(self, shutdown, heartbeat_timeout=HEARTBEAT_TIMEOUT,
                              check_interval=HEARTBEAT_CHECK_INTERVAL):
@@ -3720,10 +3895,34 @@ class BrowserBridge(object):
             self._hb_last = time.monotonic()
             self._hb_seen = True
             self._hb_hidden = bool(hidden)
+            self._grace_mark = None
 
     def request_shutdown(self):
         """Shut the launcher's own server down now (the Quit button / hand-off)."""
         self._trigger_shutdown("quit requested")
+
+    def page_went_away(self, grace=None):
+        """The page says it is going: a closed tab, but just as well a reload or a typed
+        address. Stop after a short grace unless a page comes back (page_is_here). Stops
+        this process only; a server the launcher started is not touched (PRINCIPLES 15)."""
+        wait = CLOSE_GRACE_SECONDS if grace is None else float(grace)
+        with self._lock:
+            if self._shutting_down or self._shutdown is None:
+                return
+            self._grace_mark = mark = object()
+
+        def later():
+            time.sleep(wait)
+            with self._lock:
+                still = self._grace_mark is mark
+            if still:
+                self._trigger_shutdown("the page went away and did not come back")
+        threading.Thread(target=later, name="close-grace", daemon=True).start()
+
+    def page_is_here(self):
+        """A page load or a beat: a pending close from page_went_away is called off."""
+        with self._lock:
+            self._grace_mark = None
 
     def _heartbeat_watchdog(self):
         # Poll for a heartbeat gap. Only AFTER the first beat (a page actually
@@ -3846,8 +4045,12 @@ def _make_browser_handler(api, bridge, token="", allowed_origins=()):
             except OSError:
                 self.send_error(404, "Not found")
                 return
+            # A page load calls off a pending close. Never cached: a stored copy opened after
+            # the launcher stopped is a page with nothing behind it.
+            bridge.page_is_here()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             try:

@@ -103,6 +103,6 @@ The launch log streams back from Python into the Activity log via `evaluate_js`.
   page does not answer in 4 s the window closes anyway.
 - **A plain browser tab cannot show a custom box.** With unsaved work it gets only the browser's
   own "Leave site?" prompt (browsers fix its wording, and may skip it if the page never had a
-  click), with no Save choice. The quit beacon fires on `pagehide` only, never `beforeunload`, so
+  click), with no Save choice. The page-closed beacon (`/api/page_closed`, a 10 s grace a new page load or beat calls off, so a reload does not stop the launcher; Quit is `/api/quit`, at once) fires on `pagehide` only, never `beforeunload`, so
   staying on the page does not stop the launcher. The beat says "hidden" while that prompt is up,
   so the heartbeat watchdog cannot stop the launcher under it.

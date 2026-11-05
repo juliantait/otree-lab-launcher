@@ -775,8 +775,24 @@ input::placeholder{color:var(--faint)}
 .tl-mark{display:inline-block;width:16px;text-align:center;color:var(--ok);font-weight:700}
 .tl-name{font-weight:600;color:var(--text-strong)}
 .tl-row--fixed .tl-name{font-weight:700}
-.tl-arrows{display:inline-flex;gap:2px}
+.tl-arrows{display:inline-flex;gap:2px;flex:none;align-self:center}
 .tl-arrows .btn{min-width:24px;padding:0 4px}
+.tl-arrow-off{display:inline-flex}
+.tl-arrow-off .btn{pointer-events:none}
+/* The oTree block. At rest it adds nothing to the page. In Reorder it slides out to the right
+   as one, with the one pair of arrows beside its rows. */
+.tl-block{display:flex;align-items:stretch;gap:0;margin-left:0;border:1px solid transparent;border-radius:var(--r-sm);
+  transition:margin-left .18s ease,background-color .18s ease,border-color .18s ease,padding .18s ease}
+.tl-block-rows{flex:1;min-width:0}
+.tl-block-rows .tl-row:last-child{border-bottom:0}
+.tl-block.out{margin:3px 0 3px 22px;padding:2px 8px 2px 6px;gap:8px;background:var(--accent-soft);border-color:var(--accent)}
+.tl-arrows--block{align-self:stretch}
+.tl-arrows--block .btn,.tl-arrows--block .tl-arrow-off{height:auto;align-self:stretch}
+.tl-block:not(.out):not(.closing) .tl-arrows--block{opacity:.0}
+@media (prefers-reduced-motion: reduce){.tl-block{transition:none}.tl-moved{animation:none!important}}
+@keyframes tlMoved{from{background-color:var(--accent-soft)}to{background-color:transparent}}
+.tl-row.tl-moved{animation:tlMoved .6s ease-out}
+.tl-block.out.tl-moved{animation:none}
 .tl-wait{font-size:11.5px;color:var(--muted)}
 .tl-wait-sel{font-size:11.5px;padding:1px 4px;max-width:190px}
 .tl-del{margin-left:auto}
@@ -803,6 +819,54 @@ pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep)
 .tl-edit-form textarea{width:100%;box-sizing:border-box;min-height:62px;margin:6px 0;font-family:var(--mono,monospace);font-size:12px;resize:vertical}
 .tl-edit-note{font-size:12px;color:var(--warn);margin:0 0 6px}
 .tl-edit-form .cta{margin-top:6px}
+/* Tools (2026-11-05): two tick rows in Advanced; off by default. */
+.tl-env{margin-top:12px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.tl-env-row{align-items:center}
+.tl-env-row .tl-name,.ls-env-name{font-family:var(--mono,ui-monospace,Menlo,Consolas,monospace);font-size:12.5px}
+.tl-env-val{flex:1 0 100%;order:2;box-sizing:border-box;padding-left:24px;min-width:0;display:flex;gap:6px;align-items:center}
+.tl-env-row .tl-acts{order:1}
+.tl-env-row .tl-env-err{order:3;padding-left:24px;box-sizing:border-box}
+.tl-env-val input{flex:1 1 auto;min-width:0;box-sizing:border-box}
+.env-see-more{font-size:12px;color:var(--accent);white-space:nowrap}
+.tl-env-note{flex:1 0 100%;margin:2px 0 0;font-size:12px;color:var(--muted)}
+.tl-add-form .env-add-opts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.bl-env-line{font-family:var(--mono)}
+.tl-env-err{flex:1 0 100%;margin:2px 0 0;font-size:12px;color:var(--warn,#b45309)}
+.ls-env-intro{margin:0 0 8px;font-size:12.5px;color:var(--muted)}
+.ls-env-val{flex:1 1 auto;min-width:0;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bl-env{margin:8px 0}
+.bl-env-line{margin:0 0 2px;font-size:12.5px;color:var(--text);overflow-wrap:anywhere}
+.tl-tools{margin-top:12px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.tl-tool-row{display:flex;align-items:center;gap:4px;padding:4px 0}
+.tl-tool-row label{margin:0}
+.tool-help-btn{margin-left:2px}
+.tl-vars{margin-left:auto}
+/* The tools' boxes on Before you launch. */
+.bl-tools{margin:0 0 12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
+.bl-tool-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:8px}
+.bl-tool-row:last-child{margin-bottom:0}
+.bl-tool-row label{font-size:12.5px;font-weight:600;color:var(--text-strong);min-width:136px}
+.bl-tool-row input{width:190px;max-width:100%;box-sizing:border-box}
+.bl-tool-row input#blToolSeats{width:84px}
+.bl-tool-hint{font-size:11.5px;color:var(--faint)}
+.bl-tool-note{flex-basis:100%;font-size:12px;color:var(--muted);margin:0}
+.bl-tool-err{flex-basis:100%;font-size:12px;color:var(--err,#d9534f);font-weight:600;margin:0}
+.bl-tool-cap{font-size:11.5px;color:var(--faint);margin:6px 0 0;text-align:center}
+.bl-tool-map{margin-top:6px}
+.seatcell.picked{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:700}
+.seatcell.pickable{cursor:pointer}
+.bl-tool-lines p{margin:0 0 4px;font-size:12.5px;color:var(--text)}
+#blToolLines{margin:0 0 8px}
+.bl-tool-map .tool-out{text-decoration:line-through}
+/* The tools' help popups stack above any other modal. */
+#toolHelpModal{z-index:95}
+.tool-help p{margin:0 0 9px;font-size:13px;line-height:1.45}
+.tool-help code,.tool-help pre{font-family:var(--mono,monospace);font-size:12px}
+.tool-help pre{margin:0 0 10px;padding:6px 9px;background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+.tool-help table{width:100%;border-collapse:collapse;margin:0 0 10px;font-size:12.5px}
+.tool-help th{text-align:left;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line-soft);padding:3px 8px 3px 0}
+.tool-help td{padding:4px 8px 4px 0;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.tool-help td:first-child{font-family:var(--mono,monospace);font-size:12px;white-space:nowrap}
 .svc-msg.ok{color:var(--ok)}
 /* The launch popup: run list before launch, report after. */
 .bl-scripts{margin:12px 0 6px}
@@ -826,7 +890,10 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 .rp-failed .rp-name,.rp-failed .rp-text{color:var(--err);font-weight:700}
 .rp-facts{margin:4px 0 0 18px;font-size:12px;color:var(--text)}
 .rp-facts div{padding:1px 0}
-.rp-copy{margin-left:6px}
+.bl-report-row .addr-btns{margin-left:6px}
+.bl-report-row .addr-line{margin-left:18px}
+.bl-run-row .addr-btns{margin-left:8px}
+.bl-run-row .addr-line{margin-left:18px}
 /* the database dropdown opened by the pen icon */
 .db-menu{position:fixed;z-index:60;background:var(--surface-pop);border:1px solid var(--line);border-radius:var(--r-sm);
   box-shadow:var(--shadow-md);padding:5px;min-width:230px}
@@ -917,8 +984,18 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 
 /* room + participant rows */
 .labrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
-.labrow .k{font-size:12.5px;color:var(--muted);flex:none}
-.labrow .roomval{font-size:13px;font-weight:700;color:var(--text-strong)}
+/* One width for the labels, so the values of Room, Port and Participant list line up. */
+/* Launch while no usable folder is chosen: off, and the holder's hover says why (a disabled
+   button sends no hover). */
+.launch-hold{display:inline-flex}
+.btn-launch:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.proj-missing-line{font-weight:700;color:var(--text-strong)}
+.cfg-row .missing{font-size:11px;color:var(--faint);display:block}
+/* The not lab-ready warning, in the project card next to the file it is about. */
+#projDetect .blockwarn{margin:8px 0 2px}
+.labrow .k{font-size:12.5px;color:var(--muted);flex:none;min-width:86px}
+.labrow .port-pill{min-width:0;overflow-wrap:anywhere}
+.labrow .pen{margin-left:-4px}
 .labrow .roomtag{font-size:12px;color:var(--muted)}
 .labrow select{flex:1;min-width:0}
 .labrow .btn{flex:none}
@@ -1050,8 +1127,8 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 .btn-launch:hover{background:linear-gradient(180deg,var(--accent-hover),var(--accent-hi));box-shadow:0 6px 26px rgba(var(--accent-rgb),.5),inset 0 1px 0 rgba(255,255,255,.18)}
 .btn-launch:active{transform:translateY(1px)}
 /* Launch is the one action in the launch bar (Save one-click shortcut moved to the
-   header, next to Save config). */
-.launchbar .btn-launch{margin-left:auto}
+   header, next to Save config). The holder is the flex item, so it takes the margin. */
+.launchbar .launch-hold{margin-left:auto}
 
 /* ============================ MODALS ============================ */
 .modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
@@ -1229,6 +1306,19 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 .info-wrap.tip-right .info-tip{left:auto;right:0}
 .info-wrap.tip-host .info-tip:empty{display:none}
 
+/* The tip of any control or name with data-tip. A title= never shows in the pywebview window,
+   and this one is not clipped by a scrolling card or popup. */
+#hoverTip{position:fixed;z-index:9000;max-width:420px;background:var(--bg-deep);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:5px 9px;font-size:11.5px;line-height:1.45;color:var(--text);
+  overflow-wrap:anywhere;box-shadow:0 6px 18px rgba(0,0,0,.4);pointer-events:none}
+/* An icon button: square and fixed, so "Copied" changes nothing around it. */
+.btn.icon-btn{flex:none;box-sizing:border-box;width:24px;height:22px;min-width:24px;padding:0;display:inline-grid;place-items:center;line-height:0}
+.btn.icon-btn svg{width:13px;height:13px;display:block}
+.btn.icon-btn.copied{color:var(--ok);border-color:var(--ok)}
+.btn.icon-btn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.addr-line{flex-basis:100%;min-width:0;margin:2px 0 0 23px;font-family:var(--mono,monospace);font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+.addr-line[hidden]{display:none}
+
 /* lab settings */
 .ls-card{background:var(--bg-deep);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:15px 16px;margin-bottom:14px}
 .ls-card h4{margin:0 0 3px;font-size:13.5px;font-weight:650;color:var(--text-strong)}
@@ -1242,6 +1332,8 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
 .presets-table th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
   font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line-soft)}
 .presets-table th.c,.presets-table td.c{text-align:center}
+.presets-table .hist-reason-row td{padding-top:0;font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+.presets-table .hist-reason-row td:empty{border-bottom:1px solid var(--line-soft)}
 .presets-table td{padding:8px;border-bottom:1px solid var(--line-soft);color:var(--text)}
 .presets-table tr.sel td{background:var(--panel-2)}
 .presets-table tr{cursor:pointer}
@@ -1497,15 +1589,19 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
 .bl-linkrow{display:flex;align-items:stretch;gap:8px;margin:0 0 6px}
 .bl-linkrow .mono-line{flex:1;min-width:0;margin:0;overflow-wrap:anywhere}
 .bl-linkrow .btn{flex:none;align-self:center}
+.save-choice{border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:8px 10px;margin:0 0 8px}
+.save-choice .mfield{margin:6px 0 0}
+.save-choice .bl-save-note{margin:4px 0 0 23px}
 .bl-linklabel{font-size:12px;color:var(--muted);margin:0 0 5px}
 /* The browser pages of the launch popup: a bold heading in the size of the
    "Open <shortcut> on each participant computer" line, then one row per page
    with a Copy link button (the address stays off the screen). */
 .bl-services{margin:12px 0 6px}
 .bl-services-head{font-size:13.5px;font-weight:700;color:var(--text-strong);margin:0 0 6px}
-.svc-brief{display:flex;align-items:center;justify-content:flex-start;gap:8px;font-size:13px;color:var(--text);margin:0 0 5px}
-/* Copy link sits right after the name, small and quiet. A fixed width, so "Copied" changes nothing around it. */
-.svc-brief .svc-copy{flex:0 0 auto;box-sizing:border-box;width:64px;padding:2px 0;font-size:11px;text-align:center;white-space:nowrap}
+.svc-brief{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:8px;font-size:13px;color:var(--text);margin:0 0 5px}
+.svc-brief .addr-line{margin:-4px 0 0}
+/* The copy and eye icons sit right after the name, small and quiet. */
+.addr-btns{display:inline-flex;gap:4px;flex:0 0 auto;vertical-align:middle}
 /* action bar: stays in view while a long issue list scrolls */
 .cta.bl-cta{position:sticky;bottom:-24px;align-items:center;justify-content:flex-start;
   margin:16px -26px -24px;padding:12px 26px 18px;background:var(--panel);border-top:1px solid var(--line-soft);
@@ -1654,6 +1750,10 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               <div class="proj-apps" id="projApps" hidden></div>
               <!-- The settings.py block viewer, tucked away: shown once a folder is chosen. -->
               <div class="proj-block-link" id="projBlockLink" hidden><button type="button" class="link" id="viewBlockLink" onclick="viewBlock()">View settings.py block</button></div>
+            <div class="blockwarn" id="blockWarn" hidden>
+              <div class="statusline warn"><span class="dot">&#9650;</span><span id="blockWarnMsg">settings.py is missing the oTree lab support block.</span></div>
+              <button class="btn accent tiny" id="blockWarnBtn" onclick="onAppendBlock()">Get ready for the lab</button>
+            </div>
               <ul class="ways" id="projWays" hidden></ul>
               <!-- Empty state (S1): Browse + GitHub move in here from the row
                    above (placeProjectActions), with the paste link beside them. -->
@@ -1765,6 +1865,8 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             <div class="tl-add tl-add-buttons">
               <button type="button" class="btn tiny" id="scrAddOpen" onclick="addFormOpen('script')">Add your own script</button>
               <button type="button" class="btn tiny" id="svcAddOpen" onclick="addFormOpen('website')">Add your own website</button>
+              <button type="button" class="btn tiny" id="envAddOpen" onclick="addFormOpen('env')" hidden>Add your own variable</button>
+              <button type="button" class="btn tiny tl-vars" id="scrVarsOpen" onclick="openToolHelp('variables')">Variables for scripts</button>
             </div>
             <div class="tl-add-form" id="scrAddForm" hidden>
               <div class="tl-add-row">
@@ -1784,7 +1886,30 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
               <div class="tl-add-acts"><button type="button" class="btn tiny accent" id="svcAddBtn" onclick="addOwnService()">Add website</button>
               <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
             </div>
+            <div class="tl-add-form" id="envAddForm" hidden>
+              <div class="tl-add-row">
+                <input type="text" id="envNewName" placeholder="Name" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
+                <input type="text" id="envNewValue" placeholder="Value" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
+              </div>
+              <div class="env-add-opts">
+                <input type="text" id="envNewDesc" placeholder="Short description (optional)" maxlength="200" style="flex:1 1 220px;min-width:0">
+                <label class="chk"><input type="checkbox" id="envNewFolder"> This is a folder</label>
+              </div>
+              <div class="tl-add-acts"><button type="button" class="btn tiny accent" id="envAddBtn" onclick="addOwnEnvVar()">Add variable</button>
+              <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
+            </div>
             <div class="svc-msg" id="svcMsg" hidden></div>
+            <!-- Environment variables (2026-11-05): only what this config selected. The
+                 rest of the lab's visible ones are under Not selected. -->
+            <div class="tl-env" id="envCard" hidden>
+              <div class="svc-head"><b id="envTitle">Environment variables</b><button type="button" class="info-i tool-help-btn" id="envHelpBtn" aria-label="How to read one in oTree" title="How to read one in oTree" onclick="openToolHelp('env')">i</button></div>
+              <div id="envRows"></div>
+            </div>
+            <!-- Tools (2026-11-05): off by default; a tool that is off changes nothing. -->
+            <div class="tl-tools" id="toolsCard">
+              <div class="svc-head"><b id="toolsTitle">Tools</b><span id="toolsTip"></span></div>
+              <div id="toolRows"></div>
+            </div>
           </div>
         </section>
 
@@ -1823,17 +1948,18 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             <!-- Room row (normal labs) -->
             <div class="labrow" id="roomRow">
               <span class="k">Room</span>
-              <span class="roomval" id="roomVal">study</span>
+              <span class="port-pill" id="roomVal">study</span>
+              <button type="button" class="db-edit pen" id="roomEdit" data-tip="Choose another room" aria-label="Choose another room" onclick="openRoomPicker()">&#9998;</button>
               <span class="roomtag" id="roomTag">(lab default)</span>
-              <button class="btn tiny" onclick="openRoomPicker()">Change room...</button>
             </div>
 
             <!-- The launch port, for every host: what will really be used, and a pen
                  to choose this config's own (core.port_pill says the same in Tk). -->
             <div class="labrow" id="portRow">
-              <span class="port-pill" id="portPill">Port: 8000</span>
+              <span class="k">Port</span>
+              <span class="port-pill" id="portPill">8000</span>
+              <button type="button" class="db-edit pen" id="portEdit" data-tip="Choose this config's own port" aria-label="Choose this config's own port" aria-expanded="false" onclick="togglePortEdit()">&#9998;</button>
               <span class="roomtag" id="portTag">(lab default)</span>
-              <button type="button" class="db-edit pen" id="portEdit" title="Choose this config's own port" aria-label="Choose this config's own port" aria-expanded="false" onclick="togglePortEdit()">&#9998;</button>
             </div>
             <div class="port-edit" id="portEditBox" hidden>
               <div class="port-edit-row"><input type="text" id="launch_port" value="8000" inputmode="numeric" spellcheck="false" aria-label="Port" oninput="onLaunchPortInput()"><button type="button" class="btn tiny" id="portReset" onclick="usePortDefault()" hidden>Use the default</button></div>
@@ -1874,10 +2000,6 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
             </div>
 
             <!-- settings.py block warning (shown only when missing/broken) -->
-            <div class="blockwarn" id="blockWarn" hidden>
-              <div class="statusline warn"><span class="dot">&#9650;</span><span id="blockWarnMsg">settings.py is missing the oTree lab support block.</span></div>
-              <button class="btn accent tiny" id="blockWarnBtn" onclick="onAppendBlock()">Get ready for the lab</button>
-            </div>
           </div>
         </section>
       </div>
@@ -1889,7 +2011,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
     <div class="launchbar">
       <button class="btn-logexpand" onclick="openLogModal()">Activity log</button>
       <!-- The quit action lives in the Lab Settings footer (S5, 2026-10-08). -->
-      <button class="btn-launch" onclick="onLaunch()">Launch</button>
+      <span class="launch-hold" id="launchHold"><button class="btn-launch" id="launchBtn" onclick="onLaunch()">Launch</button></span>
     </div>
   </div>
 </div>
@@ -1900,6 +2022,15 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
     <button class="modal-x" onclick="closeModal()" aria-label="Close">&times;</button>
     <h3 class="modal-title" id="modalTitle"></h3>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="toolHelpModal" hidden onclick="if(event.target===this)closeToolHelp()">
+  <div class="modal-card wide" id="toolHelpCard">
+    <button class="modal-x" onclick="closeToolHelp()" aria-label="Close">&times;</button>
+    <h3 class="modal-title" id="toolHelpTitle"></h3>
+    <div class="modal-body tool-help" id="toolHelpBody"></div>
+    <div class="cta" data-modal-no-enter><button class="btn" id="toolHelpClose" onclick="closeToolHelp()">Close</button></div>
   </div>
 </div>
 
@@ -1932,6 +2063,7 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
     <h3 class="modal-title"><span id="ghLoginTitle">Add a GitHub token</span><span id="ghLoginTip"></span></h3>
     <p class="modal-desc"><b id="ghLoginPrompt">Say who is adding the token, paste it, then Save.</b></p>
     <div class="mfield"><label for="ghLoginWhoIn">Added by</label><input id="ghLoginWhoIn" type="text" list="ghRosterList" autocomplete="off"><datalist id="ghRosterList"></datalist></div>
+    <div class="mfield"><label for="ghLoginName" id="ghLoginNameLabel">Name (optional)</label><input id="ghLoginName" type="text" autocomplete="off" maxlength="60" placeholder="Lab read-only 2026"></div>
     <div class="mfield"><label for="ghLoginToken">Token</label><div class="pwrap"><input id="ghLoginToken" type="password" autocomplete="off" placeholder="read-only token"><button type="button" class="pw-toggle" onclick="togglePw2('ghLoginToken',this)">Show</button></div></div>
     <div class="gh-token-link"><a id="ghTokenLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create the token on GitHub</a></div>
     <div class="gh-login-msg" id="ghLoginMsg"></div>
@@ -2322,6 +2454,7 @@ function fillStaticTips(){
   var vb=el("viewBlockLink");if(vb)vb.textContent=UI_TEXT.view_block_link;
   var st=el("svcTip");if(st)st.innerHTML=tipBadge("timeline");
   var sl=el("advLabel");if(sl)sl.textContent=UI_TEXT.services_advanced;
+  renderToolRows();
   var phn=el("portHint");if(phn)phn.textContent=UI_TEXT.port_hint;
   var prs=el("portReset");if(prs)prs.textContent=UI_TEXT.port_reset;
   var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.timeline_title;
@@ -2501,6 +2634,7 @@ function renderConfigList(configs,selected){
     b.appendChild(meta);
     /* line 3: the LAST RUN (core.format_last_run; "Never run" until launched) */
     var wh=document.createElement("span");wh.className="wh";wh.textContent=c.when;b.appendChild(wh);
+    if(c.folder_missing){var ms=document.createElement("span");ms.className="missing";ms.textContent=UI_TEXT.project_missing_short||"folder not found";b.appendChild(ms);}
     if(!c.builtin){var d=document.createElement("span");d.className="del";d.title="Delete this config";d.textContent="✕";
       d.onclick=function(e){e.stopPropagation();deleteConfig(c.name);};b.appendChild(d);}
     list.appendChild(b);
@@ -2676,13 +2810,27 @@ function splitLead(text){
 /* The status line of card 1. With a folder: core's message as it is. Without:
    the empty line (core.no_project_message) with its FIRST sentence in bold,
    the actions placed right under it (S1). */
+/* Launch is off until a usable folder is chosen; the popup is one click further only when
+   there is one. The app decides nothing here that the launch does not check again. */
+function launchBlockReason(p){
+  if(!NATIVE)return "";
+  if(!hasProjectFolder())return UI_TEXT.project_choose_first||"Choose a project folder first";
+  return (p&&p.missing)?(UI_TEXT.project_missing_tip||""):"";
+}
+function syncLaunchButton(p){
+  var b=el("launchBtn"),h=el("launchHold");if(!b||!h)return;
+  var why=launchBlockReason(p);b.disabled=!!why;
+  if(why)h.setAttribute("data-tip",why);else h.removeAttribute("data-tip");
+}
 function renderProjectStatusMsg(p){
   var m=el("projStatusMsg");if(!m)return;
   p=p||lastProject||{};
+  syncLaunchButton(p);
   if(hasProjectFolder()&&projectOkApps(p)){
     /* Valid project (2026-10-28): green tick + the BOLD green headline (core.project_ok_headline). */
     m.innerHTML='<span class="ok-tick">&#10003;</span><b>'+escapeHtml(p.message||"")+'</b>';return;
   }
+  if(hasProjectFolder()&&p.missing){m.innerHTML='<span class="proj-missing-line" id="projMissingLine">'+escapeHtml(UI_TEXT.project_missing_line||p.message||"")+'</span>';return;}
   if(hasProjectFolder()){m.textContent=p.message||noProjectText();return;}
   var parts=splitLead(noProjectText());
   m.innerHTML="<b>"+escapeHtml(parts[0])+"</b>"+(parts[1]?" "+escapeHtml(parts[1]):"");
@@ -2714,7 +2862,7 @@ function placeProjectActions(){
   var acts=document.querySelector(".pp-actions"),row=el("pathRow"),box=el("projActions"),card=el("projDetect");
   if(!acts||!row||!box)return;
   var inCard=projectIsEmpty()&&!pathEditing;
-  var blockLink=el("projBlockLink");if(blockLink)blockLink.hidden=projectIsEmpty();
+  var blockLink=el("projBlockLink");if(blockLink)blockLink.hidden=projectIsEmpty()||!!(lastProject&&lastProject.missing&&hasProjectFolder());
   row.hidden=inCard;box.hidden=!inCard;
   if(card)card.classList.toggle("empty",inCard);
   if(inCard){
@@ -3171,7 +3319,7 @@ function shownPort(){return portOverride?val("launch_port").trim():labPort();}
 function renderPort(typing){
   if(!el("portPill"))return;
   if(!portOverride&&!typing)el("launch_port").value=labPort();
-  el("portPill").textContent=UI_TEXT.port_pill.replace("%s",shownPort());
+  el("portPill").textContent=shownPort();
   el("portTag").textContent=portOverride?UI_TEXT.port_tag_own:
     ((selectedLabId==="custom"||selectedLabId==="local")?UI_TEXT.port_tag_default:UI_TEXT.port_tag_lab);
   el("portReset").hidden=!portOverride;
@@ -3389,7 +3537,7 @@ function toggleSeatExclusion(label,d){
   updateSeatCaption();
   updateDirtyState();
 }
-function renderMappedSeats(box,map,seats){
+function renderMappedSeats(box,map,seats,decorate){
   var maxC=0,maxR=0;
   (map.cells||[]).forEach(function(c){
     var cc=parseInt(c.c,10),rr=parseInt(c.r,10);
@@ -3407,15 +3555,15 @@ function renderMappedSeats(box,map,seats){
     d.style.gridRow=cell.rowspan?(r+" / span "+Math.round(cell.rowspan)):r;
     if(kind==="wall")d.setAttribute("aria-hidden","true");
     else if(kind==="exp")d.textContent="EXP";
-    else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;decorateSeatCell(d,lab);}
+    else{var lab=si<list.length?list[si]:"";si++;d.textContent=lab;(decorate||decorateSeatCell)(d,lab);}
     box.appendChild(d);
   });
   fitSeatMap(box,cols,rows);
 }
-function renderPlainGrid(box,seats){
+function renderPlainGrid(box,seats,decorate){
   seats=seats||[];var cols=Math.min(Math.max(Math.ceil(Math.sqrt(seats.length||1)),1),8);
   var rows=Math.max(1,Math.ceil((seats.length||1)/cols));
-  seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;decorateSeatCell(d,s);box.appendChild(d);});
+  seats.forEach(function(s){var d=document.createElement("div");d.className="seatcell";d.textContent=s;(decorate||decorateSeatCell)(d,s);box.appendChild(d);});
   fitSeatMap(box,cols,rows);
 }
 /* The participant file: a list of the label files found in the project
@@ -3452,10 +3600,9 @@ function onSeatFileTyped(){
 /* room default tag */
 function setRoom(name){
   el("roomVal").textContent=name;el("customFields")&&(el("custom_room").value=name);
-  /* The grey "(lab default)" suffix shows whenever the selected room IS this
-     lab's default room -- study OR a changed/refreshed default -- not a
-     hardcoded "study". */
-  el("roomTag").hidden=(name!==labRoom());
+  /* The grey note says where the room comes from, as the port's does: this lab's
+     default room (whatever that is now), or this config's own. */
+  el("roomTag").textContent=(name===labRoom())?UI_TEXT.port_tag_lab:UI_TEXT.port_tag_own;
   updateDirtyState();
 }
 
@@ -3476,6 +3623,11 @@ function applyFields(f){
   currentScriptChoices=Object.assign({},f.script_choices||{});
   currentExtraScripts=(f.extra_scripts||[]).map(copyOwnScript);
   currentLaunchOrder=(f.launch_order||[]).slice();
+  currentLaunchTools=(f.launch_tools||[]).slice();renderToolRows();
+  /* Environment variables: selected lab ones {name: value} + the config's own. */
+  currentEnvChoices=Object.assign({},f.env_var_choices||{});
+  currentExtraEnvVars=(f.extra_env_vars||[]).map(copyOwnEnvVar);
+  ENV_TYPED={};
   /* Group 1 of the list: the oTree admin page = the config's open_browser. */
   if(el("open_browser"))el("open_browser").checked=(f.open_browser!==false);
   currentProjectPath=f.project_path||"";setPath(currentProjectPath);
@@ -3529,6 +3681,9 @@ function gatherFields(){
     script_choices:sortedScriptChoices(),
     extra_scripts:currentExtraScripts.map(copyOwnScript),
     launch_order:currentLaunchOrder.slice(),
+    launch_tools:currentLaunchTools.slice(),
+    env_var_choices:sortedEnvChoices(),
+    extra_env_vars:currentExtraEnvVars.map(copyOwnEnvVar),
     open_browser:el("open_browser").checked,
     /* Following the lab = no port of its own: core fills in the lab's current one,
        so a lab default changed in Settings does not read as an edit here. */
@@ -3555,6 +3710,65 @@ function toggleAdvanced(){
   el("advToggle").setAttribute("aria-expanded",advOpen?"true":"false");
 }
 var currentScriptChoices={}, currentExtraScripts=[], currentLaunchOrder=[], reorderMode=false, TL_DATA={timeline:[],available:[]};
+/* ---- a row's address: the copy icon, the eye that writes it out, and the name's hover ---- */
+var COPY_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/></svg>';
+var CHECK_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
+var EYE_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
+var ADDRESS_SHOWN={};   /* addresses written out on their rows; nothing is remembered between starts */
+function addrButtons(url){
+  var copy=UI_TEXT.timeline_copy_link||"Copy link",on=!!ADDRESS_SHOWN[url];
+  var word=on?(UI_TEXT.address_hide||"Hide address"):(UI_TEXT.address_show||"Show address");
+  return '<span class="addr-btns"><button type="button" class="btn tiny icon-btn addr-copy" data-url="'+escapeHtml(url)+'" data-tip="'+escapeHtml(copy)+'" aria-label="'+escapeHtml(copy)+'" onclick="blCopyOpensLink(this)">'+COPY_SVG+'</button>'+
+    '<button type="button" class="btn tiny icon-btn addr-eye" data-url="'+escapeHtml(url)+'" data-tip="'+escapeHtml(word)+'" aria-label="'+escapeHtml(word)+'" aria-pressed="'+on+'" onclick="toggleAddress(this)">'+EYE_SVG+'</button></span>';
+}
+function openSiteBtn(url){
+  return '<button type="button" class="btn tiny site-open" data-url="'+escapeHtml(url)+'" data-tip="'+escapeHtml(UI_TEXT.open_website_tip||"")+'" onclick="openWebsite(this)">'+escapeHtml(UI_TEXT.open_website||"Open")+'</button>';
+}
+function openWebsite(btn){
+  if(!NATIVE||!API||!API.open_website)return;
+  API.open_website(btn.getAttribute("data-url")).then(function(r){
+    window.pywStatus((r&&r.ok)?"ok":"warn",(r&&r.message)||"");
+    var st=el("lsSvcStatus");if(st&&!el("infoModal").hidden)st.textContent=(r&&r.message)||"";
+  });
+}
+function addrLine(url){
+  return '<div class="addr-line" data-addr="'+escapeHtml(url)+'"'+(ADDRESS_SHOWN[url]?'':' hidden')+'>'+escapeHtml(url)+'</div>';
+}
+function toggleAddress(btn){
+  var url=btn.getAttribute("data-url"),on=!ADDRESS_SHOWN[url];
+  ADDRESS_SHOWN[url]=on;
+  var word=on?(UI_TEXT.address_hide||"Hide address"):(UI_TEXT.address_show||"Show address");
+  btn.setAttribute("aria-pressed",on?"true":"false");btn.setAttribute("aria-label",word);btn.setAttribute("data-tip",word);
+  var row=btn.closest(".tl-row,.svc-brief,.bl-report-row,.bl-run-row"),line=row&&row.querySelector(".addr-line");
+  if(line)line.hidden=!on;
+  hoverTipHide();
+}
+function iconCopied(btn){
+  var was=btn.getAttribute("data-tip")||"",icon=btn.innerHTML;
+  btn.innerHTML=CHECK_SVG;btn.classList.add("copied");
+  btn.setAttribute("data-tip",UI_TEXT.timeline_copied||"Copied");btn.setAttribute("aria-label",UI_TEXT.timeline_copied||"Copied");
+  hoverTipRefresh(btn);
+  setTimeout(function(){btn.innerHTML=icon;btn.classList.remove("copied");btn.setAttribute("data-tip",was);btn.setAttribute("aria-label",was);hoverTipRefresh(btn);},1200);
+}
+/* ---- the one hover tip (see #hoverTip): hover or keyboard focus, on anything with data-tip ---- */
+function hoverTipShow(host){
+  var text=host.getAttribute("data-tip");if(!text){hoverTipHide();return;}
+  var box=el("hoverTip");
+  if(!box){box=document.createElement("div");box.id="hoverTip";box.setAttribute("role","tooltip");document.body.appendChild(box);}
+  /* Measure from the left edge: at the last tip's place its width is cut by the window's edge. */
+  box.style.left="0";box.style.top="0";box.textContent=text;box.hidden=false;box._host=host;
+  var r=host.getBoundingClientRect(),w=box.offsetWidth,h=box.offsetHeight;
+  var vw=document.documentElement.clientWidth,vh=document.documentElement.clientHeight;
+  box.style.left=Math.max(8,Math.min(r.left,vw-w-8))+"px";
+  box.style.top=((r.bottom+h+6<=vh)?r.bottom+5:Math.max(8,r.top-h-5))+"px";
+}
+function hoverTipHide(){var box=el("hoverTip");if(box){box.hidden=true;box._host=null;}}
+function hoverTipRefresh(host){var box=el("hoverTip");if(box&&!box.hidden&&box._host===host)hoverTipShow(host);}
+function hoverTipHost(ev){return (ev.target&&ev.target.closest)?ev.target.closest("[data-tip]"):null;}
+document.addEventListener("mouseover",function(ev){var h=hoverTipHost(ev);if(h)hoverTipShow(h);else hoverTipHide();});
+document.addEventListener("focusin",function(ev){var h=hoverTipHost(ev);if(h)hoverTipShow(h);});
+document.addEventListener("focusout",hoverTipHide);
+document.addEventListener("scroll",hoverTipHide,true);
 function sortedScriptChoices(){
   var out={};Object.keys(currentScriptChoices).sort().forEach(function(k){out[k]=!!currentScriptChoices[k];});
   return out;
@@ -3579,11 +3793,19 @@ function waitOptionsHtml(current){
   return (UI_TEXT.script_wait_options||[]).map(function(o){
     return '<option value="'+escapeHtml(o[0])+'"'+(o[0]===current?" selected":"")+'>'+escapeHtml(o[1])+'</option>';}).join("");
 }
+/* One arrow. Off because of a rule, its tip says which: a disabled button sends no hover, so
+   the tip is on a holder around it. */
+function tlArrowHtml(r,dir,can,why){
+  var word=dir==="up"?"Move up":"Move down",glyph=dir==="up"?"&#8593;":"&#8595;",label=word+": "+(r.label||r.name);
+  var button='<button type="button" class="btn tiny" data-dir="'+dir+'" aria-label="'+escapeHtml(label)+'"'+(can?"":" disabled")+' onclick="moveLaunchItem('+jsQuote(r.id)+',\''+dir+'\')">'+glyph+'</button>';
+  return why?'<span class="tl-arrow-off" data-tip="'+escapeHtml(why)+'">'+button+'</span>':button;
+}
+function tlArrowsHtml(r,extra){
+  return '<span class="tl-arrows'+(extra||"")+'">'+tlArrowHtml(r,"up",r.can_up,r.up_tip)+tlArrowHtml(r,"down",r.can_down,r.down_tip)+'</span>';
+}
 function tlRowHtml(r,selected){
   var id=jsQuote(r.id),fixed=(r.kind==="otree"||r.kind==="resetdb");
-  var arrows=(selected&&reorderMode&&r.movable)?'<span class="tl-arrows">'+
-    '<button type="button" class="btn tiny" aria-label="Move up"'+(r.can_up?"":" disabled")+' onclick="moveLaunchItem('+id+',\'up\')">&#8593;</button>'+
-    '<button type="button" class="btn tiny" aria-label="Move down"'+(r.can_down?"":" disabled")+' onclick="moveLaunchItem('+id+',\'down\')">&#8595;</button></span>':'';
+  var arrows=(selected&&reorderMode&&r.movable&&!r.block)?tlArrowsHtml(r):'';
   var mark=fixed?'<span class="tl-mark" aria-hidden="true">&#10003;</span>':
     '<input type="checkbox" data-tl="'+escapeHtml(r.id)+'"'+(selected?" checked":"")+' onchange="tlToggle(this)">';
   /* Own scripts change their wait rule through Edit: one place, saved at once. */
@@ -3591,21 +3813,39 @@ function tlRowHtml(r,selected){
   var editing=(OWN_EDIT&&OWN_EDIT.id===r.id);
   /* Short by default: a script's text and a website's address are one hover (title) or one
      click away. Show script because a hover is no use on a keyboard or for a long script. */
-  var isScript=(r.kind==="script"),isSite=(r.kind==="page"&&!!r.detail);
-  var tip=isScript?' title="'+escapeHtml(r.tip||"")+'"':isSite?' title="'+escapeHtml(r.detail)+'"':'';
+  var isScript=(r.kind==="script"),isSite=(r.kind==="page"&&!!r.address);
+  var tip=isScript?' data-tip="'+escapeHtml(r.tip||"")+'"':isSite?' data-tip="'+escapeHtml(r.address)+'"':'';
   var shown=isScript&&!!SCRIPT_SHOWN[r.id];
   var acts=(isScript&&!editing?'<button type="button" class="btn tiny tl-show" aria-expanded="'+shown+'" onclick="toggleScriptText('+id+')">'+escapeHtml(shown?UI_TEXT.script_hide:UI_TEXT.script_show)+'</button>':'')+
-    (isSite?'<button type="button" class="btn tiny tl-copy" data-url="'+escapeHtml(r.detail)+'" onclick="blCopyOpensLink(this)">'+escapeHtml(UI_TEXT.timeline_copy_link)+'</button>':'')+
+    ((isSite&&r.detail)?openSiteBtn(r.detail):'')+
+    (isSite?addrButtons(r.address):'')+
     (r.can_edit?'<button type="button" class="btn tiny" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
     (r.can_delete?'<button type="button" class="btn tiny" onclick="tlDelete('+id+')">Delete</button>':'');
   return '<div class="tl-row'+(fixed?' tl-row--fixed':'')+'" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+arrows+
-    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.name)+'</span>':'<label class="chk"'+tip+'>'+mark+' <span class="tl-name">'+escapeHtml(r.name)+'</span></label>')+
+    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.label||r.name)+'</span>':'<label class="chk"'+tip+'>'+mark+' <span class="tl-name">'+escapeHtml(r.label||r.name)+'</span></label>')+
     (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
+    (r.kind==="env_var"?envTipHtml(r):'')+
     (r.can_reset?'<button type="button" class="svc-reset" onclick="tlReset('+id+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
     waitHtml+
     (acts?'<span class="tl-acts">'+acts+'</span>':'')+
     (editing?ownEditHtml():shown?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':'')+
+    (isSite?addrLine(r.address):'')+
     '</div>';
+}
+/* Reset database and Launch oTree server are one block: in Reorder they slide out together,
+   with ONE pair of arrows beside both (only Launch oTree server when reset is off). */
+var TL_SLIDE=false;   /* the block is about to slide; set for one render only */
+function tlListHtml(rows){
+  var html="",i=0;
+  while(i<rows.length){
+    if(!rows[i].block){html+=tlRowHtml(rows[i],true);i++;continue;}
+    var inner="",owner=null;
+    while(i<rows.length&&rows[i].block){if(rows[i].movable)owner=rows[i];inner+=tlRowHtml(rows[i],true);i++;}
+    var open=reorderMode&&owner;
+    html+='<div class="tl-block'+((open&&!TL_SLIDE)?' out':'')+'" id="tlBlock" data-block="otree">'+
+      (open?tlArrowsHtml(owner," tl-arrows--block"):'')+'<div class="tl-block-rows">'+inner+'</div></div>';
+  }
+  return html;
 }
 var SCRIPT_SHOWN={};   /* rows with their text open; nothing is remembered between starts */
 function toggleScriptText(id){SCRIPT_SHOWN[id]=!SCRIPT_SHOWN[id];renderTimeline(TL_DATA,null);}
@@ -3620,14 +3860,15 @@ function renderNotSelectedCaption(){
 }
 /* ---- the two Add forms: one open at a time; Cancel and a successful add clear them ---- */
 function addFormClear(){
-  ["scrNewName","scrNewText","scrNewPort","svcNewName","svcNewUrl"].forEach(function(i){el(i).value="";});
+  ["scrNewName","scrNewText","scrNewPort","svcNewName","svcNewUrl","envNewName","envNewValue","envNewDesc"].forEach(function(i){el(i).value="";});
+  el("envNewFolder").checked=false;
   el("scrNewWait").value="carry_on";scrNewWaitChanged();serviceMessage("");
 }
-function addFormClose(){el("scrAddForm").hidden=true;el("svcAddForm").hidden=true;addFormClear();}
+function addFormClose(){el("scrAddForm").hidden=true;el("svcAddForm").hidden=true;el("envAddForm").hidden=true;addFormClear();}
 function addFormOpen(kind){
   addFormClose();
-  el(kind==="script"?"scrAddForm":"svcAddForm").hidden=false;
-  var f=el(kind==="script"?"scrNewName":"svcNewName");if(f)f.focus();
+  el(kind==="script"?"scrAddForm":kind==="env"?"envAddForm":"svcAddForm").hidden=false;
+  var f=el(kind==="script"?"scrNewName":kind==="env"?"envNewName":"svcNewName");if(f)f.focus();
 }
 /* ---- Edit an own script: on a saved config it is written straight into that config,
    only this script (core.save_own_script_edit). Other unsaved edits stay unsaved. ---- */
@@ -3691,18 +3932,156 @@ function renderTimeline(data,caption){
   ownEditKeepTyping();
   var cap=el("advCaption");if(cap&&caption!==null)cap.textContent=caption?(" · "+caption):"";
   var top=el("tlRows");if(!top)return;
-  top.innerHTML=(data.timeline||[]).map(function(r){return tlRowHtml(r,true);}).join("");
+  top.innerHTML=tlListHtml(data.timeline||[]);
   el("tlAvail").innerHTML=(data.available||[]).map(function(r){return tlRowHtml(r,false);}).join("");
   renderNotSelectedCaption();
+  renderEnvRows(data);
   var rb=el("tlReorder");if(rb){rb.textContent=reorderMode?UI_TEXT.timeline_reorder_done:UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed",reorderMode?"true":"false");}
+  hoverTipHide();
+  tlAfterMove();
+}
+/* After a move the row is redrawn: keep the place. The focus stays on the same arrow of the
+   same row, and the row flashes so the eye can follow it. */
+var TL_MOVED=null;
+function tlAfterMove(){
+  var m=TL_MOVED;if(!m)return;TL_MOVED=null;
+  var host=m.id==="otree"?el("tlBlock"):document.querySelector('#tlRows .tl-row[data-row="'+m.id.replace(/["\\]/g,"\\$&")+'"]');
+  if(!host)return;
+  host.classList.add("tl-moved");
+  var b=(m.id==="otree"?host:host).querySelector('button[data-dir="'+m.dir+'"]:not([disabled])');
+  if(b)b.focus();else{var other=host.querySelector('button[data-dir]:not([disabled])');if(other)other.focus();}
 }
 function tlFind(id){
-  return (TL_DATA.timeline||[]).concat(TL_DATA.available||[]).filter(function(r){return r.id===id;})[0];
+  return (TL_DATA.timeline||[]).concat(TL_DATA.available||[],TL_DATA.env_vars||[]).filter(function(r){return r.id===id;})[0];
 }
 function timelineChanged(){updateDirtyState();refreshServices();}
+/* ---- Environment variables in Advanced (core.launch_timeline decides the rows; the page
+   keeps only what is selected and the values). Typing must not rebuild the box it is typing
+   in, so the rows are rebuilt only when what they show changes; values and problems are set
+   in place. ENV_TYPED: a value cleared by unticking comes back if it is ticked again. ---- */
+var currentEnvChoices={},currentExtraEnvVars=[],ENV_TYPED={},ENV_SIGNATURE=null,_envTypedTimer=null;
+function copyOwnEnvVar(x){return {name:x.name,value:x.value||"",enabled:x.enabled!==false,description:x.description||"",folder:!!x.folder};}
+/* The info tip + See more of one variable, the same in Advanced and in Settings. */
+function envTipHtml(v){
+  return (v.tip?infoBadge(v.tip):'')+
+    (v.guide?'<a href="#" class="env-see-more" data-env-guide="'+escapeHtml(v.name)+'" onclick="openEnvGuide('+jsQuote(v.name)+');return false;">'+escapeHtml((UI_TEXT.env_vars||{}).see_more||"See more")+'</a>':'');
+}
+function openEnvGuide(name){
+  var g=((UI_TEXT.env_vars||{}).guides||{})[name];if(!g)return;
+  el("toolHelpTitle").textContent=g.title;
+  el("toolHelpBody").innerHTML=(g.blocks||[]).map(function(b){
+    return b[0]==="code"?'<pre>'+escapeHtml(b[1])+'</pre>':'<p>'+escapeHtml(b[1])+'</p>';}).join("");
+  el("toolHelpModal").hidden=false;
+}
+/* A folder variable's Browse: fills the box and counts as typing. Type a path instead when
+   no dialog can open. */
+function envBrowse(id,box){
+  var r=tlFind(id),input=el(box);if(!r||!input)return;
+  if(!NATIVE||!API||!API.pick_env_folder){serviceMessage("Choosing a folder works in the app, not the static preview.");return;}
+  API.pick_env_folder(r.name,input.value).then(function(a){
+    if(a&&a.path){input.value=a.path;envValueTyped(input);serviceMessage("");}
+    else{serviceMessage((UI_TEXT.env_vars||{}).browse_none||"");input.focus();}
+  });
+}
+function sortedEnvChoices(){
+  var out={};Object.keys(currentEnvChoices).sort().forEach(function(k){out[k]=currentEnvChoices[k];});
+  return out;
+}
+function envRowHtml(r){
+  var id=jsQuote(r.id),box="envVal_"+r.id.replace(/[^A-Za-z0-9_]/g,"_"),t=UI_TEXT.env_vars||{};
+  var browse=r.folder?'<button type="button" class="btn tiny" data-env-browse="'+escapeHtml(r.id)+'" onclick="envBrowse('+id+','+jsQuote(box)+')">'+escapeHtml(t.browse||"Browse...")+'</button>':'';
+  return '<div class="tl-row tl-env-row" data-kind="env_var" data-row="'+escapeHtml(r.id)+'">'+
+    '<label class="chk"><input type="checkbox" data-tl="'+escapeHtml(r.id)+'" checked onchange="tlToggle(this)"> <span class="tl-name">'+escapeHtml(r.name)+'</span></label>'+
+    (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
+    envTipHtml(r)+
+    '<span class="tl-env-val'+(r.secret?' pwrap':'')+'"><input type="'+(r.secret?'password':'text')+'" id="'+box+'" data-env="'+escapeHtml(r.id)+'" aria-label="'+escapeHtml((t.value||"Value")+": "+r.name)+'" placeholder="'+escapeHtml(t.placeholder||"")+'" spellcheck="false" autocomplete="off" oninput="envValueTyped(this)">'+
+    (r.secret?'<button type="button" class="pw-toggle" data-target="'+box+'" onclick="togglePw(this)">Show</button>':'')+browse+'</span>'+
+    (r.can_delete?'<span class="tl-acts"><button type="button" class="btn tiny" onclick="tlDelete('+id+')">Delete</button></span>':'')+
+    '<p class="tl-env-err" data-env-err="'+escapeHtml(r.id)+'" hidden></p></div>';
+}
+function renderEnvRows(data){
+  var card=el("envCard"),box=el("envRows"),add=el("envAddOpen");if(!card||!box)return;
+  var rows=data.env_vars||[];
+  if(add)add.hidden=!data.env_can_add;
+  card.hidden=!rows.length;
+  var sign=JSON.stringify(rows.map(function(r){return [r.id,r.tag,r.secret,r.can_delete,r.tip,r.guide,r.folder];}));
+  if(sign!==ENV_SIGNATURE){ENV_SIGNATURE=sign;box.innerHTML=rows.map(envRowHtml).join("");}
+  rows.forEach(function(r){
+    box.querySelectorAll('input[data-env]').forEach(function(i){
+      if(i.getAttribute("data-env")===r.id&&document.activeElement!==i&&i.value!==(r.value||""))i.value=r.value||"";});
+    box.querySelectorAll('[data-env-err]').forEach(function(p){
+      if(p.getAttribute("data-env-err")===r.id){p.textContent=r.problem||"";p.hidden=!r.problem;}});
+  });
+  if(ENV_FOCUS){var want=rows.filter(function(r){return r.id===ENV_FOCUS;})[0];ENV_FOCUS=null;
+    if(want)box.querySelectorAll('input[data-env]').forEach(function(i){if(i.getAttribute("data-env")===want.id)i.focus();});}
+}
+function envValueTyped(input){
+  var r=tlFind(input.getAttribute("data-env"));if(!r)return;
+  if(r.source==="own")currentExtraEnvVars.forEach(function(x){if(x.name===r.name)x.value=input.value;});
+  else currentEnvChoices[r.name]=input.value;
+  updateDirtyState();
+  clearTimeout(_envTypedTimer);_envTypedTimer=setTimeout(refreshServices,250);
+}
+function tlEnvToggle(r,on){
+  if(r.source==="own"){currentExtraEnvVars.forEach(function(x){if(x.name===r.name)x.enabled=on;});}
+  else if(on){currentEnvChoices[r.name]=(ENV_TYPED[r.name]!==undefined)?ENV_TYPED[r.name]:(r.default||"");}
+  else{ENV_TYPED[r.name]=currentEnvChoices[r.name];delete currentEnvChoices[r.name];}
+  if(on){ENV_FOCUS=r.id;}
+  timelineChanged();
+}
+var ENV_FOCUS=null;
+function addOwnEnvVar(){
+  if(!NATIVE||!API||!API.validate_env_var){serviceMessage("Adding works in the app, not the static preview.");return;}
+  var taken=(TL_DATA.env_vars||[]).concat((TL_DATA.available||[]).filter(function(r){return r.kind==="env_var";})).map(function(r){return r.name;});
+  API.validate_env_var(val("envNewName"),el("envNewValue").value,taken,val("envNewDesc"),el("envNewFolder").checked).then(function(r){
+    if(!(r&&r.ok&&r.variable)){serviceMessage((r&&r.message)||"Could not add the variable.");return;}
+    currentExtraEnvVars.push({name:r.variable.name,value:r.variable.value,enabled:true,description:r.variable.description,folder:r.variable.folder});
+    addFormClose();
+    timelineChanged();
+  });
+}
+/* ---- Tools in Advanced (core.launch_tools_ui_text): the page keeps only the ticks.
+   A fixed order (the order of the rows), so the same ticks are the same JSON. ---- */
+var currentLaunchTools=[];
+function toolsText(){return (UI_TEXT&&UI_TEXT.tools)||{title:"Tools",tip:"",rows:[]};}
+function renderToolRows(){
+  var box=el("toolRows"),t=toolsText();if(!box)return;
+  if(el("toolsCard"))el("toolsCard").hidden=!(t.rows||[]).length;
+  if(el("toolsTitle"))el("toolsTitle").textContent=t.title;
+  if(el("toolsTip"))el("toolsTip").innerHTML=t.tip?infoBadge(t.tip):"";
+  box.innerHTML=(t.rows||[]).map(function(r){
+    var on=currentLaunchTools.indexOf(r.id)>=0;
+    var help=(r.id===t.session_id)?'<button type="button" class="info-i tool-help-btn" id="toolHelpSession" aria-label="'+escapeHtml(t.help_link||"")+'" title="'+escapeHtml(t.help_link||"")+'" onclick="openToolHelp(\'session\')">i</button>':infoBadge(r.tip);
+    return '<div class="tl-tool-row" data-tool-row="'+escapeHtml(r.id)+'"><label class="chk" title="'+escapeHtml(r.tip)+'"><input type="checkbox" data-tool="'+escapeHtml(r.id)+'"'+(on?" checked":"")+' onchange="toolToggle(this)"> <span class="tl-name">'+escapeHtml(r.name)+'</span></label>'+help+'</div>';
+  }).join("");
+}
+function toolToggle(cb){
+  var id=cb.getAttribute("data-tool"),on=!!cb.checked,all=(toolsText().rows||[]).map(function(r){return r.id;});
+  var now=currentLaunchTools.filter(function(x){return x!==id;});if(on)now.push(id);
+  currentLaunchTools=all.filter(function(x){return now.indexOf(x)>=0;});
+  timelineChanged();
+}
+/* The help popups: their own overlay, so they open above Settings or Before you launch. */
+function toolHelpHtml(kind){
+  var t=toolsText();
+  if(kind==="session"||kind==="env")return ((kind==="env"?t.env_help:t.session_help).blocks||[]).map(function(b){
+    return b[0]==="code"?'<pre>'+escapeHtml(b[1])+'</pre>':'<p>'+escapeHtml(b[1])+'</p>';}).join("");
+  var v=t.variables_help;
+  return '<p>'+escapeHtml(v.intro)+'</p><table id="toolVarsTable"><thead><tr>'+v.columns.map(function(c){return '<th>'+escapeHtml(c)+'</th>';}).join("")+'</tr></thead><tbody>'+
+    v.rows.map(function(r){return '<tr>'+r.map(function(c){return '<td>'+escapeHtml(c)+'</td>';}).join("")+'</tr>';}).join("")+'</tbody></table>'+
+    v.notes.map(function(n){return '<p>'+escapeHtml(n)+'</p>';}).join("");
+}
+function openToolHelp(kind){
+  var t=toolsText();
+  el("toolHelpTitle").textContent=(kind==="session"?t.session_help:kind==="env"?t.env_help:t.variables_help).title;
+  el("toolHelpBody").innerHTML=toolHelpHtml(kind);
+  el("toolHelpModal").hidden=false;
+}
+function closeToolHelp(){el("toolHelpModal").hidden=true;el("toolHelpClose").hidden=false;}
 function tlToggle(cb){
   var r=tlFind(cb.getAttribute("data-tl"));if(!r)return;
   var on=!!cb.checked;
+  if(r.kind==="env_var"){tlEnvToggle(r,on);return;}
   if(r.kind==="script"){
     if(r.source==="lab")currentScriptChoices[r.id]=on;
     else currentExtraScripts.forEach(function(x){if(x.id===r.id)x.enabled=on;});
@@ -3718,15 +4097,35 @@ function tlReset(id){
 }
 function tlDelete(id){
   var r=tlFind(id);if(!r)return;
-  if(r.kind==="script")currentExtraScripts=currentExtraScripts.filter(function(x){return x.id!==r.id;});
+  if(r.kind==="env_var")currentExtraEnvVars=currentExtraEnvVars.filter(function(x){return x.name!==r.name;});
+  else if(r.kind==="script")currentExtraScripts=currentExtraScripts.filter(function(x){return x.id!==r.id;});
   else currentExtraServices.splice(r.index,1);
   timelineChanged();
 }
-function toggleReorder(){reorderMode=!reorderMode;refreshServices();}
+/* The slide: the rows are drawn at rest first, then the class moves them, so it animates.
+   Done slides back before the arrows go. The rows stay where they are in the DOM for both. */
+function toggleReorder(){
+  var block=el("tlBlock");
+  if(reorderMode&&block&&block.classList.contains("out")){
+    block.classList.remove("out");
+    reorderMode=false;
+    var rb=el("tlReorder");if(rb){rb.textContent=UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed","false");}
+    block.classList.add("closing");
+    setTimeout(function(){renderTimeline(TL_DATA,null);},reduceMotion()?0:200);
+    return;
+  }
+  reorderMode=!reorderMode;
+  TL_SLIDE=reorderMode;
+  renderTimeline(TL_DATA,null);
+  TL_SLIDE=false;
+  var now=el("tlBlock");
+  if(now&&reorderMode){void now.offsetWidth;now.classList.add("out");}
+}
+function reduceMotion(){return !!(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches);}
 function moveLaunchItem(id,direction){
   if(!NATIVE||!API||!API.move_launch_item)return;
   API.move_launch_item(gatherFields(),id,direction).then(function(r){
-    if(r&&r.ok){currentLaunchOrder=r.order||[];timelineChanged();}
+    if(r&&r.ok){currentLaunchOrder=r.order||[];TL_MOVED={id:id,dir:direction};timelineChanged();}
   });
 }
 function scrNewWaitChanged(){el("scrNewPort").hidden=(val("scrNewWait")!=="port");}
@@ -3768,6 +4167,7 @@ function lsServicesHtml(){
       return '<div class="svc-set-row"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
         (s.include_by_default?'<span class="svc-def">'+escapeHtml(UI_TEXT.service_default_tag)+'</span>':'')+
         '<span class="svc-url">'+escapeHtml(s.url)+'</span></div>'+
+        openSiteBtn(s.url)+
         '<button class="btn tiny" onclick="svcEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
         deleteBtn("svc",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
     }).join("");
@@ -3798,8 +4198,9 @@ function svcApply(r,stay){
   if(r&&r.ok){SVC_EDIT=stay?SVC_EDIT:null;
     var st=el("lsSvcStatus");if(st){st.textContent=r.message||"";}
     var sum=el("lsSum_services");if(sum&&r.summary!==undefined){sum.textContent=r.summary;sum.title=r.summary;}
-    var ss=el("lsSum_scripts");if(ss&&r.scripts_summary!==undefined){ss.textContent=r.scripts_summary;ss.title=r.scripts_summary;}}
-  lsRenderServices();lsRenderScripts();refreshServices();
+    var ss=el("lsSum_scripts");if(ss&&r.scripts_summary!==undefined){ss.textContent=r.scripts_summary;ss.title=r.scripts_summary;}
+    var se=el("lsSum_env_vars");if(se&&r.env_vars_summary!==undefined){se.textContent=r.env_vars_summary;se.title=r.env_vars_summary;}}
+  lsRenderServices();lsRenderScripts();lsRenderEnvVars();refreshServices();
 }
 function svcSave(){
   if(!SVC_EDIT)return;
@@ -3836,6 +4237,7 @@ function lsScriptsHtml(){
         (s.hidden?'<span class="svc-def">'+escapeHtml(UI_TEXT.script_hidden_short)+'</span>':'')+
         '<span class="svc-def">'+escapeHtml(pos?pos[1]:"")+'</span>'+
         '<pre class="tl-detail" style="margin-left:0">'+escapeHtml(s.script)+'</pre></div>'+
+        '<button class="btn tiny scr-try" onclick="scrTry('+jsQuote(p.id)+','+jsQuote(s.id)+')">'+escapeHtml(UI_TEXT.try_script||"Try it")+'</button>'+
         '<button class="btn tiny" onclick="scrEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
         deleteBtn("scr",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
     }).join("");
@@ -3844,6 +4246,32 @@ function lsScriptsHtml(){
       (adding?scrFormHtml(p.id,null):'<button class="btn tiny" style="margin-top:6px" onclick="scrEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.script_add)+'</button>')+'</div>';
   }).join("");
 }
+/* Try it: runs the saved text, for real, after this confirm. Starts only: nothing here can
+   stop it (PRINCIPLES 15). Its own overlay, above Settings. */
+function scrTry(labId,scriptId){
+  if(!NATIVE||!API||!API.try_script_confirm)return;
+  API.try_script_confirm(labId,scriptId).then(function(c){
+    if(!(c&&c.ok)){var st0=el("lsScrStatus");if(st0)st0.textContent=(c&&c.message)||"";return;}
+    window._tryWanted={lab:labId,id:scriptId,name:c.name};
+    el("toolHelpTitle").textContent=c.title+": "+c.name;
+    el("toolHelpBody").innerHTML='<p id="tryConfirmText">'+escapeHtml(c.text)+'</p><pre class="bl-script" style="margin-left:0">'+escapeHtml(c.script)+'</pre>'+
+      '<div class="cta"><button class="btn" onclick="closeToolHelp()">'+escapeHtml(c.cancel_label)+'</button>'+
+      '<button class="btn accent" id="tryConfirmRun" onclick="scrTryRun()"><b>'+escapeHtml(c.run_label)+'</b></button></div>';
+    el("toolHelpClose").hidden=true;   /* Cancel says it */
+    el("toolHelpModal").hidden=false;
+  });
+}
+function scrTryRun(){
+  var w=window._tryWanted;closeToolHelp();if(!w)return;
+  var st=el("lsScrStatus");if(st){st.className="ls-status";st.textContent="Started "+w.name+" in its own window.";}
+  API.try_lab_script(w.lab,w.id,gatherFields());
+}
+window.pywOnTryScript=function(r){
+  var text=(r&&r.message)||"";appendLog((r&&r.ok)?"ok":"err",text);
+  var st=el("lsScrStatus");
+  if(st&&!el("infoModal").hidden){st.className="ls-status"+((r&&r.ok)?"":" warn");st.textContent=text;}
+  else window.pywStatus((r&&r.ok)?"ok":"warn",text);
+};
 function scrFormHtml(labId,s){
   s=s||{name:"",script:"",include_by_default:false,hidden:false,position:"after",wait:"carry_on",wait_port:""};
   return '<div class="svc-form" id="scrForm">'+
@@ -3856,6 +4284,7 @@ function scrFormHtml(labId,s){
     '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrDefault"'+(s.include_by_default?" checked":"")+'> '+escapeHtml(UI_TEXT.script_include)+'</label><br>'+
     '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrHidden"'+(s.hidden?" checked":"")+'> '+escapeHtml(UI_TEXT.script_hidden)+'</label>'+
     '<div class="svc-msg" id="scrFormMsg" hidden></div>'+
+    '<p style="margin:6px 0 0"><a href="#" id="scrFormVars" onclick="openToolHelp(\'variables\');return false;">'+escapeHtml(toolsText().variables_link||"Variables for scripts")+'</a></p>'+
     '<div class="cta"><button class="btn" onclick="scrCancel()">Cancel</button>'+
     '<button class="btn accent" id="scrSaveBtn" onclick="scrSave()"><b>Save</b></button></div></div>';
 }
@@ -3887,6 +4316,83 @@ DELETE_ACTIONS.scr=function(key){
 };
 DELETE_WORDING.scr=function(name){return escapeHtml(UI_TEXT.script_delete_confirm).replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
 DELETE_BACK.scr=function(){openLabSettings("scripts");};
+/* ---- Settings > Environment variables: per lab, the built-in suggestions + its own. The
+   tick is the "hidden" setting, turned round: ticked = shown in configs. It saves at once. ---- */
+var ENV_EDIT=null;   /* {lab, name ("" = new)} while the form is open */
+function lsEnvVarsHtml(){
+  var t=UI_TEXT.env_vars||{},labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
+  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
+  return '<p class="ls-env-intro">'+escapeHtml(t.intro||"")+' <button type="button" class="info-i tool-help-btn" id="lsEnvHelp" aria-label="'+escapeHtml(t.help_link||"")+'" title="'+escapeHtml(t.help_link||"")+'" onclick="openToolHelp(\'env\')">i</button></p>'+labs.map(function(p){
+    var rows=(p.env_vars||[]).map(function(v){
+      if(ENV_EDIT&&ENV_EDIT.lab===p.id&&ENV_EDIT.name===v.name)return envFormHtml(v);
+      return '<div class="svc-set-row" data-env-lab="'+escapeHtml(p.id)+'" data-env-name="'+escapeHtml(v.name)+'">'+
+        '<label class="chk" title="'+escapeHtml(t.show||"")+'"><input type="checkbox"'+(v.hidden?'':' checked')+' onchange="lsEnvTick('+jsQuote(p.id)+','+jsQuote(v.name)+',this.checked)"> <b class="ls-env-name">'+escapeHtml(v.name)+'</b></label>'+
+        envTipHtml(v)+
+        '<span class="ls-env-val">'+escapeHtml(v.value||"")+'</span>'+
+        '<button class="btn tiny" onclick="envEdit('+jsQuote(p.id)+','+jsQuote(v.name)+')">Edit</button>'+
+        (v.builtin?'':deleteBtn("env",p.id+"|"+v.name,v.name,{tiny:true}))+'</div>';
+    }).join("");
+    var adding=(ENV_EDIT&&ENV_EDIT.lab===p.id&&!ENV_EDIT.name);
+    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
+      (adding?envFormHtml(null):'<button class="btn tiny" style="margin-top:6px" data-env-add="'+escapeHtml(p.id)+'" onclick="envEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(t.add||"Add variable")+'</button>')+
+      '<div class="ls-env-own"><label class="chk" data-tip="'+escapeHtml(UI_TEXT.lab_env_add_own_tip||"")+'"><input type="checkbox" data-env-own="'+escapeHtml(p.id)+'"'+(p.env_add_own?" checked":"")+' onchange="lsEnvOwnTick('+jsQuote(p.id)+',this.checked)"> '+escapeHtml(UI_TEXT.lab_env_add_own||"")+'</label></div></div>';
+  }).join("");
+}
+function envFormHtml(v){
+  var t=UI_TEXT.env_vars||{};
+  return '<div class="svc-form" id="envForm">'+
+    (v?'<div class="mfield"><label>'+escapeHtml(t.name||"Name")+'</label><b class="ls-env-name">'+escapeHtml(v.name)+'</b></div>':
+      '<div class="mfield"><label for="envFormName">'+escapeHtml(t.name||"Name")+'</label><input id="envFormName" type="text" spellcheck="false" autocomplete="off" placeholder="'+escapeHtml(t.name_hint||"")+'"></div>')+
+    '<div class="mfield"><label for="envFormValue">'+escapeHtml(t.default||"")+'</label><input id="envFormValue" type="text" spellcheck="false" autocomplete="off" value="'+escapeHtml(v?(v.value||""):"")+'"></div>'+
+    '<p class="ls-env-intro" style="margin:0 0 4px 102px">'+escapeHtml(t.default_hint||"")+'</p>'+
+    ((v&&v.builtin)?'':'<div class="mfield"><label for="envFormDesc">'+escapeHtml(t.description||"")+'</label><input id="envFormDesc" type="text" maxlength="'+(t.description_max||200)+'" value="'+escapeHtml(v?(v.description||""):"")+'"></div>'+
+      '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="envFormFolder"'+(v&&v.folder?' checked':'')+'> '+escapeHtml(t.folder||"")+'</label><br>')+
+    (v?'':'<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="envFormShow" checked> '+escapeHtml(t.show||"")+'</label>')+
+    '<div class="svc-msg" id="envFormMsg" hidden></div>'+
+    '<div class="cta"><button class="btn" onclick="envCancel()">Cancel</button>'+
+    '<button class="btn accent" id="envSaveBtn" onclick="envSave()"><b>Save</b></button></div></div>';
+}
+function lsRenderEnvVars(){var b=el("lsEnvList");if(b)b.innerHTML=lsEnvVarsHtml();}
+function envEdit(labId,name){ENV_EDIT={lab:labId,name:name||""};lsRenderEnvVars();var n=el("envFormName")||el("envFormValue");if(n)n.focus();}
+function envCancel(){ENV_EDIT=null;lsRenderEnvVars();}
+function envApply(r){
+  ENV_EDIT=null;svcApply(r,true);var st=el("lsEnvStatus");if(st)st.textContent=r.message||"";
+}
+function lsEnvOwnTick(labId,on){
+  if(!NATIVE||!API||!API.set_lab_env_add_own)return;
+  API.set_lab_env_add_own(labId,on).then(function(r){
+    if(r&&r.ok)envApply(r);
+    else{var st=el("lsEnvStatus");if(st)st.textContent=(r&&r.message)||"Could not save.";lsRenderEnvVars();}
+  });
+}
+function lsEnvTick(labId,name,shown){
+  if(!NATIVE||!API||!API.update_lab_env_var)return;
+  API.update_lab_env_var(labId,name,null,!shown).then(function(r){
+    if(r&&r.ok)envApply(r);
+    else{var st=el("lsEnvStatus");if(st)st.textContent=(r&&r.message)||"Could not save the variable.";lsRenderEnvVars();}
+  });
+}
+function envSave(){
+  if(!ENV_EDIT)return;
+  var fail=function(m){var e=el("envFormMsg");if(e){e.textContent=m;e.hidden=false;}};
+  if(!NATIVE||!API||!API.add_lab_env_var){fail("Saving variables works in the app, not the static preview.");return;}
+  var value=el("envFormValue").value,d=el("envFormDesc"),f=el("envFormFolder");
+  var call=ENV_EDIT.name?API.update_lab_env_var(ENV_EDIT.lab,ENV_EDIT.name,value,null,d?d.value:null,f?f.checked:null)
+                        :API.add_lab_env_var(ENV_EDIT.lab,val("envFormName"),value,!el("envFormShow").checked,d.value,f.checked);
+  call.then(function(r){if(r&&r.ok)envApply(r);else fail((r&&r.message)||"Could not save the variable.");});
+}
+DELETE_ACTIONS.env=function(key){
+  var at=key.indexOf("|"),lab=key.slice(0,at),name=key.slice(at+1);
+  if(!NATIVE||!API||!API.delete_lab_env_var){openLabSettings("env_vars");return;}
+  API.delete_lab_env_var(lab,name).then(function(r){
+    if(r&&r.presets)LAB_PRESETS=r.presets;
+    openLabSettings("env_vars");refreshServices();
+    if(r&&r.ok)window.pywStatus("ok",r.message||"Variable removed.");
+    else window.pywStatus("err",(r&&r.message)||"Could not remove the variable.");
+  });
+};
+DELETE_WORDING.env=function(name){return escapeHtml((UI_TEXT.env_vars||{}).delete_confirm||"").replace("%s","<strong>"+escapeHtml(name)+"</strong>");};
+DELETE_BACK.env=function(){openLabSettings("env_vars");};
 
 /* ---- unsaved-changes (dirty) tracking for the "Save config" button ----
    A light flag: snapshot the whole form whenever a config is loaded or saved,
@@ -4154,7 +4660,7 @@ function openGhLogin(from){
     API.list_researchers().then(function(r){fill((r&&r.researchers)||[],(r&&r.suggested)||"");});
   }else{fill(typeof PREVIEW_RESEARCHERS!=="undefined"?PREVIEW_RESEARCHERS:[],"");}
 }
-function closeGhLogin(){el("ghLoginToken").value="";el("ghLoginModal").hidden=true;}
+function closeGhLogin(){el("ghLoginToken").value="";el("ghLoginName").value="";el("ghLoginModal").hidden=true;}
 function ghLoginMsg(ok,text){var m=el("ghLoginMsg");m.className="gh-login-msg "+(ok?"ok":"err");m.textContent=text||"";m.style.display=text?"block":"none";}
 function doGhSaveLogin(){
   var who=(val("ghLoginWhoIn")||"").trim(),token=(val("ghLoginToken")||"").trim();
@@ -4164,12 +4670,24 @@ function doGhSaveLogin(){
   var save=el("ghLoginSave"),label=save.textContent;
   save.disabled=true;save.textContent="Checking…";
   el("ghLoginToken").value="";   /* sent; never kept in the page */
-  API.github_add_token(token,who).then(function(r){
+  API.github_add_token(token,who,el("ghLoginName").value).then(function(r){
     r=r||{};save.disabled=false;save.textContent=label;
     if(!r.ok){ghLoginMsg(false,r.message||"Could not save the GitHub token.");return;}
     if(r.researchers)RESEARCHERS=r.researchers;
     if(r.github)applyGithubState(r.github);
     closeGhLogin();ghLoginDone(true,r.message||"Token saved.",true);
+  });
+}
+/* A token's name, from its row: the token itself is not needed. */
+function askGhName(id){var box=el("ghNameAsk_"+id);if(box){box.hidden=false;var i=el("ghNameIn_"+id);if(i){i.focus();i.select();}}}
+function cancelGhName(id){var box=el("ghNameAsk_"+id);if(box)box.hidden=true;}
+function doGhName(id){
+  if(!NATIVE||!API||!API.github_rename_token)return;
+  API.github_rename_token(id,el("ghNameIn_"+id).value).then(function(r){
+    r=r||{};
+    if(r.ok&&r.github)applyGithubState(r.github);
+    var st=el("ghLoginStatus");
+    if(st){st.textContent=r.message||"";st.style.color=r.ok?"var(--ok)":"var(--err)";}
   });
 }
 /* Delete ONE token (Settings > GitHub). It asks first, in place, naming who
@@ -4261,7 +4779,11 @@ function renderGitPullResult(r,path){
     h='<div class="gr-head"><b>'+escapeHtml(r.busy_text||"Pulling…")+'</b>'+when+'</div>';
   }else if(r.ok&&r.status==="current"){
     h='<div class="gr-head">'+GITHUB_SVG+'<b>'+escapeHtml(r.message||"Nothing new: already up to date.")+'</b>'+when+'</div>';
-    if(r.note)h+='<div class="gr-sub">'+escapeHtml(r.note)+'</div>';
+    if(r.note_lab_block){
+      /* The lab block is the only local change: what it is, the file a click away. */
+      var np=UI_TEXT.local_changes_block_parts||[r.note,"",""];
+      h+='<div class="gr-sub" id="grBlockNote">'+escapeHtml(np[0])+'<button type="button" class="link inline gr-file-link" id="grBlockLink" data-tip="'+escapeHtml(UI_TEXT.local_changes_block_link_tip||"")+'" onclick="viewBlock()">'+escapeHtml(np[1])+'</button>'+escapeHtml(np[2])+tipBadge("local_changes_block")+'</div>';
+    }else if(r.note)h+='<div class="gr-sub">'+escapeHtml(r.note)+'</div>';
   }else if(r.ok){
     h='<div class="gr-head ok"><b>'+escapeHtml(r.message||"Pulled.")+'</b>'+when+'</div>';
     if(r.detail)h+='<div class="gr-sub">'+escapeHtml(r.detail)+'</div>';
@@ -4325,7 +4847,7 @@ document.addEventListener("DOMContentLoaded",function(){
     i.addEventListener("change",validateProjectPath);
     i.addEventListener("blur",function(){setTimeout(function(){if(pathEditing)closePathEditor();},0);});
   }
-  var rd=el("resetdb");if(rd)rd.addEventListener("change",refreshDbSummary);
+  var rd=el("resetdb");if(rd){rd.addEventListener("change",refreshDbSummary);rd.addEventListener("change",refreshServices);}
   /* Any field edit re-checks the dirty state (capture phase catches every
      input/select/checkbox in the form). State changes that don't fire an input
      event (lab tile, host, room, db mode) call updateDirtyState() directly. */
@@ -4410,6 +4932,7 @@ function _modalPrimary(m){
 document.addEventListener("keydown",function(e){
   if(e.isComposing||e.defaultPrevented)return;   /* let IME / already-handled keys pass */
   if(e.key==="Escape"){
+    if(el("toolHelpModal")&&!el("toolHelpModal").hidden){closeToolHelp();return;}
     if(el("ghLoginModal")&&!el("ghLoginModal").hidden){closeGhLogin();return;}
     if(!el("logModal").hidden){closeLogModal();return;}
     if(!el("infoModal").hidden){closeModal();return;}
@@ -4425,6 +4948,8 @@ document.addEventListener("keydown",function(e){
      text inputs SHOULD submit, so they fall through to the primary. */
   if(tag==="TEXTAREA"||tag==="SELECT"||tag==="BUTTON"||tag==="A")return;
   if(t&&t.isContentEditable)return;
+  /* Enter in a tool's box must not launch: too easy to press after typing a number. */
+  if(t&&t.closest&&t.closest("#blToolsBox"))return;
   if(tag==="INPUT"){
     var ty=((t.getAttribute&&t.getAttribute("type"))||"text").toLowerCase();
     if(ty==="button"||ty==="submit"||ty==="reset"||ty==="checkbox"||ty==="radio")return;
@@ -4448,13 +4973,16 @@ function onSaveAs(then,lead){
 function renderSaveAs(st,then){
   SAVE_DLG={state:st,mode:"new",then:then||null};
   var opts=(st.researchers||[]).map(function(n){return '<option value="'+escapeHtml(n)+'">';}).join("");
-  var replaceBtn=st.replace_target?'<button type="button" class="btn tiny" id="saveAsReplace" onclick="saveAsMode(\'replace\')">'+escapeHtml(st.replace_label)+'</button>':'';
+  /* Two equal choices when there is something to replace, as in the launch row. Save as new
+     is the default. With nothing to replace, just the name. */
+  var two=!!st.replace_target;
+  var nameBox='<div class="mfield" id="saveAsNameRow"><label for="saveAsName">'+escapeHtml(UI_TEXT.save_name_label)+'</label><input id="saveAsName" type="text" value="'+escapeHtml(st.name||"")+'"></div>';
   openModal(st.title||"Save config",
     (st.lead?'<p class="save-lead">'+escapeHtml(st.lead)+'</p>':'')+
     (st.same_line?'<p class="bl-save-same">'+escapeHtml(st.same_line)+'</p>':'')+
-    '<div class="mfield" id="saveAsNameRow"><label for="saveAsName">'+escapeHtml(UI_TEXT.save_name_label)+'</label><div class="save-name-row"><input id="saveAsName" type="text" value="'+escapeHtml(st.name||"")+'">'+replaceBtn+'</div></div>'+
-    '<div id="saveAsReplaceNote" hidden><p class="bl-save-note strong">'+escapeHtml(st.replace_note||"")+'</p>'+
-      '<p><a href="#" id="saveAsBack" onclick="saveAsMode(\'new\');return false;">'+escapeHtml(st.back_label||"")+'</a></p></div>'+
+    (two?'<div class="save-choice" id="saveChoiceNew"><label class="chk"><input type="radio" name="saveChoice" id="saveAsNew" checked onchange="saveAsMode(\'new\')"> <b>'+escapeHtml(st.new_choice||"Save as new")+'</b></label>'+nameBox+'</div>'+
+         '<div class="save-choice" id="saveChoiceReplace"><label class="chk"><input type="radio" name="saveChoice" id="saveAsReplace" onchange="saveAsMode(\'replace\')"> <b>'+escapeHtml(st.replace_label)+'</b></label>'+
+         '<p class="bl-save-note" id="saveAsReplaceNote">'+escapeHtml(st.replace_choice_note||"")+'</p></div>':nameBox)+
     '<div class="mfield"><label for="saveAsAuthor">'+escapeHtml(UI_TEXT.save_researcher_label)+'</label>'+
       '<input id="saveAsAuthor" type="text" list="saveAsRosterList" autocomplete="off" value="'+escapeHtml(st.researcher||"")+'">'+
       '<datalist id="saveAsRosterList">'+opts+'</datalist></div>'+
@@ -4470,7 +4998,9 @@ function renderSaveAs(st,then){
 function saveAsMode(mode){
   if(!SAVE_DLG)return;
   SAVE_DLG.mode=mode;var st=SAVE_DLG.state,rep=(mode==="replace");
-  el("saveAsNameRow").hidden=rep;el("saveAsReplaceNote").hidden=!rep;el("saveAsHint").hidden=!rep;
+  el("saveAsNameRow").hidden=rep;el("saveAsHint").hidden=!rep;
+  var pickNew=el("saveAsNew"),pickRep=el("saveAsReplace");
+  if(pickNew)pickNew.checked=!rep;if(pickRep)pickRep.checked=rep;
   el("saveAsGo").textContent=rep?st.replace_label:"Save";
   var who=el("saveAsAuthor");
   if(rep&&!who.value.trim())who.value=st.replace_researcher||"";
@@ -4486,7 +5016,9 @@ function doSaveAs(){
       if(author&&dlg.mode==="new"){defaultAuthor=author;if(RESEARCHERS.indexOf(author)<0)RESEARCHERS.push(author);}
       renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
       markFormClean();
-      if(r.warning)window.pywStatus("warn",r.warning);else window.pywStatus("ok",(r.mode==="replace"?"Replaced “":"Saved “")+r.selected+"”.");
+      if(r.warning)window.pywStatus("warn",r.warning);
+      else if(r.mode==="replace"){appendLog("ok","Replaced “"+r.selected+"”.");noticeWithUndo((UI_TEXT.undo_replaced||"Replaced “%s”.").replace("%s",r.selected),r.copy_id,r.selected);}
+      else window.pywStatus("ok","Saved “"+r.selected+"”.");
       if(dlg.then)dlg.then();}
     else saveAsError((r&&r.message)||"Could not save.");});
 }
@@ -4524,12 +5056,39 @@ function deleteConfig(name){
     confirmDelete("Delete config",'Delete the config <strong>'+escapeHtml(name)+'</strong>? '+escapeHtml(UI_TEXT.delete_confirm),doDelete);
   });
 }
+/* The notice after a Delete or a Replace carries Undo while it is up. When it has gone, the
+   copy is still in Deleted configs. A name taken since gets the usual -RECOVERED name and the
+   message says so; a copy recovered another way answers that nothing is left to undo. */
+var UNDO_PENDING=null,_undoTimer=null;
+function noticeWithUndo(text,copyId,name){
+  if(!copyId){showNotice(text,"ok");return;}
+  UNDO_PENDING={id:copyId,name:name};
+  /* It replaces what is up: a queued notice would be gone before anyone could press Undo. */
+  NOTICE_QUEUE=[];el("noticeBar").hidden=true;NOTICE_SHOWN=null;
+  showNotices([text],false,false,"undo");
+  if(_undoTimer)clearTimeout(_undoTimer);
+  _undoTimer=setTimeout(function(){UNDO_PENDING=null;if(el("noticeBar").getAttribute("data-kind")==="undo")nextNotice();},(UI_TEXT.undo_seconds||20)*1000);
+}
+function undoLastChange(){
+  var u=UNDO_PENDING;UNDO_PENDING=null;if(!u||!API||!API.undo_config_change)return;
+  if(_undoTimer){clearTimeout(_undoTimer);_undoTimer=null;}
+  nextNotice();
+  withUnsavedCheck(function(){
+    API.undo_config_change(u.id,u.name).then(function(r){
+      if(!(r&&r.ok)){window.pywStatus("err",(r&&r.message)||"Could not undo.");return;}
+      renderConfigList(r.configs,r.name);currentConfigName=r.name;
+      API.select_config(r.name).then(function(s){if(s&&s.ok){applyFields(s.fields);applyProject(s.project);applySettings(s.settings);markFormClean();}});
+      window.pywStatus((r.warning&&"warn")||"ok",r.warning||r.message);
+    });
+  });
+}
 function doDelete(){var name=pendingDelete;if(!name||!NATIVE||!API){closeModal();return;}
   API.delete_config(name).then(function(r){closeModal();pendingDelete=null;
     if(r&&r.ok){renderConfigList(r.configs,r.selected);currentConfigName=r.selected;
       if(r.warning)window.pywStatus("warn",r.warning);
       if(r.selected)API.select_config(r.selected).then(function(s){if(s&&s.ok){applyFields(s.fields);applyProject(s.project);applySettings(s.settings);}});
-      window.pywStatus("ok","Deleted “"+name+"”.");}
+      appendLog("ok","Deleted “"+name+"”.");
+      noticeWithUndo((UI_TEXT.undo_deleted||"Deleted “%s”.").replace("%s",name),r.copy_id,name);}
     else window.pywStatus("err",(r&&r.message)||"Could not delete this config.");});
 }
 
@@ -5012,7 +5571,7 @@ function saveDefaultDb(id){
    except a section that is not set up yet, which starts open. The summaries come
    from core (Api.settings_summaries); the mirrors below serve the static preview
    and the instant before the answer arrives. */
-var LS_CARDS=["computer","labs","databases","pg","github","services","scripts"];
+var LS_CARDS=["computer","labs","databases","pg","github","services","scripts","env_vars"];
 function lsCard(key,title,tipKey,bodyHtml){
   return '<div class="ls-card ls-coll" id="lsCard_'+key+'">'+
     '<div class="ls-card-head"><h4>'+escapeHtml(title)+tipBadge(tipKey)+'</h4>'+
@@ -5041,12 +5600,17 @@ function lsSummaryMirror(){
     labs:(shown.length?shown.join(", "):"None shown")+(hidden?(" ("+hidden+" hidden)"):""),
     databases:dbs,
     pg_admin:u?(u+"@"+((PG_ADMIN.admin_host||"").trim()||"localhost")+(pt==="5432"?"":(":"+pt))):"Not set",
-    services:servicesSummaryMirror(),scripts:scriptsSummaryMirror()};
+    services:servicesSummaryMirror(),scripts:scriptsSummaryMirror(),env_vars:envVarsSummaryMirror()};
 }
 /* Mirror of core.services_summary (static preview + the instant before core answers). */
 function servicesSummaryMirror(){
   var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.services||[]).forEach(function(s){if(names.indexOf(s.name)<0)names.push(s.name);});});
   return names.length?names.join(", "):"None";
+}
+/* Mirror of core.env_vars_summary. */
+function envVarsSummaryMirror(){
+  var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.env_vars||[]).forEach(function(v){if(!v.hidden&&names.indexOf(v.name)<0)names.push(v.name);});});
+  return names.length?names.join(", "):"None shown";
 }
 /* Mirror of core.scripts_summary. */
 function scriptsSummaryMirror(){
@@ -5054,7 +5618,7 @@ function scriptsSummaryMirror(){
   return names.length?names.join(", "):"None";
 }
 function lsApplySummaries(r){
-  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"],["scripts","scripts"]].forEach(function(p){
+  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"],["scripts","scripts"],["env_vars","env_vars"]].forEach(function(p){
     var e=el("lsSum_"+p[0]);if(e&&r[p[1]]!==undefined){e.textContent=r[p[1]];e.title=r[p[1]];}});
 }
 function lsRefreshSummaries(){
@@ -5135,6 +5699,10 @@ function openLabSettings(openCard){
     lsCard("scripts",UI_TEXT.scripts_card,"scripts",
       '<div id="lsScrList">'+lsScriptsHtml()+'</div>'+
       '<div class="ls-status" id="lsScrStatus"></div>')+
+    /* Environment variables (2026-11-05): per lab, tick to show one in Advanced. */
+    lsCard("env_vars",(UI_TEXT.env_vars||{}).card||"Environment variables","env_vars",
+      '<div id="lsEnvList">'+lsEnvVarsHtml()+'</div>'+
+      '<div class="ls-status" id="lsEnvStatus"></div>')+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
        has NO Close button (avoids two closes). LEFT are the only two controls,
@@ -5213,7 +5781,12 @@ function renderGithubCard(){
       rows.map(function(t){
         var id=escapeHtml(t.id);
         return '<div><div class="gh-token-row"><span class="who'+(/· expired /.test(t.text)?' expired':'')+'">'+escapeHtml(t.text)+'</span>'+
+          '<button class="btn tiny" data-gh-name="'+id+'" onclick="askGhName(\''+id+'\')">'+escapeHtml(UI_TEXT.github_token_name_button||"Name")+'</button>'+
           '<button class="btn tiny" onclick="askGhDelete(\''+id+'\')">'+escapeHtml(UI_TEXT.github_delete_token)+'</button></div>'+
+          '<div class="gh-del-ask" id="ghNameAsk_'+id+'" hidden>'+escapeHtml(UI_TEXT.github_token_name_prompt||"")+
+          '<input type="text" id="ghNameIn_'+id+'" autocomplete="off" maxlength="'+(UI_TEXT.github_token_name_max||60)+'" placeholder="'+escapeHtml(UI_TEXT.github_token_name_placeholder||"")+'" value="'+escapeHtml(t.name||"")+'" style="width:100%;margin-top:6px;box-sizing:border-box">'+
+          '<div class="gh-actions"><button class="btn tiny" onclick="cancelGhName(\''+id+'\')">Cancel</button>'+
+          '<button class="btn tiny accent" onclick="doGhName(\''+id+'\')">Save</button></div></div>'+
           '<div class="gh-del-ask" id="ghDelAsk_'+id+'" hidden>'+escapeHtml(t.confirm||"")+
           '<div class="gh-actions"><button class="btn tiny" onclick="cancelGhDelete(\''+id+'\')">Cancel</button>'+
           '<button class="btn tiny danger" onclick="doGhDelete(\''+id+'\')">'+escapeHtml(UI_TEXT.github_delete_token)+'</button></div></div></div>';
@@ -5492,10 +6065,12 @@ function startHeartbeat(){
       }
     }catch(e){}
   };
-  /* ONLY on pagehide, which fires when the page really goes. beforeunload may still be
+  /* pagehide also fires on a reload or a typed address, so this only starts a short grace
+     (core: CLOSE_GRACE_SECONDS) that the next page load or beat calls off. The Quit button is
+     a separate, immediate call. ONLY on pagehide. beforeunload may still be
      cancelled by the person, and a beacon from there would stop the launcher under a page
      they chose to stay on. */
-  window.addEventListener("pagehide",function(){beacon("/api/quit","[]");});
+  window.addEventListener("pagehide",function(){beacon("/api/page_closed","[]");});
   /* A tab cannot show our own box: unsaved work gets the browser's own "Leave site?"
      prompt, nothing more (its wording is the browser's; see app/web/README.md). Timers stop
      while that prompt is up, so the beat says "hidden" first, or the watchdog could stop the
@@ -5583,7 +6158,7 @@ function historyPopup(title,tab,bodyId,note){
 function openLaunchHistory(){
   historyPopup(UI_TEXT.launch_history,"launch","histBody","");
   if(!NATIVE||!API||!API.launch_history){el("histBody").textContent="Launch history is available in the app, not the static preview.";return;}
-  API.launch_history(200).then(function(r){renderLaunchHistory((r&&r.entries)||[]);});
+  API.launch_history(200).then(function(r){renderLaunchHistory((r&&r.entries)||[],(r&&r.tool_columns)||[]);});
 }
 function openConfigHistory(){
   historyPopup(UI_TEXT.config_history,"edits","editsBody",UI_TEXT.config_history_note);
@@ -5634,21 +6209,28 @@ function recoverDeleted(i){
     API.deleted_configs().then(function(d){DELETED_ROWS=(d&&d.rows)||[];DELETED_PICK=DELETED_ROWS.length?0:-1;renderDeletedConfigs();});
   });
 }
-function renderLaunchHistory(entries){
+function renderLaunchHistory(entries,toolColumns){
+  toolColumns=toolColumns||[];
   var body=el("histBody");if(!body)return;
   if(!entries.length){body.innerHTML='<p class="d">No launches have been logged yet. Each launch adds a line here.</p>';return;}
+  /* A column nobody has a value for says nothing: left out. */
+  var hasVersion=entries.some(function(e){return !!e.version_label;});
   var rows=entries.map(function(e){
     var out=(e.outcome==="ok")?'<span style="color:var(--ok)">OK</span>':'<span style="color:var(--warn)">Failed</span>';
     /* Surface the resetdb flag already stored per launch (build_session_entry):
        a compact "DB reset" badge when the database was wiped, a subtle "kept"
        otherwise, so it reads at a glance. */
     var db=e.resetdb?'<span class="hist-reset">DB reset</span>':'<span class="hist-kept">kept</span>';
+    var span=6+(hasVersion?1:0)+toolColumns.length;
     return '<tr><td class="when">'+escapeHtml(histTime(e.timestamp))+'</td><td>'+escapeHtml(e.config_label||e.config||"(unsaved)")+
       '</td><td>'+escapeHtml((e.lab||"")+" / "+(e.room||""))+'</td><td>'+escapeHtml(e.database||"")+
-      '</td><td class="mono">'+escapeHtml(e.version_label||"")+
-      '</td><td class="c">'+db+'</td><td class="c">'+escapeHtml(e.seats==null?"":e.seats)+'</td><td class="c">'+out+'</td></tr>';
+      (hasVersion?'</td><td class="mono">'+escapeHtml(e.version_label||""):'')+
+      '</td><td class="c">'+db+'</td><td class="c">'+escapeHtml(e.seats==null?"":e.seats)+'</td>'+
+      toolColumns.map(function(c){return '<td data-tool-col="'+escapeHtml(c.key)+'">'+escapeHtml((e.tool_cells||{})[c.key]||"")+'</td>';}).join("")+
+      '<td class="c">'+out+'</td></tr>'+
+      (e.outcome!=="ok"&&e.reason?'<tr class="hist-reason-row"><td></td><td colspan="'+(span+1)+'" class="hist-reason">'+escapeHtml(e.reason)+'</td></tr>':'');
   }).join("");
-  body.innerHTML='<table class="presets-table"><thead><tr><th>When</th><th>Config</th><th>Lab / room</th><th>Database</th><th>Study version</th><th class="c">DB</th><th class="c">Seats</th><th class="c">Outcome</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  body.innerHTML='<table class="presets-table"><thead><tr><th>When</th><th>Config</th><th>Lab / room</th><th>Database</th>'+(hasVersion?'<th>Study version</th>':'')+'<th class="c">DB</th><th class="c">Seats</th>'+toolColumns.map(function(c){return '<th>'+escapeHtml(c.title)+'</th>';}).join("")+'<th class="c">Outcome</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 function histTime(stamp){
   if(!stamp)return "";
@@ -5656,7 +6238,7 @@ function histTime(stamp){
   if(isNaN(d.getTime()))return String(stamp);
   var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   function pad(n){return (n<10?"0":"")+n;}
-  return pad(d.getDate())+" "+months[d.getMonth()]+" "+pad(d.getHours())+":"+pad(d.getMinutes());
+  return pad(d.getDate())+" "+months[d.getMonth()]+" "+d.getFullYear()+" "+pad(d.getHours())+":"+pad(d.getMinutes());
 }
 function makeThisTheLab(){
   var lab=val("lsMarker");if(!lab)return;
@@ -5869,7 +6451,7 @@ function briefingSummaryHtml(b,launched){
   var dbNote=b.db_host_note?'<p class="bl-dbhost">Database: '+escapeHtml(b.db_label||"")+' <span class="db-host-note">'+escapeHtml(b.db_host_note)+'</span></p>':'';
   var linkRow=function(label,link){
     return '<p class="bl-linklabel">'+label+'</p><div class="bl-linkrow"><div class="mono-line" id="blLink">'+link+'</div>'+
-      '<button class="btn tiny" onclick="blCopyLink(this)">Copy link</button></div>';
+      '<button type="button" class="btn tiny icon-btn" data-tip="'+escapeHtml(UI_TEXT.timeline_copy_link||"Copy link")+'" aria-label="'+escapeHtml(UI_TEXT.timeline_copy_link||"Copy link")+'" onclick="blCopyLink(this)">'+COPY_SVG+'</button></div>';
   };
   var linkLabel=b.open_room?"Each participant computer opens":"Per-seat link (replace SEAT with the seat number)";
   /* Every per-seat link carries welcome_page_ok=1 so oTree 6 admits the seat
@@ -5929,19 +6511,30 @@ function briefingSummaryHtml(b,launched){
   if(!launched&&b.scripts_run&&b.scripts_run.length){
     html+='<div class="bl-scripts" id="blScripts"><div class="bl-services-head">'+escapeHtml(b.scripts_title||"Runs on launch, in this order")+'</div>'+
       b.scripts_run.map(function(r,i){
-        return '<div class="bl-run-row"><span class="bl-run-num">'+(i+1)+'.</span><b>'+escapeHtml(r.name)+'</b>'+
+        return '<div class="bl-run-row"><span class="bl-run-num">'+(i+1)+'.</span><b'+(r.url?' data-tip="'+escapeHtml(r.url)+'"':'')+'>'+escapeHtml(r.name)+'</b>'+
+          (r.url?addrButtons(r.url)+addrLine(r.url):'')+
           (r.wait_text?'<span class="bl-run-wait">'+escapeHtml(r.wait_text)+'</span>':'')+
           (r.script?'<pre class="bl-script">'+escapeHtml(r.script)+'</pre>':'')+'</div>';
       }).join("")+'</div>';
   }
+  /* The environment variables this launch sets, secrets masked: only when there are any. */
+  if(b.env_lines&&b.env_lines.length){
+    html+='<div class="bl-env" id="blEnv"><div class="bl-services-head">'+escapeHtml(b.env_title||"")+'</div>'+
+      b.env_lines.map(function(l){return '<p class="bl-env-line">'+escapeHtml(l)+'</p>';}).join("")+'</div>';
+  }
+  /* The tools' values, what was typed and no more. After a launch with scripts they are
+     the report's first rows instead. */
+  if(!(launched&&window._blReport&&window._blReport.length))html+='<div class="bl-tool-lines" id="blToolLines">'+blToolLinesHtml()+'</div>';
+  /* core.launch_briefing gives the pages that end the launch, in order; only the static
+     preview has none, and draws the two old fields. */
+  var pageRows=b.pages||((b.opens_admin?[{name:b.opens_admin_label||"oTree admin page",url:b.opens_admin_url}]:[]).concat(b.services||[]));
   /* After a launch: every row with what the launcher really knows about it. */
   if(launched&&window._blReport&&window._blReport.length){
     html+=launchReportHtml(window._blReport,window._blHeadline);
-  }else if(b.opens_admin||(b.services&&b.services.length)){
+  }else if(pageRows.length){
     var openedTitle=(launched&&b.services_title_launched)||b.services_title||"Browser pages that will open";
     html+='<div class="bl-services" id="blServices"><div class="bl-services-head">'+escapeHtml(openedTitle)+'</div>'+
-      (b.opens_admin?blOpensRow(b.opens_admin_label||"oTree admin page",b.opens_admin_url):'')+
-      (b.services||[]).map(function(s){return blOpensRow(s.name,s.url);}).join("")+'</div>';
+      pageRows.map(function(s){return blOpensRow(s.name,s.url);}).join("")+'</div>';
   }
   /* 3. dashboard login: collapsed, so username/password are not on screen until asked for */
   html+='<details class="bl-exp" id="blCreds"'+(window._blCredsOpen?' open':'')+' ontoggle="window._blCredsOpen=this.open"><summary>Dashboard login (if the browser asks)</summary>'+
@@ -5962,20 +6555,20 @@ function blPlaceLinkPop(){
   pop.style.left=left+"px";pop.style.top=top+"px";
   pop.style.display="";
 }
-/* One row of the popup's browser pages: the name, Copy link right after it. The address is
-   only in the button's data-url, so it is not on screen unless it is copied. */
+/* One row of the popup's browser pages: the name, the copy and eye icons right after it. The
+   address is a hover or the eye away; it is not on screen unless asked for. */
 function blOpensRow(name,url){
-  return '<div class="svc-brief"><span>'+escapeHtml(name)+'</span>'+
-    (url?'<button type="button" class="btn tiny svc-copy" data-url="'+escapeHtml(url)+'" onclick="blCopyOpensLink(this)">Copy link</button>':'')+'</div>';
+  return '<div class="svc-brief"><span'+(url?' data-tip="'+escapeHtml(url)+'"':'')+'>'+escapeHtml(name)+'</span>'+
+    (url?addrButtons(url)+addrLine(url):'')+'</div>';
 }
 function blCopyOpensLink(btn){
   copyText(btn.getAttribute("data-url"));
-  btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy link";},1200);
+  iconCopied(btn);
 }
 function blCopyLink(btn){
   var box=el("blLink");if(!box)return;
-  try{navigator.clipboard.writeText(box.textContent);}catch(e){}
-  if(btn){btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy link";},1200);}
+  copyText(box.textContent);
+  if(btn)iconCopied(btn);
 }
 /* The ONE consolidated pre-launch screen: summary + every issue (blocks and
    warnings, each with its inline one-click fix or a hint) + the action row. */
@@ -5988,9 +6581,11 @@ function showBeforeLaunch(b,issues){
   window._blInfoOpen=false;window._blCredsOpen=false;   /* both reveals start collapsed */
   window._linkCheckPending=null;
   window._blSave=null;   /* a new popup starts from a new offer: ticked, nothing typed */
+  window._blTools=null;  /* per launch: every popup starts empty */
   /* Order: what needs action first (must-fix, then warnings), then what will
      launch, then the sticky bottom bar. */
   var html='<div id="blIssues"></div>'+
+    '<div id="blTools"></div>'+
     '<div id="blSummary">'+briefingSummaryHtml(window._blBriefing)+'</div>'+
     '<div id="blSave"></div>'+
     '<div class="cta bl-cta" id="blActions"></div>';
@@ -5998,6 +6593,96 @@ function showBeforeLaunch(b,issues){
   renderBlIssues(window._blIssues);
   renderBlActions(window._blIssues);
   blLoadSaveOffer();
+  blToolsOpen();
+}
+/* ---- the tools' boxes (core.launch_tools_state decides; this only renders) ----
+   Typed values live here until this popup closes: never in the form, so they cannot count
+   as a config edit. A newer answer wins over a slow one. */
+window._blTools=null;
+var _blToolsAsked=0;
+function blToolsValues(){var t=window._blTools;return t?t.values:null;}
+function blToolsBad(){var t=window._blTools;return !!(t&&t.state&&!t.state.ok);}
+function blToolLinesHtml(){
+  var t=window._blTools;if(!t||!t.state)return "";
+  return (t.state.participant_line?'<p id="blParticipantLine">'+escapeHtml(t.state.participant_line)+'</p>':'')+
+    (t.state.lines||[]).map(function(l){return '<p>'+escapeHtml(l)+'</p>';}).join("");
+}
+function blToolsOpen(){
+  if(!NATIVE||!API||!API.launch_tools_state||!currentLaunchTools.length)return;
+  window._blTools={values:{lab_session:"",seat_number:"",seats_picked:null},state:null};
+  var mine=++_blToolsAsked;
+  API.launch_tools_state(gatherFields(),window._blTools.values).then(function(s){
+    if(mine!==_blToolsAsked||!window._blTools||!s||!s.any)return;
+    window._blTools.state=s;renderBlTools();blToolsApply(s);renderBlActions(window._blIssues);
+    var first=el("blToolSession")||el("blToolSeats");if(first)first.focus();
+  });
+}
+function renderBlTools(){
+  var box=el("blTools"),t=window._blTools;if(!box||!t||!t.state)return;
+  var s=t.state,h='<div class="bl-tools" id="blToolsBox">';
+  if(s.session)h+='<div class="bl-tool-row"><label for="blToolSession">'+escapeHtml(s.session.label)+'</label>'+
+    '<input type="text" id="blToolSession" autocomplete="off" spellcheck="false" maxlength="'+(s.session.max_length+10)+'" oninput="blToolTyped()">'+
+    '<span class="bl-tool-hint">'+escapeHtml(s.session.hint)+'</span>'+
+    '<p class="bl-tool-err" id="blToolSessionErr" hidden></p></div>';
+  if(s.seats){
+    h+='<div class="bl-services-head" id="blToolSeatsTitle">'+escapeHtml(s.seats.box_title||"")+'</div>';
+    h+='<div class="bl-tool-row"><label for="blToolSeats">'+escapeHtml(s.seats.label)+'</label>'+
+      '<input type="text" id="blToolSeats" autocomplete="off" inputmode="numeric" spellcheck="false" oninput="blToolTyped()">'+
+      '<span class="bl-tool-hint">'+escapeHtml(s.seats.hint)+'</span>'+
+      '<p class="bl-tool-err" id="blToolSeatsErr" hidden></p>'+
+      '<p class="bl-tool-note" id="blToolSeatsNote" hidden></p></div>';
+    if(s.seats.has_list)h+='<div class="seatmap bl-tool-map" id="blToolMap"></div><p class="bl-tool-cap">'+escapeHtml(s.seats.pick_hint)+'</p>';
+  }
+  box.innerHTML=h+'</div>';
+  var map=el("blToolMap");
+  if(map){
+    var lab=labById(currentLab()),seats=s.seats.seats;
+    if(lab&&lab.map&&lab.map.cells&&lab.map.cells.length)renderMappedSeats(map,lab.map,seats,blToolSeatCell);
+    else renderPlainGrid(map,seats,blToolSeatCell);
+  }
+}
+function blToolSeatCell(d,label){
+  if(!label)return;
+  d.setAttribute("data-seat",label);d.classList.add("pickable");
+  /* Out of the participant list: still pickable here, this map is a different thing. */
+  var st=window._blTools&&window._blTools.state,out=(st&&st.seats&&st.seats.excluded)||[];
+  if(out.indexOf(label)>=0)d.classList.add("tool-out");
+  d.onclick=function(){blToolPick(label);};
+}
+function blToolsApply(s){
+  var set=function(id,text){var e=el(id);if(e){e.textContent=text||"";e.hidden=!text;}};
+  if(s.session)set("blToolSessionErr",s.session.error);
+  if(s.seats){
+    set("blToolSeatsErr",s.seats.error);set("blToolSeatsNote",s.seats.note);
+    var box=el("blToolSeats");
+    if(box&&!s.seats.error&&box.value.trim()!==s.seats.typed)box.value=s.seats.typed;
+    var map=el("blToolMap");
+    if(map)map.querySelectorAll("[data-seat]").forEach(function(c){
+      c.classList.toggle("picked",s.seats.selected.indexOf(c.getAttribute("data-seat"))>=0);});
+  }
+  var lines=el("blToolLines");if(lines)lines.innerHTML=blToolLinesHtml();
+}
+function blToolsAsk(){
+  var t=window._blTools;if(!t)return;
+  var mine=++_blToolsAsked;
+  API.launch_tools_state(gatherFields(),t.values).then(function(s){
+    if(mine!==_blToolsAsked||!window._blTools||!s)return;
+    window._blTools.state=s;blToolsApply(s);renderBlActions(window._blIssues);
+  });
+}
+function blToolTyped(){
+  var t=window._blTools;if(!t)return;
+  if(el("blToolSession"))t.values.lab_session=el("blToolSession").value;
+  var box=el("blToolSeats");
+  if(box&&box.value!==t.values.seat_number){t.values.seat_number=box.value;t.values.seats_picked=null;}
+  blToolsAsk();
+}
+function blToolPick(label){
+  var t=window._blTools;if(!t||!t.state||!t.state.seats)return;
+  var now=t.state.seats.selected.slice(),i=now.indexOf(label);
+  if(i>=0)now.splice(i,1);else now.push(label);
+  t.values.seats_picked=now;t.values.seat_number=String(now.length);
+  blToolsAsk();
 }
 function fillBeforeLaunchIssues(issues){
   /* The preflight finished: leave the checking state and render the real issues
@@ -6034,7 +6719,7 @@ function renderBlIssues(issues){
     /* "recheck" has no row button: the bottom bar's Re-check is the one. */
     else if(it.fix==="git_pull")fixBtn='<button class="btn accent tiny" onclick="blGitPull(this)">'+escapeHtml(it.fix_label||UI_TEXT.git_update_action)+'</button>';
     else if(it.fix==="refresh_block")fixBtn='<button class="btn accent tiny" onclick="blRefreshBlock()">'+escapeHtml(it.fix_label||"Refresh lab block")+'</button>';
-    else if(it.fix==="use_lab_room")fixBtn='<button class="btn accent tiny" onclick="blUseLabRoom('+jsQuote(it.lab_room||"study")+')">'+escapeHtml(it.fix_label||"Use new default")+'</button>';
+    else if(it.fix==="use_lab_room")fixBtn='<button class="btn accent tiny" onclick="blUseLabRoom('+jsQuote(it.lab_room||"study")+')">'+escapeHtml(it.fix_label||"Use the lab default")+'</button>';
     else if(it.fix==="pick_room"){
       var rooms=(it.rooms||[]);
       if(rooms.length){
@@ -6170,8 +6855,10 @@ function blSaveAction(mode,ticked,who,warnings){
 }
 function blCurrentAction(warnings){
   var st=window._blSave;
-  if(!blSaving())return blSaveAction(null,false,"",warnings);
-  return blSaveAction(st.mode,st.ticked,st.who,warnings);
+  var action=blSaving()?blSaveAction(st.mode,st.ticked,st.who,warnings):blSaveAction(null,false,"",warnings);
+  /* A refused tool value says why at its own box; no launch until it is fixed. */
+  if(blToolsBad())action.enabled=false;
+  return action;
 }
 function renderBlSave(){
   var box=el("blSave");if(!box)return;
@@ -6293,6 +6980,7 @@ function blProceed(){
   var is=el("blIssues");if(is)is.innerHTML='<p class="handoff-note" id="takeoverStatus">Starting the server… this popup will confirm when it is up.</p>';
   var act=el("blActions");if(act)act.innerHTML="";
   var sv=el("blSave");if(sv)sv.innerHTML="";
+  var tb=el("blTools");if(tb)tb.hidden=true;
   el("modalTitle").textContent="Launching…";
   doLaunch(true,save);
 }
@@ -6307,16 +6995,19 @@ function doLaunch(force,save){
   /* Pass the SELECTED config name: Python decides what the launch runs as, and saves
      these same fields first when the save row asks for it. */
   window._launchResultSeen=false;
-  API.launch(gatherFields(),!!force,currentConfigName||"",save||null).then(handleLaunchResponse);
+  API.launch(gatherFields(),!!force,currentConfigName||"",save||null,blToolsValues()).then(handleLaunchResponse);
 }
 /* A failed save: back to the popup as it was, the reason on the row, nothing launched. */
 function blSaveFailed(text){
   var st=window._blSave;if(st)st.error=text;
+  var tb=el("blTools");if(tb)tb.hidden=false;
   el("modalTitle").textContent="Before you launch";
   renderBlIssues(window._blIssues);renderBlSave();renderBlActions(window._blIssues);
 }
 function handleLaunchResponse(r){
   if(r&&r.save_error){blSaveFailed(r.save_error);return;}
+  /* A value refused at the last check: back to the popup, the reason at its own box. */
+  if(r&&r.tools_error){blSaveFailed(r.tools_error);blToolsAsk();return;}
   if(r&&r.ok&&r.selected){
     /* Saved first, or these settings ARE another saved config: the form now matches
        that config. A result already in carries the newer rows, so keep those. */
@@ -6357,9 +7048,9 @@ function launchReportHtml(rows,headline){
     rows.map(function(r){
       return '<div class="bl-report-row rp-'+escapeHtml(r.mark)+'" data-outcome="'+escapeHtml(r.outcome)+'">'+
         '<span class="rp-mark" aria-hidden="true">'+escapeHtml(r.glyph)+'</span>'+
-        '<span class="rp-name">'+escapeHtml(r.name)+'</span>'+
+        '<span class="rp-name"'+(r.url?' data-tip="'+escapeHtml(r.url)+'"':'')+'>'+escapeHtml(r.label||r.name)+'</span>'+
         '<span class="rp-text">'+escapeHtml(r.text)+'</span>'+
-        (r.url?'<button type="button" class="btn tiny rp-copy" data-url="'+escapeHtml(r.url)+'" onclick="blCopyOpensLink(this)">Copy link</button>':'')+
+        (r.url?addrButtons(r.url)+addrLine(r.url):'')+
         ((r.facts&&r.facts.length)?'<div class="rp-facts">'+r.facts.map(function(f){return '<div>'+escapeHtml(f)+'</div>';}).join("")+'</div>':'')+
         (r.script?'<pre class="bl-script">'+escapeHtml(r.script)+'</pre>':'')+'</div>';
     }).join("")+'</div>';
@@ -6850,7 +7541,8 @@ function nextNotice(){
   var sp=n.log?splitLogHint(n.text):{text:String(n.text),hint:false};
   var t=sp.text,cut=t.indexOf(". ");
   el("noticeText").innerHTML=(cut>0?('<b>'+escapeHtml(t.slice(0,cut+1))+'</b> '+escapeHtml(t.slice(cut+2))):('<b>'+escapeHtml(t)+'</b>'))+
-    (sp.hint?logBtnHtml():"");
+    (sp.hint?logBtnHtml():"")+
+    (n.kind==="undo"?' <button type="button" class="btn tiny" id="noticeUndo" onclick="undoLastChange()">'+escapeHtml(UI_TEXT.undo||"Undo")+'</button>':"");
   bar.classList.toggle("warn",n.warn);bar.hidden=false;
 }
 function dismissNotice(){nextNotice();}
@@ -7020,12 +7712,26 @@ function hideBrowseButtons(){
   var b1=el("browseProjBtn");if(b1)b1.hidden=false;   /* project Browse works in browser mode */
   var b2=el("browseFileBtn");if(b2)b2.hidden=true;
 }
+function showLauncherGone(){
+  document.body.innerHTML='<div id="launcherGone" style="max-width:520px;margin:15vh auto;padding:0 24px;font:15px/1.5 system-ui,sans-serif">'+
+    '<h2 style="margin:0 0 8px">The launcher was closed</h2><p>Start it again from its shortcut. A server it started keeps running.</p></div>';
+}
+/* A page brought back from the browser's memory after the launcher stopped gets the same. */
+window.addEventListener("pageshow",function(ev){
+  if(ev.persisted&&BROWSER&&API&&API.heartbeat)fetch("/",{method:"HEAD",cache:"no-store"}).catch(showLauncherGone);
+});
 function bootBrowser(){
   if(booted)return;booted=true;NATIVE=true;BROWSER=true;
   API=makeHttpApi();startEventStream();startHeartbeat();clearPreviewContent();
-  API.get_initial_state().then(function(state){initNative(state);hideBrowseButtons();});
+  API.get_initial_state().then(function(state){
+    /* Nothing behind this page: say so, instead of the sample data the file ships with. */
+    if(state&&state.unreachable){showLauncherGone();return;}
+    initNative(state);hideBrowseButtons();});
 }
 window.addEventListener("pywebviewready",bootNative);
+/* The browser-mode server marks the page, so there is nothing to wait for, and the sample
+   data this file ships with never shows. */
+if(window.__LAUNCHER_BROWSER_MODE__)bootBrowser();
 setTimeout(function(){
   if(booted)return;
   if(window.pywebview&&window.pywebview.api)bootNative();

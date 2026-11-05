@@ -168,7 +168,7 @@ takes the setup.
      is off). It is a lab setting, saved in `data/lab_info.json`, so it travels
      with that file.
    - **Still in that section, click "Add token"**, pick who you are under
-     **Added by**, paste the lab account's read-only token (no GitHub username
+     **Added by**, optionally a **Name** that says what it is for, paste the lab account's read-only token (no GitHub username
      needed), and **Save**. **Create the token on GitHub** in that
      dialog opens GitHub's own form already filled in (the organisation,
      *Contents: Read-only*, the expiry): choose *All repositories*, generate,
@@ -336,6 +336,15 @@ when you set nothing), what to do next (**Then**) and two ticks:
 
 See **What happens on launch** in Part 2 for how they run.
 
+**Environment variables.** Most labs never need this. **Settings > Environment variables > Edit** lists what a config may set for a study, per lab. `OTREE_DATA_FOLDER` is always on the list, hidden until you tick it, for the folder of the Download data button in the oTree template. A variable you add starts visible. **Researchers can add their own variables**, off by default, shows Add your own variable on every config of that lab.
+
+- **Tick a variable to show it in Advanced.** It then appears there for every config, new ones too, not selected. Nothing is set until someone selects it and gives it a value. Unticked is the default, and then Advanced shows nothing extra.
+- **Add variable** adds your own: a name, a default or example value that fills the value box when someone selects it, a short description for its info tip, and **This is a folder** for a Browse button. **Show in configs** ticks it right away.
+- The (i) next to a variable says what it does. **See more** opens a short guide (built-in variables only).
+- Some names are refused: what the launcher sets itself (the `DB_*`, `OTREE_ADMIN_*` and `OTREE_LAB_*` names, for example) and what a launch depends on (`PATH`, `PYTHONPATH`, `HOME`, `TEMP` and similar). Names count as the same whatever their capitals, because Windows treats them that way.
+
+The list is tidiness, not a lock: anyone with `lab_info.json` can read it.
+
 **Updating the launcher.** When a new version exists, **a small dot appears on
 the gear** (the launcher asks GitHub at most once a day). In Settings, at the
 bottom, **Update** runs `git pull` on the launcher folder and then asks you to
@@ -448,6 +457,10 @@ is never cleaned up automatically. **History** also has **Config edits**: each R
 Edit, delete and recover, with the old and new value per field, passwords only as "changed".
 It is a helpful record, not proof of who did it.
 
+**Undo.** The notice after **Delete** or **Replace** has an **Undo** button for about 20 seconds. It puts the config back under its own name, or the previous version back; if the name was taken in the meantime it comes back as "<name>-RECOVERED" and the notice says so. After that the copy is still in Deleted configs.
+
+**Failed launches in History.** A failed launch has its one-line reason under the row (in Tk, choose the row to read all of it).
+
 **Quitting.** **Quit** is at the bottom of Settings (the gear), next to **Deleted configs** and
 **History**, which opens the launch history. Quit only closes the launcher: a
 study you already launched keeps running.
@@ -481,8 +494,10 @@ stops for the things that matter:
   linked to a branch on GitHub). A folder that is not a git folder never gets
   that line. Several at once are listed in the same box. **Cancel** changes
   nothing.
-- **A newer version of the study is on GitHub**: the box has a third choice,
-  **Git pull**. On a Mac the buttons read *Git pull* / *Launch anyway* /
+- **A newer version of the study is on GitHub**: the box says *There have been
+  updates to this study. Latest commit: a1b2c3d, today at 14:32.* (an earlier day
+  shows the date only, *3 Nov 2026*; if the commit cannot be read, only the first
+  sentence), and has a third choice, **Git pull**. On a Mac the buttons read *Git pull* / *Launch anyway* /
   *Cancel*; on Windows they read *Yes* / *No* / *Cancel* and the text says what
   each does (**Yes = Git pull, then launch**, No = launch the version on this
   computer, Cancel = do nothing). Git pull downloads the newer version the same
@@ -544,22 +559,32 @@ with a **Git pull** button. It warns and never blocks: pull there, or launch as
 it is.
 
 *What opens in your browser:* the screen lists it under **Browser pages that
-will open** (**Pages sent to the browser** once it runs), each with a **Copy link**
-button. Once the server is ready, each ticked item opens in its own tab. To
-change that for your study, open **Advanced** (under Database).
+will open** (**Pages sent to the browser** once it runs). Hover a name for its address; the
+copy icon copies it and the eye icon writes it out. Each ticked item opens in its own tab, at its
+place in the order. To change that for your study, open **Advanced** (under Database).
 
 *What happens on launch.* The top of Advanced is the launch itself, in run order:
 your scripts, **Reset database** when it is ticked (always directly before oTree,
 and it moves with it; its tick stays on the Database card), **Launch oTree server**,
-then the browser pages, which always come last. Below it is everything **Not selected**.
+then the browser pages. Below it is everything **Not selected**.
 
 - The card is short by default: names and marks. **Not selected (3)** opens when you click it.
   A script's text is behind **Show script** (and a hover, which shows the first lines); wherever
   script text is shown it stops at about six lines and scrolls inside itself. A website's address
-  is behind a hover and **Copy link**.
+  is behind a hover. **Open** sends it to your browser now, the copy icon copies it, and the eye
+  icon writes it out on the row until you press it again.
 - **Select or clear the tick** on a row to move it between the two lists. That covers
   the oTree admin page, the lab's scripts and websites, and your own.
-- **Reorder** shows arrows for the scripts and the oTree row.
+- **Reorder** shows arrows on every row. Reset database and Launch oTree server slide out as one
+  block with one pair of arrows, because they move together. Done puts the block back.
+- **A website opens where you place it.** Before oTree it simply opens, with no server yet. After
+  oTree it opens when the server is ready. If a script fails, the launch stops and nothing after it
+  opens: a website placed before that script is already open, and the report says "sent to the
+  browser" for it. A website that cannot open is only a warning.
+- **The oTree admin page stays after Launch oTree server**, because it cannot open before the
+  server exists; its arrow says so when it stops there. By default it comes after every script, so
+  with a failed script it does not load. A config that was never reordered opens everything as
+  before.
 - **Add your own script** or **Add your own website** at the bottom opens a small form; **Add
   script** or **Add website** adds it, Cancel closes and clears. A problem keeps the form open with
   what you typed. **Delete** removes your own.
@@ -579,7 +604,7 @@ cannot open never stops the launch; the activity log says so.
 
 *How a script runs.* In its own window, started minimised on Windows, titled
 `oTree script: <name>`. It starts in the project folder, with your normal environment plus
-`OTREE_LAB_PORT`, `OTREE_LAB_ROOM` and `OTREE_LAB_PROJECT`. It never gets `DATABASE_URL` or
+`OTREE_LAB_PORT`, `OTREE_LAB_ROOM` and `OTREE_LAB_PROJECT` (and the values of the Tools that are on, see below). It never gets `DATABASE_URL` or
 the admin password. Text runs as a batch file on Windows and with `sh` on Mac and Linux.
 The launcher writes these files to a temporary folder, never into your project. The window
 closes when the script ends with exit code 0, and stays open on any other code so you can
@@ -672,6 +697,59 @@ the launch is right there. The same button appears wherever a message says to
 see the activity log.
 
 ---
+
+#### Tools: seat selection and lab session number
+
+**Tools** sit at the bottom of **Advanced**, both off. A tool that is off changes nothing. Each tick is saved with the config.
+
+A tool that is on adds a box to **Before you launch**. What you type there is for this launch only: it starts empty each time, is never saved in the config, and does not count as a change to the config. **History** keeps it.
+
+**Seat selection** is for scripts that start computers, for example through an API.
+
+- Type a **Number of seats**. That many seats are selected on the map, from the top of the lab's seat list, in the order written in the list.
+- Click seats to swap them. The number follows.
+- A number above the lab's seat count becomes the seat count, and a short note says so.
+- Blank means 0 seats: no computers are started, and the launch still goes ahead.
+- A lab with no seat list: the number still goes to your script, and a note says the lab has no seat list.
+- **It does not touch the oTree room.** The room's seat list, the participant list and its exclusions stay as they are.
+
+Scripts get `LAB_SEATS` (comma separated, like `A1,A2,A5`) and `LAB_SEAT_COUNT`. The oTree server does not get them.
+
+**Lab session number** is a short text: letters, digits, spaces, hyphens, underscores and dots, at most 40 characters (`217`, `217b`, `test`). Blank is fine, and then the variable is not set. The oTree server and scripts get it as `OTREE_LAB_SESSION`.
+
+The launcher does not check whether your study reads it. To read it in oTree, add this to `SESSION_CONFIG_DEFAULTS` in `settings.py` (with `import os` at the top):
+
+```python
+lab_session=os.environ.get('OTREE_LAB_SESSION', '')
+```
+
+Read it with `player.session.config.get('lab_session')`. It appears in the wide export as `session.config.lab_session` for each participant. If it is not set, nothing breaks: the value is empty.
+
+The value is fixed when the server starts, so a second session in the same launch gets the same value. A new value needs a relaunch. On oTree's Create session page it shows as a box under Configure session, filled in with this value. A change there goes into that session only; History keeps what was typed at launch.
+
+**For script writers.** **Variables for scripts**, next to the Add buttons in Advanced, lists all of them.
+
+- Values arrive as environment variables and are never pasted into your script's text. On a Mac or Linux keep them in quotes: `"$LAB_SEATS"`.
+- A tool that is off provides nothing and removes any old value of that name from the environment, with no warning, even when your script mentions it.
+- Windows has no empty variables: with no seats selected `LAB_SEATS` is not defined there, and `%LAB_SEATS%` in a batch file stays as that literal text. Check `LAB_SEAT_COUNT` first. A blank lab session number is not set on any computer.
+
+**The one-click shortcut** has no launch screen. If a tool is on in that config, it asks in a small box first, only for the tools that are on. The number of seats takes the first seats of the list. Cancel means no launch. Leaving the boxes blank is fine. With both tools off the shortcut does not ask anything. If the box cannot be shown at all (no Tk on this computer's Python and no other way to ask), the shortcut says so and starts nothing: turn the tool off in Advanced, or launch from the launcher window. On a Mac without Tk the shortcut asks with one native question per value instead.
+
+#### Environment variables
+
+Only when your lab manager has made one available: it shows under **Not selected** in **Advanced**, by name. Most people never see this.
+
+- **Tick it**, and type a value in the box that appears. For a folder, **Browse...** opens a folder picker; typing a path works too, and in a browser-only launcher it may be the only way.
+- **Only a selected variable with a value is set.** A selected one with an empty box is not set, and nothing breaks.
+- **The value goes to the oTree server and to your scripts**, under that name, never pasted into a script's text. It is saved with the config like any other edit.
+- **A variable that is not selected stays as it was**: if this computer already sets it, the launcher leaves that alone for the server. Scripts do not inherit `OTREE_*` names, as always.
+- **Add your own variable** adds a name and value for this config only. A lab manager turns it on per lab with **Researchers can add their own variables** in Settings; on localhost and Other host it is always there. With it off, a config that already has its own variable keeps it and can still change or remove it.
+- **Before you launch** lists what will be set. A name that looks secret (holding PASSWORD, PASS, PWD, TOKEN, SECRET, KEY or CREDENTIAL) has its value hidden there, in the activity log and in History; History then keeps only the name. It is still stored in plain text in `data/saved_configs.json`, as passwords are.
+- **A folder that does not exist** gets a warning before you launch, not a block.
+- **To read one in oTree**, with `import os` at the top of the file: `os.environ.get('OTREE_DATA_FOLDER', '')`. The value is fixed when the server starts, so a change needs a relaunch. The launcher says it set the variable; it does not check whether your study reads it.
+- **`OTREE_DATA_FOLDER`** is for the Download data button on the experimenter dashboard of the oTree template, if your study has one. It saves up to three files, for all sessions in the database, in `SENSITIVE`, `ANONYMOUS` and `PAYMENTS` subfolders of that folder: SENSITIVE always, ANONYMOUS only if there is something to remove, PAYMENTS with as many columns as exist. It never overwrites a file: if a name is taken, the whole set moves to the next number. With no folder set, that button gives one browser download per file, with visible links. The folder must exist on the computer running oTree: a missing one is an error that names it, never created. Keep it outside your study folder: bank details in a study folder can end up in git. The running server reads the variable.
+
+A one-click shortcut uses what the config saved and asks nothing. If a config holds a name the launcher refuses (hand-edited, for example), the launch stops and names it.
 
 ## Screens
 
