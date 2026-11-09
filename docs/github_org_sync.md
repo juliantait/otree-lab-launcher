@@ -458,6 +458,31 @@ If the old folder had the lab block, the new copy gets it automatically; otherwi
 it gets the usual **Get ready for the lab** offer. A fresh copy is added to this computer's clone log (5f) as a fresh
 copy, under the researcher who got the old folder.
 
+### 5e2. Run a study from another branch
+
+For a session on a branch other than the usual one (for example `lab-2026-11-10`),
+tick **Settings -> GitHub -> Allow experimenters to switch branches** (a lab
+setting in `lab_info.json`, off by default; copy the file to every lab PC as usual).
+The oTree project section then shows **Branch** and **Check branches**: a `git
+fetch` (changes no file), then one row per branch, local and on GitHub together, the
+current one marked. **Switch** asks first, then:
+
+1. takes the lab block out, after a `.bak` of `settings.py` (only when the block is
+   the one local change in it),
+2. `git switch <branch>` (a branch only on GitHub gets a local branch that follows
+   it),
+3. `git pull --ff-only`,
+4. adds the lab block back when it was there.
+
+It refuses, and changes nothing, when the folder has any other change of its own,
+when a file not in Git would be overwritten, when that branch has commits on this
+computer that are not on GitHub, or while a session of this study is running. The
+message names the files: sort them out in the folder with Git. A failure in step 2
+or 3 puts the previous branch and `settings.py` back. A folder that is not on its
+usual branch says so (*On branch lab-2026-11-10, not master.*), with or without the
+setting, so the experimenter remembers to switch back. **Git pull** (5d) always
+pulls the branch the folder is on.
+
 ### 5f. Which studies are on this computer
 
 **Settings -> GitHub -> Studies from `<your-org>` on this computer** lists every

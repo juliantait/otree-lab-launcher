@@ -82,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -2121,6 +2121,110 @@ def refresh_block(project_path):
     return backup, path
 
 
+class BlockNotPresent(Exception):
+    """settings.py has no lab support block, so there is nothing to remove."""
+
+
+def _strip_block_text(text):
+    """``text`` (a settings.py, any line endings) without the FIRST lab block: from the
+    ``BLOCK_MARKER`` line to the ``BLOCK_END_MARKER`` line, or to the end of the file
+    when the end marker is missing (the block's own "delete from this banner to the
+    END" rule). A block at the end also loses the blank line(s) append_block put in
+    front of it, and the file keeps ONE final newline. None when there is no block."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if BLOCK_MARKER in line), -1)
+    if start < 0:
+        return None
+    end = next((i for i in range(start, len(lines)) if BLOCK_END_MARKER in lines[i]),
+               len(lines) - 1)
+    before = "".join(lines[:start])
+    after = "".join(lines[end + 1:])
+    if after.strip():
+        return before + after
+    newline = "\r\n" if "\r\n" in before else "\n"
+    kept = before.rstrip("\r\n")
+    return kept + newline if kept else ""
+
+
+def _match_committed_ending(folder, path, stripped):
+    """The stripped text with the same number of final newlines as the committed
+    settings.py, when everything else equals it (line endings ignored). So a study
+    whose only change was the block is clean in git again. Otherwise unchanged.
+    Reads only; never raises."""
+    try:
+        top, rel = _repo_relative(folder, path)
+        if not rel:
+            return stripped
+        committed = _git_bytes(top, "show", "HEAD:" + rel, timeout=10)
+        if committed is None:
+            return stripped
+        theirs = _normalize_newlines(committed.decode("utf-8", "surrogateescape"))
+        if _normalize_newlines(stripped).rstrip("\n") != theirs.rstrip("\n"):
+            return stripped
+        tail = len(theirs) - len(theirs.rstrip("\n"))
+        newline = "\r\n" if "\r\n" in stripped else "\n"
+        return stripped.rstrip("\r\n") + newline * tail
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return stripped
+
+
+def remove_block(project_path):
+    """Take the launcher's lab support block out of settings.py, and nothing else.
+
+    The counterpart of :func:`append_block`, behind the explicit **Remove lab support
+    block** click: under the same lock, a timestamped ``.bak`` first, then the file
+    without the block, written atomically. Other edits in settings.py stay as they
+    are; it does NOT put back an old backup (one can be older than the last pull).
+    When the file then equals the committed one apart from final blank lines, those
+    follow the committed file, so git sees no change.
+
+    Returns ``(backup, settings_path)``. Raises :class:`BlockNotPresent` when there is
+    no block, OSError on a read/write problem (:class:`SettingsFileRefused` when the
+    file cannot be replaced); a failed write leaves no backup and no change."""
+    path = settings_path_for(project_path)
+    folder = os.path.dirname(path) or "."
+    with exclusive_file_lock(_settings_lock_path(path)):
+        with open(path, "r", encoding="utf-8", errors="surrogateescape",
+                  newline="") as handle:
+            text = handle.read()
+        stripped = _strip_block_text(text)
+        if stripped is None:
+            raise BlockNotPresent("settings.py has no oTree lab support block.")
+        if _marked_read_only(path):
+            raise SettingsFileRefused(SETTINGS_READ_ONLY_TEXT)
+        stripped = _match_committed_ending(folder, path, stripped)
+        backup = _timestamped_backup(path)
+        try:
+            _write_settings_exact(path, folder, stripped)
+        except Exception:
+            _remove_own_file(backup)
+            raise
+    return backup, path
+
+
+def _write_settings_exact(path, folder, new_text):
+    """As :func:`_write_settings_atomically`, but writes ``new_text`` with its line
+    endings exactly as given (no newline translation), so a CRLF file stays CRLF."""
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", errors="surrogateescape", dir=folder, newline="",
+        prefix=".settings-", suffix=".tmp", delete=False)
+    tmp_name = handle.name
+    try:
+        handle.write(new_text)
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        try:
+            os.chmod(tmp_name, stat.S_IMODE(os.stat(path).st_mode))
+        except OSError:
+            pass
+        _replace_settings_file(tmp_name, path)
+    except Exception:
+        handle.close()
+        _remove_own_file(tmp_name)
+        raise
+
+
 # Every block body the launcher has ever shipped (sha256 of the normalised text,
 # :func:`lab_block_fingerprint`). This is what tells an OUTDATED block, which is
 # the launcher's own text and may be replaced, from a HAND-EDITED one, which is
@@ -2587,6 +2691,36 @@ def save_databases_localhost_only(enabled, path=None):
             return True
     except Exception:
         return load_databases_localhost_only(path)
+    return bool(enabled)
+
+
+# --- Branch switch (lab setting, 2026-11-09) ---------------------------------
+# A lab-level tick box in Settings > GitHub, stored as a top-level key of
+# lab_info.json next to github_org. DEFAULT OFF: a missing key or no readable
+# lab_info.json reads as off. On: the study card shows the branch and a Check
+# branches action that lists the branches and switches between them
+# (study_branches, git_switch_branch). Off: nothing of it shows (a study already
+# on another branch still says so, study_branch_info). Saving never creates
+# lab_info.json.
+BRANCH_SWITCH_KEY = "github_branch_switch"
+BRANCH_SWITCH_LABEL = "Allow experimenters to switch branches"
+
+
+def load_branch_switch_enabled(path=None):
+    """The saved "Allow experimenters to switch branches" lab setting. Default OFF."""
+    info = load_lab_info(path)
+    return bool(isinstance(info, dict) and info.get(BRANCH_SWITCH_KEY))
+
+
+def save_branch_switch_enabled(enabled, path=None):
+    """Store the setting in lab_info.json (other keys kept) and return the value now
+    in effect. With no readable lab_info.json nothing is written and it stays off.
+    Never raises."""
+    try:
+        if not _set_lab_info_keys({BRANCH_SWITCH_KEY: bool(enabled)}, path):
+            return False
+    except Exception:
+        return load_branch_switch_enabled(path)
     return bool(enabled)
 
 
@@ -4727,6 +4861,24 @@ def lab_block_only_change(folder, overlap=None):
             return None
         if (_git_text(folder, "rev-list", "--count", "@{u}..HEAD", timeout=10) or "") != "0":
             return None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return settings_block_only_diff(folder)
+
+
+def settings_block_only_diff(folder):
+    """Is the launcher's own lab block the ONLY local change in this study's
+    settings.py? The file half of :func:`lab_block_only_change`, without the update
+    questions (what changed online, own commits): unstaged, one complete block in a
+    text the launcher shipped, and outside it the committed file (line endings and
+    final blank lines ignored; a committed block is left out of both sides).
+    Used by the branch switch. Returns ``{"settings", "top", "rel"}`` or None.
+    Reads only; never raises."""
+    try:
+        settings = settings_path_for(folder)
+        top, rel = _repo_relative(folder, settings)
+        if not rel:
+            return None
         code, status = _run_git(["--literal-pathspecs", "-C", top, "status", "--porcelain",
                                  "--untracked-files=no", "--", rel], timeout=10)
         if code != 0 or status[:2] != " M":
@@ -4851,6 +5003,396 @@ def _describe_pull(result, folder, old):
         detail += " (%s pulled)" % _plural(commits, "commit")
     result.update(status="updated", message=message, detail=detail, files=files,
                   file_count=len(files), commit_count=commits, commit=commit)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Branches of a study folder (2026-11-09).
+#
+# For a study run from another branch (for example lab-2026-11-10) and switched
+# back afterwards. Shown only with the lab setting "Allow experimenters to switch
+# branches" (BRANCH_SWITCH_KEY); a study already on another branch says so either
+# way (study_branch_info). The same git rule as an update (PRINCIPLES 4): a fetch,
+# a switch, a fast-forward-only pull, and the launcher's own block taken out and
+# put back. Anything else in the way (an edit, a file git would overwrite, a branch
+# with commits of its own) refuses and changes nothing.
+# ---------------------------------------------------------------------------
+
+BRANCH_ROW_LABEL = "Branch"
+CHECK_BRANCHES_LABEL = "Check branches"
+CHECKING_BRANCHES_LABEL = "Checking…"
+BRANCH_SWITCH_BUTTON_LABEL = "Switch"
+BRANCH_CURRENT_MARK = "current"
+BRANCH_DEFAULT_MARK = "default"
+BRANCH_NOT_DEFAULT_TEXT = "On branch %s, not %s."
+BRANCH_DETACHED_TEXT = "Not on a branch (at commit %s)."
+BRANCH_NO_OTHERS_TEXT = "No other branches on GitHub."
+BRANCH_FETCH_PROBLEM_TEXT = "Could not check GitHub, so this list may be out of date. %s"
+BRANCH_SWITCH_TITLE = "Switch to %s?"
+BRANCH_SWITCH_SORT_OUT = "Sort this out in the folder with Git, then try again."
+BRANCH_SWITCH_TIMEOUT = 120
+BRANCH_FETCH_TIMEOUT = 20
+
+
+def _branch_remote(folder):
+    """The remote the study follows (its upstream's, else origin, else the first),
+    or ""."""
+    remote = _upstream_remote(folder)[0]
+    if remote:
+        return remote
+    names = (_git_text(folder, "remote", timeout=10) or "").split()
+    if "origin" in names:
+        return "origin"
+    return names[0] if names else ""
+
+
+def _current_branch(folder):
+    """``(branch, short_commit)``: branch "" when HEAD is detached."""
+    branch = _git_text(folder, "symbolic-ref", "--short", "-q", "HEAD", timeout=10) or ""
+    commit = _git_text(folder, "rev-parse", "--short", "HEAD", timeout=10) or ""
+    return branch, commit
+
+
+def _default_branch(folder, remote, remote_names=None, local_names=None):
+    """The remote's default branch (its HEAD as recorded at clone), else main or
+    master when there is one, else ""."""
+    if remote:
+        head = _git_text(folder, "symbolic-ref", "--short", "-q",
+                         "refs/remotes/%s/HEAD" % remote, timeout=10) or ""
+        if head.startswith(remote + "/"):
+            return head[len(remote) + 1:]
+    if remote_names is None:
+        remote_names = _remote_branch_names(folder, remote) if remote else []
+    for pool in (remote_names, local_names or []):
+        for name in ("main", "master"):
+            if name in pool:
+                return name
+    return ""
+
+
+def _remote_branch_names(folder, remote):
+    out = _git_text(folder, "for-each-ref", "--format=%(refname:short)",
+                    "refs/remotes/%s/" % remote, timeout=10) or ""
+    names = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith(remote + "/"):
+            continue
+        name = line[len(remote) + 1:]
+        if name and name != "HEAD":
+            names.append(name)
+    return names
+
+
+def _local_branches(folder):
+    """``{name: upstream}`` of the local branches (upstream "" when none)."""
+    out = _git_text(folder, "for-each-ref", "--format=%(refname:short)%09%(upstream:short)",
+                    "refs/heads/", timeout=10) or ""
+    branches = {}
+    for line in out.splitlines():
+        name, _tab, upstream = line.partition("\t")
+        if name.strip():
+            branches[name.strip()] = upstream.strip()
+    return branches
+
+
+def branch_note(current, default, commit=""):
+    """The one line the study card shows when the folder is not on its default
+    branch ("" when it is, or when the default is not known)."""
+    if not current:
+        return BRANCH_DETACHED_TEXT % commit if commit else ""
+    if default and current != default:
+        return BRANCH_NOT_DEFAULT_TEXT % (current, default)
+    return ""
+
+
+def study_branch_info(folder):
+    """Which branch the study folder is on, read locally (no network)::
+
+        {"is_repo", "current", "detached", "commit", "default", "note"}
+
+    ``note`` is the line the study card shows when the folder is NOT on its default
+    branch (an experimenter should notice, and switch back after the session), else
+    "". Never raises."""
+    out = {"is_repo": False, "current": "", "detached": False, "commit": "",
+           "default": "", "note": ""}
+    folder = str(folder or "").strip()
+    try:
+        if not folder or not os.path.isdir(folder) or _is_launcher_folder(folder) \
+                or not is_git_repo(folder):
+            return out
+        current, commit = _current_branch(folder)
+        remote = _branch_remote(folder)
+        default = _default_branch(folder, remote, local_names=list(_local_branches(folder)))
+    except Exception:
+        return out
+    out.update(is_repo=True, current=current, detached=not current, commit=commit,
+               default=default, note=branch_note(current, default, commit))
+    return out
+
+
+def study_branches(folder, fetch=True, timeout=BRANCH_FETCH_TIMEOUT):
+    """The branches of a study folder for the branch selector ("Check branches")::
+
+        {"ok", "message", "current", "detached", "commit", "default", "note",
+         "remote", "fetched", "fetch_problem",
+         "branches": [{"name", "current", "default", "local", "remote", "title",
+                       "confirm"}]}
+
+    ``fetch`` first runs ``git fetch --prune`` (it downloads only; no file of the
+    study changes; never asks for a login, tries this computer's other tokens like
+    the update check). Local and remote branches are merged into one list by name:
+    the default branch first, then by name. A fetch that fails still lists what git
+    knew already, with ``fetch_problem`` saying why. Never raises."""
+    folder = str(folder or "").strip()
+    out = {"ok": False, "message": "", "current": "", "detached": False, "commit": "",
+           "default": "", "note": "", "remote": "", "fetched": False,
+           "fetch_problem": "", "branches": []}
+    try:
+        if not folder or not os.path.isdir(folder):
+            out["message"] = "Choose a study folder first."
+            return out
+        if _is_launcher_folder(folder) or not is_git_repo(folder):
+            out["message"] = "This folder is not a git repo."
+            return out
+        remote = _branch_remote(folder)
+        if fetch and remote:
+            url = _git_text(folder, "remote", "get-url", remote, timeout=10) or ""
+            args = ["-C", folder, "fetch", "--prune", "--quiet", remote]
+            try:
+                code, output = _run_git_no_prompt(args, timeout)
+                if code != 0:
+                    retry, again = _retry_with_other_tokens(
+                        url, lambda extra: _run_git_no_prompt(extra + args, timeout), output)
+                    if retry is not None:
+                        code, output = retry, again
+                if code == 0:
+                    out["fetched"] = True
+                else:
+                    out["fetch_problem"] = classify_git_error(output)["reason"]
+            except FileNotFoundError:
+                out["message"] = "git is not installed on this computer."
+                return out
+            except subprocess.TimeoutExpired:
+                out["fetch_problem"] = "GitHub did not answer in time."
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                out["fetch_problem"] = "git fetch failed (%s)." % error
+        current, commit = _current_branch(folder)
+        local = _local_branches(folder)
+        remote_names = _remote_branch_names(folder, remote) if remote else []
+        default = _default_branch(folder, remote, remote_names, list(local))
+        has_block = bool(inspect_settings(folder).get("has_block"))
+    except Exception as error:      # never raises: the selector shows the reason
+        out["message"] = "Could not read the branches (%s)." % error
+        return out
+    names = sorted(set(local) | set(remote_names), key=lambda n: (n != default, n.lower()))
+    out.update(ok=True, current=current, detached=not current, commit=commit,
+               default=default, remote=remote, note=branch_note(current, default, commit),
+               branches=[{"name": name, "current": name == current,
+                          "default": name == default, "local": name in local,
+                          "remote": name in remote_names,
+                          "title": BRANCH_SWITCH_TITLE % name,
+                          "confirm": branch_switch_confirm(name, current, default,
+                                                           has_block)}
+                         for name in names])
+    if out["fetch_problem"]:
+        out["message"] = BRANCH_FETCH_PROBLEM_TEXT % out["fetch_problem"]
+    elif not [b for b in out["branches"] if not b["current"]]:
+        out["message"] = BRANCH_NO_OTHERS_TEXT
+    return out
+
+
+def branch_switch_confirm(branch, current="", default="", has_block=True):
+    """The sentence of the "Switch to <branch>?" question."""
+    text = ("The study folder changes to the files of branch %s, brought up to date "
+            "from GitHub." % branch)
+    if has_block:
+        text += " The lab support block is taken out first and added back after."
+    if default and branch != default:
+        text += " Switch back to %s after the session." % default
+    return text
+
+
+def _valid_branch_name(folder, branch):
+    if not branch or branch.startswith("-") or any(c.isspace() for c in branch):
+        return False
+    try:
+        code, _output = _run_git(["-C", folder, "check-ref-format", "--branch", branch],
+                                 timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return code == 0
+
+
+def _back_to(folder, previous, detached):
+    """Put HEAD back where it was before a switch: ``(ok, output)``."""
+    args = ["-C", folder, "switch"] + (["--detach", previous] if detached else [previous])
+    try:
+        code, output = _run_git(args, timeout=60)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return False, str(error)
+    return code == 0, output
+
+
+def git_switch_branch(folder, branch, port=None):
+    """Switch a study folder to ``branch`` (the branch selector's Switch).
+
+    Only when the folder has no change of its own apart from the launcher's lab
+    block (:func:`settings_block_only_diff`), and the branch here has no commits of
+    its own that GitHub lacks. Then:
+
+      1. a timestamped ``.bak`` of settings.py, and the committed settings.py put
+         back (the block out), when the block is there as a local change,
+      2. ``git switch <branch>``, or ``git switch -c <branch> --track
+         <remote>/<branch>`` for a branch that is only on GitHub,
+      3. ``git pull --ff-only`` when the branch follows one on GitHub,
+      4. the block added again (:func:`carry_lab_block`) when settings.py had it.
+
+    A failure in 2 or 3 puts everything back: the previous branch (a branch it just
+    made is removed again) and settings.py byte for byte from the backup. Refused
+    while a server of this study runs (``port`` = the form's port, as for a fresh
+    copy). Returns::
+
+        {"ok", "status", "message", "detail", "reason", "files", "output", "branch",
+         "previous", "lab_block", "backups"}
+
+    ``status``: "switched", "current" (already on it), "refused" (nothing was
+    changed: ``reason`` says why in plain words and ``files`` names the files) or
+    "error" (a step failed and was undone; ``output`` is git's text). Never raises."""
+    folder = str(folder or "").strip()
+    branch = str(branch or "").strip()
+    result = {"ok": False, "status": "refused", "message": "", "detail": "",
+              "reason": "", "files": [], "output": "", "branch": branch,
+              "previous": "", "lab_block": False, "backups": []}
+
+    def refuse(reason, files=(), output="", status="refused"):
+        result.update(status=status, reason=reason, files=list(files),
+                      output=str(output or "").strip(),
+                      message="Not switched to %s. %s" % (branch or "that branch", reason))
+        return result
+
+    try:
+        if not folder or not os.path.isdir(folder):
+            return refuse("Choose a study folder first.")
+        if _is_launcher_folder(folder) or not is_git_repo(folder):
+            return refuse("This folder is not a git repo.")
+        if not _valid_branch_name(folder, branch):
+            return refuse("That is not a branch name.")
+        current, commit = _current_branch(folder)
+        result["previous"] = current or commit
+        if branch == current:
+            result.update(ok=True, status="current", message="Already on %s." % branch)
+            return result
+        local = _local_branches(folder)
+        remote = _branch_remote(folder)
+        on_remote = remote and branch in _remote_branch_names(folder, remote)
+        if branch not in local and not on_remote:
+            return refuse("There is no branch called %s here or on GitHub. Click %s "
+                          "to see the list again." % (branch, CHECK_BRANCHES_LABEL))
+        top = _git_text(folder, "rev-parse", "--show-toplevel", timeout=10) or folder
+        problem = study_server_problem(top, port)
+        if problem:
+            return refuse(problem)
+        changed = _tracked_changes(folder)
+        if changed is None:
+            return refuse("Git could not say whether this folder has changes of its "
+                          "own. " + BRANCH_SWITCH_SORT_OUT)
+        change = None
+        if changed:
+            change = settings_block_only_diff(folder) if len(changed) == 1 else None
+            if change is None or changed != [change["rel"]]:
+                return refuse("This folder has changes of its own: %s. %s" % (
+                    _short_file_list(changed), BRANCH_SWITCH_SORT_OUT), changed)
+        upstream = local.get(branch, "")
+        if branch in local and upstream:
+            ahead = _git_text(folder, "rev-list", "--count",
+                              "%s..%s" % (upstream, branch), timeout=10)
+            if ahead is None or ahead != "0":
+                return refuse("The branch %s on this computer has commits of its own "
+                              "that are not on GitHub. %s" % (branch, BRANCH_SWITCH_SORT_OUT))
+        state = inspect_settings(folder)
+        had_block = bool(state.get("readable") and state.get("has_block"))
+        if change is not None and _marked_read_only(change["settings"]):
+            return refuse(SETTINGS_READ_ONLY_TEXT)
+    except Exception as error:      # never raises
+        return refuse("Could not check the folder (%s)." % error, status="error")
+
+    backup = None
+    made = False
+
+    def undo(reason, output, files=()):
+        """Back to the previous branch and the previous settings.py."""
+        notes = []
+        try:
+            now_branch, now_commit = _current_branch(folder)
+            moved = (now_branch != current) if current else bool(
+                now_branch or now_commit != commit)
+            if moved:
+                back, again = _back_to(folder, result["previous"], not current)
+                if not back:
+                    notes.append("The folder could not be put back on %s: %s" % (
+                        result["previous"], str(again or "").strip()))
+            if made and not notes:
+                _run_git(["-C", folder, "branch", "-D", branch], timeout=30)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            notes.append("The folder could not be put back on %s (%s)." % (
+                result["previous"], error))
+        if backup is not None and not _restore_backup(backup, change["settings"]):
+            notes.append("The previous settings.py could not be put back: it is saved as "
+                         "%s" % backup)
+        text = reason if notes else reason + " Nothing was changed."
+        refuse(" ".join([text] + notes), files, output, status="error")
+        return result
+
+    try:
+        if change is not None:
+            backup = _timestamped_backup(change["settings"])
+            code, output = _run_git(["--literal-pathspecs", "-C", change["top"], "checkout",
+                                     "HEAD", "--", change["rel"]], timeout=30)
+            if code != 0:
+                return undo("Could not take the lab support block out.", output)
+        if branch in local:
+            code, output = _run_git(["-C", folder, "switch", branch], timeout=60)
+        else:
+            code, output = _run_git(["-C", folder, "switch", "-c", branch, "--track",
+                                     "%s/%s" % (remote, branch)], timeout=60)
+            made = code == 0
+        if code != 0:
+            why = classify_git_error(output)
+            if why["code"] == "untracked":
+                return undo("Files in this folder that are not in Git would be "
+                            "overwritten by the branch: %s. %s" % (
+                                _short_file_list(why["files"]) or "see the git output",
+                                BRANCH_SWITCH_SORT_OUT), output, why["files"])
+            if why["code"] == "local_changes":
+                return undo("This folder has changes of its own: %s. %s" % (
+                    _short_file_list(why["files"]) or "see the git output",
+                    BRANCH_SWITCH_SORT_OUT), output, why["files"])
+            return undo("git switch failed. %s" % BRANCH_SWITCH_SORT_OUT, output)
+        if _upstream_remote(folder)[0]:
+            code, output = _pull_ff_only(folder)
+            if code != 0:
+                why = classify_git_error(output)
+                return undo("Could not bring %s up to date from GitHub: %s" % (
+                    branch, why["reason"]), output, why["files"])
+    except Exception as error:
+        return undo("Switching failed (%s)." % error, "")
+
+    result.update(ok=True, status="switched", reason="",
+                  message="Switched to %s." % branch)
+    if backup is not None:
+        result["backups"] = [backup]
+    if had_block:
+        problem = carry_lab_block(folder)
+        result["lab_block"] = True
+        if problem:
+            result["message"] = "Switched to %s, but lab support needs a look." % branch
+            result["detail"] = problem
+        else:
+            result["message"] = "Switched to %s, lab support kept." % branch
+    note = branch_note(branch, _default_branch(folder, remote, local_names=list(local)))
+    if note:
+        result["detail"] = " ".join(bit for bit in (result["detail"], note) if bit)
     return result
 
 
@@ -9716,10 +10258,14 @@ LAUNCH_SCRIPTS_DIR_PREFIX = "otree-lab-scripts-"
 LAUNCH_SCRIPTS_DIR_KEEP_SECONDS = 7 * 24 * 3600
 
 # Words both faces use.
-TIMELINE_TITLE = "What happens on launch"
+TIMELINE_TITLE = "Launch timeline"
 TIMELINE_REORDER_LABEL = "Reorder"
 TIMELINE_REORDER_DONE_LABEL = "Done"
-TIMELINE_AVAILABLE_TITLE = "Not selected"
+TIMELINE_AVAILABLE_TITLE = "Available tools"
+TIMELINE_GROUP_STEPS_TITLE = "Scripts and websites"
+TIMELINE_GROUP_TOOLS = "tools"
+TIMELINE_GROUP_ENV = "env"
+TIMELINE_GROUP_STEPS = "steps"
 TIMELINE_AVAILABLE_NONE = "Nothing else to add."
 # Advanced is short by default (Julian, 2026-11-04, "too much information"): names and
 # marks. A script's text and a website's address are one hover or one click away.
@@ -9729,7 +10275,7 @@ TIMELINE_COPY_LINK_LABEL = "Copy link"
 TIMELINE_COPIED_LABEL = "Copied"
 ADDRESS_SHOW_LABEL = "Show address"
 ADDRESS_HIDE_LABEL = "Hide address"
-# A row in What happens on launch says what happens. Stored data keeps the plain name.
+# A row in the Launch timeline says what happens. Stored data keeps the plain name.
 LAUNCH_PAGE_LABEL = "Open %s"
 TIMELINE_ADMIN_STAYS_TIP = ("The oTree admin page stays after Launch oTree server: it cannot "
                             "open before the server exists.")
@@ -9757,9 +10303,28 @@ def script_tip_text(text):
     return "\n".join(shown)
 
 
-def timeline_available_caption(count):
-    """The Not selected disclosure: "Not selected (3)"; "" when there is nothing in it."""
-    return "%s (%d)" % (TIMELINE_AVAILABLE_TITLE, count) if count else ""
+def timeline_group_caption(title, count):
+    """One group under Available tools: "Tools (2)"."""
+    return "%s (%d)" % (title, count)
+
+
+def timeline_available_groups(available, tools_on, env_can_add):
+    """Available tools, both faces: what is not in use, grouped, in one fixed order. A group
+    with nothing in it and nothing to add is left out. Scripts and websites always stays: it
+    holds the two Add buttons."""
+    tools = [dict(row) for row in LAUNCH_TOOL_ROWS if row["id"] not in tools_on]
+    env = [row for row in available if row["kind"] == "env_var"]
+    steps = [row for row in available if row["kind"] != "env_var"]
+    groups = []
+    if tools:
+        groups.append({"id": TIMELINE_GROUP_TOOLS, "title": TOOLS_TITLE, "rows": tools})
+    if env or env_can_add:
+        groups.append({"id": TIMELINE_GROUP_ENV, "title": ENV_VARS_TITLE, "rows": env})
+    groups.append({"id": TIMELINE_GROUP_STEPS, "title": TIMELINE_GROUP_STEPS_TITLE, "rows": steps})
+    for group in groups:
+        group["count"] = len(group["rows"])
+        group["caption"] = timeline_group_caption(group["title"], group["count"])
+    return groups
 
 
 LAUNCH_OTREE_ROW_NAME = "Launch oTree server"
@@ -10196,7 +10761,10 @@ def launch_timeline(cfg, lab_presets=None):
         {"timeline": selected rows in run order: scripts and browser pages, the reset row
                      (only when reset is on, directly before the oTree row, moves with it)
                      and the oTree row,
-         "available": what is not selected, offered to add}
+         "available": what is not in use, offered to add,
+         "groups": the same plus the tools that are off, grouped (timeline_available_groups),
+         "tools_on": the tools that are on, each with what to do next (``on_note``),
+         "env_vars": the selected variables, each with its value}
 
     Each row has ``id``, ``kind`` ("script" | "resetdb" | "otree" | "page"),
     ``source`` ("lab" | "own" | "admin" | ""), ``name`` (the plain name), ``label`` (what the
@@ -10249,9 +10817,13 @@ def launch_timeline(cfg, lab_presets=None):
                  for row in scripts + pages + env_rows if not row["selected"]]
     # Variables are not steps, so a selected one is not on the timeline: it has its own
     # short list with a value box. ``env_can_add``: the Add button for a config's own.
+    env_can_add = env_var_add_allowed(c, presets, env_rows)
+    tools_on = launch_tools_on(c)
     return {"timeline": timeline, "available": available,
             "env_vars": [row for row in env_rows if row["selected"]],
-            "env_can_add": env_var_add_allowed(c, presets, env_rows)}
+            "env_can_add": env_can_add,
+            "tools_on": [dict(row) for row in LAUNCH_TOOL_ROWS if row["id"] in tools_on],
+            "groups": timeline_available_groups(available, tools_on, env_can_add)}
 
 
 def move_launch_item(cfg, lab_presets, item_id, direction):
@@ -10397,6 +10969,7 @@ def launch_briefing_scripts(cfg, lab_presets=None):
         return []
     return [{"kind": r["kind"], "name": r["label"], "plain_name": r["name"],
              "script": "" if r["kind"] == "page" else r["detail"],
+             "tip": "" if r["kind"] == "page" else script_tip_text(r["detail"]),
              "url": r.get("address", "") if r["kind"] == "page" else "",
              "wait_text": r["wait_text"]} for r in rows]
 
@@ -11153,6 +11726,17 @@ def _launch_has_report(seq):
         row["kind"] == "page" for row in rows[:_pages_end_at(rows)])
 
 
+# Which part of the result screen a report row belongs under.
+REPORT_SECTION_STEPS = "steps"
+REPORT_SECTION_VALUES = "values"
+REPORT_SECTION_ENV = "env"
+# The headings of the launch summary, both faces.
+SUMMARY_WHERE_TITLE = "Where"
+SUMMARY_VALUES_TITLE = "Values for this launch"
+ENV_VALUES_SHOW_LABEL = "Show values"
+ENV_VALUES_HIDE_LABEL = "Hide values"
+
+
 def launch_box_report(seq):
     """What the result box gets: the report only when the launch had a script or a website
     placed among the steps. A launch with neither keeps the plain browser-pages list
@@ -11167,7 +11751,7 @@ def launch_report(seq):
     on a browser page. ``label`` says what the row did ("Open FOG"), ``name`` is plain."""
     out = _tool_report_rows((seq or {}).get("cfg"))
     for row in (seq or {}).get("rows", []):
-        out.append({"kind": row["kind"], "name": row["name"],
+        out.append({"kind": row["kind"], "section": REPORT_SECTION_STEPS, "name": row["name"],
                     "label": row.get("label", row["name"]), "outcome": row["outcome"],
                     "mark": row["mark"], "glyph": MARK_GLYPHS[row["mark"]], "text": row["text"],
                     "facts": list(row.get("facts", ())),
@@ -11215,8 +11799,9 @@ def launch_report_text(seq):
 
 # ---------------------------------------------------------------------------
 # Tools (2026-11-05): optional helpers ticked in Advanced, off by default. A tool that
-# is off changes nothing. A tool that is on adds a box to Before you launch (or to the
-# one-click shortcut's small box) and provides what was typed as environment variables.
+# is off changes nothing. A tool that is on asks for a value (Seat selection on the Lab
+# card, Lab session number in Before you launch, both in the one-click shortcut's small
+# box) and provides it as environment variables.
 #
 #   * Ticks: LAUNCH_TOOLS_KEY in the config, written only when not empty.
 #   * Typed values: per launch. They travel on the launch's own cfg dict under
@@ -11248,6 +11833,25 @@ TOOL_SEATS_INPUT_LABEL = "Number of seats"
 TOOL_SESSION_INPUT_LABEL = "Lab session number"
 TOOL_SEATS_PICK_HINT = "Click a seat to swap it. This does not change the participant list."
 TOOL_SEATS_BOX_TITLE = "Computers to start (scripts only)"
+# Seat selection on the Lab card (2026-11-05). The number and clicks live in the page or
+# the app until the launch: never in the config, so no edit, no save offer. They go to
+# launch_tools_state as ``values``. Switching lab or config clears them.
+SEAT_PICK_LABEL = "Computers to start"
+SEAT_PICK_BUTTON = "Select seats"
+SEAT_PICK_CHANGE = "Change"
+SEAT_PICK_CHANGE_TIP = "Back to the Lab card to change the computers to start"
+SEAT_PICK_COUNT_CAPTION = "%d to start"
+SEAT_PICK_OFF_NOTE = ("Seat selection is off, so seats chosen here are not used for anything "
+                      "and scripts get nothing. For this to do something, turn on Seat "
+                      "selection under Tools in Advanced.")
+SEAT_PICK_OFF_LINK = "Open Tools in Advanced"
+SEAT_SWITCH_LABEL = "Clicks choose:"
+SEAT_CLICKS_SEATS = "seats"
+SEAT_CLICKS_LIST = "list"
+SEAT_SWITCH_SEATS = "Computers to start"
+SEAT_SWITCH_LIST = "Participant list"
+SEAT_LIST_PICK_HINT = ("Click a seat to take it out of the participant list or put it back. "
+                       "This does not change the computers to start.")
 BROWSER_MODE_GONE_TITLE = "The launcher was closed"
 BROWSER_MODE_GONE_TEXT = "Start it again from its shortcut. A server it started keeps running."
 PARTICIPANT_LINE_EXCLUDED = "Participant list: %d of %d seats (%s excluded)"
@@ -11267,11 +11871,11 @@ LAB_SESSION_INVALID = ("Lab session number can only hold letters, digits, spaces
 LAB_SESSION_TOO_LONG = "Lab session number can be at most %d characters." % LAB_SESSION_MAX_LENGTH
 TOOL_LINE_SESSION = "Lab session: %s (saved in History)"
 TOOL_LINE_SESSION_BLANK = "Lab session: none"
-TOOL_LINE_SEATS = "Seats for scripts: %d (%s)"
-TOOL_LINE_SEATS_NONE = "Seats for scripts: 0"
-TOOL_LINE_SEATS_NO_LIST = "Seats for scripts: %d (this lab has no seat list)"
+TOOL_LINE_SEATS = "Computers to start: %d (%s)"
+TOOL_LINE_SEATS_NONE = "Computers to start: 0"
+TOOL_LINE_SEATS_NO_LIST = "Computers to start: %d (this lab has no seat list)"
 HISTORY_COLUMN_SESSION = "Lab session"
-HISTORY_COLUMN_SEATS = "Seats for scripts"
+HISTORY_COLUMN_SEATS = "Computers to start"
 TOOL_BOX_TITLE = "Before this launch"
 TOOL_BOX_INTRO = ("If you don't want to type these in, turn them off in Advanced. "
                   "Leaving them blank is fine: no computers are started (seats = 0) and no "
@@ -11291,10 +11895,12 @@ class ToolBoxUnavailable(Exception):
 
 LAUNCH_TOOL_ROWS = (
     {"id": TOOL_SEATS, "name": TOOLS_LABEL_SEATS,
-     "tip": "For scripts that start computers. Adds a Number of seats box and the seat map "
-            "to Before you launch. Scripts get %s and %s. The oTree room and its seat list "
-            "do not change." % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT)},
+     "on_note": "Choose the seats on the Lab card.",
+     "tip": "For scripts that start computers. Lets you choose seats on the Lab card, with "
+            "a number box and the seat map. Scripts get %s and %s. The oTree room and its "
+            "seat list do not change." % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT)},
     {"id": TOOL_LAB_SESSION, "name": TOOLS_LABEL_SESSION,
+     "on_note": "Asked for in Before you launch.",
      "tip": "Adds a box to Before you launch. The value goes to oTree and to scripts as %s "
             "and is kept in History." % TOOL_ENV_SESSION},
 )
@@ -11424,6 +12030,58 @@ def seat_tool_state(cfg, lab_presets=None, typed="", picked=None):
     return state
 
 
+def seat_click_target(seat_mode, panel_open, switch=SEAT_CLICKS_SEATS):
+    """What a click on the Lab card's map changes: SEAT_CLICKS_SEATS, SEAT_CLICKS_LIST or ""
+    (nothing). Both are possible only with Select seats open and the participant list on
+    Edit for this run, and then the switch decides, computers to start by default."""
+    edit = seat_mode == SEAT_EDIT
+    if panel_open and edit:
+        return SEAT_CLICKS_LIST if switch == SEAT_CLICKS_LIST else SEAT_CLICKS_SEATS
+    if panel_open:
+        return SEAT_CLICKS_SEATS
+    return SEAT_CLICKS_LIST if edit else ""
+
+
+def seat_switch_shown(seat_mode, panel_open):
+    """The "Clicks choose" switch exists only when a click could mean either."""
+    return bool(panel_open) and seat_mode == SEAT_EDIT
+
+
+def seat_map_hint(target):
+    """The line under the map says what a click does."""
+    if target == SEAT_CLICKS_SEATS:
+        return TOOL_SEATS_PICK_HINT
+    return SEAT_LIST_PICK_HINT if target == SEAT_CLICKS_LIST else ""
+
+
+def seat_pick_ui_text():
+    """The words the page needs for Select seats. Tk reads the same constants."""
+    return {"label": SEAT_PICK_LABEL, "button": SEAT_PICK_BUTTON, "change": SEAT_PICK_CHANGE,
+            "change_tip": SEAT_PICK_CHANGE_TIP, "count_caption": SEAT_PICK_COUNT_CAPTION,
+            "off_note": SEAT_PICK_OFF_NOTE, "off_link": SEAT_PICK_OFF_LINK,
+            "switch_label": SEAT_SWITCH_LABEL, "switch_seats": SEAT_SWITCH_SEATS,
+            "switch_list": SEAT_SWITCH_LIST, "blank_hint": TOOL_SEATS_BLANK_HINT,
+            "hint_seats": TOOL_SEATS_PICK_HINT, "hint_list": SEAT_LIST_PICK_HINT,
+            "tool_tip": LAUNCH_TOOL_ROWS[0]["tip"], "values_title": SUMMARY_VALUES_TITLE,
+            "where_title": SUMMARY_WHERE_TITLE, "env_show": ENV_VALUES_SHOW_LABEL}
+
+
+def seat_pick_state(cfg, lab_presets=None, values=None):
+    """The seat selection as the Lab card shows it, tool on or off. With the tool off nothing
+    here reaches a launch: launch_tools_state and launch_tool_env only look at a tool that
+    is on. ``line`` is the read-back of Before you launch."""
+    values = values or {}
+    seats = seat_tool_state(cfg, lab_presets, values.get("seat_number"),
+                            values.get("seats_picked"))
+    seats.update(label=TOOL_SEATS_INPUT_LABEL, hint=TOOL_SEATS_BLANK_HINT,
+                 pick_hint=TOOL_SEATS_PICK_HINT, box_title=TOOL_SEATS_BOX_TITLE,
+                 excluded=seats_out_of_participant_list(cfg, lab_presets),
+                 tool_on=TOOL_SEATS in launch_tools_on(cfg),
+                 line="" if seats["error"] else _tool_seats_line(seats["selected"],
+                                                                 seats["count"]))
+    return seats
+
+
 def _tool_seats_line(selected, count):
     if selected:
         return TOOL_LINE_SEATS % (count, ", ".join(selected))
@@ -11483,17 +12141,13 @@ def launch_tools_state(cfg, lab_presets=None, values=None):
         if ok:
             answer["lines"].append(_tool_session_line(clean))
     if TOOL_SEATS in tools:
-        seats = seat_tool_state(cfg, lab_presets, values.get("seat_number"),
-                                values.get("seats_picked"))
-        seats.update(label=TOOL_SEATS_INPUT_LABEL, hint=TOOL_SEATS_BLANK_HINT,
-                     pick_hint=TOOL_SEATS_PICK_HINT, box_title=TOOL_SEATS_BOX_TITLE,
-                     excluded=seats_out_of_participant_list(cfg, lab_presets))
+        seats = seat_pick_state(cfg, lab_presets, values)
         answer["seats"] = seats
         answer["participant_line"] = participant_list_line(cfg, lab_presets)
         answer["run"]["seats"] = list(seats["selected"])
         answer["run"]["seat_count"] = seats["count"]
         if not seats["error"]:
-            answer["lines"].append(_tool_seats_line(seats["selected"], seats["count"]))
+            answer["lines"].append(seats["line"])
     for part in (answer["session"], answer["seats"]):
         if part and part["error"]:
             answer.update(ok=False, error=answer["error"] or part["error"])
@@ -11539,25 +12193,28 @@ def launch_tool_lines(cfg):
     tools = launch_tools_on(cfg)
     run = cfg.get(LAUNCH_RUN_KEY) or {}
     lines = []
-    if TOOL_LAB_SESSION in tools:
-        lines.append(_tool_session_line(run.get("lab_session") or ""))
     if TOOL_SEATS in tools:
         lines.append(_tool_seats_line(run.get("seats") or [], int(run.get("seat_count") or 0)))
+    if TOOL_LAB_SESSION in tools:
+        lines.append(_tool_session_line(run.get("lab_session") or ""))
     return lines
 
 
 def _tool_report_rows(cfg):
-    """The tools' rows at the top of the launch report. Neutral mark: given, not checked."""
+    """The tools' rows at the top of the launch report, for the text report. The faces show
+    them under their own headings, by ``section``. Neutral mark: given, not checked."""
     rows = []
     for line in launch_tool_lines(cfg):
         name, _, text = line.partition(": ")
-        rows.append({"kind": "tool", "name": name, "outcome": OUTCOME_GIVEN, "mark": MARK_NEUTRAL,
+        rows.append({"kind": "tool", "section": REPORT_SECTION_VALUES, "name": name,
+                     "outcome": OUTCOME_GIVEN, "mark": MARK_NEUTRAL,
                      "glyph": MARK_GLYPHS[MARK_NEUTRAL], "text": text, "facts": [], "script": "",
                      "url": ""})
     # Said as set, not as used: the launcher never knows whether a study reads it.
     names = list(launch_env_vars(cfg or {}))
     if names:
-        rows.append({"kind": "tool", "name": ENV_VARS_TITLE, "outcome": OUTCOME_GIVEN,
+        rows.append({"kind": "tool", "section": REPORT_SECTION_ENV, "name": ENV_VARS_TITLE,
+                     "outcome": OUTCOME_GIVEN,
                      "mark": MARK_NEUTRAL, "glyph": MARK_GLYPHS[MARK_NEUTRAL],
                      "text": "set: " + ", ".join(names), "facts": [], "script": "", "url": ""})
     return rows
@@ -11706,7 +12363,7 @@ def study_shortcut_name(lab_label):
 #       "extra_env_vars" [{name, value, enabled}] = the config's own. Neither is written
 #       when empty, and there is no schema bump.
 #
-# Visible = offered in Advanced under Not selected, also for a new config. Selecting shows
+# Visible = offered in Advanced under Available tools, also for a new config. Selecting shows
 # a value box. Only a selected variable with a value is set, for the server and for scripts.
 # Hidden works as for scripts: tidiness, not a security boundary. A selected variable stays
 # selected when the lab hides or removes it, or the config moves to another lab; its row
@@ -11749,7 +12406,7 @@ ENV_VAR_RESERVED_PREFIXES = ("PYTHON", "LD_", "DYLD_", "OTREE_LAB_")
 ENV_VARS_TITLE = "Environment variables"
 ENV_VARS_CARD_TITLE = ENV_VARS_TITLE
 ENV_VARS_BRIEFING_TITLE = "Environment variables set"
-ENV_VARS_SETTINGS_INTRO = ("Ticked variables show in Advanced, not selected. Nothing is set "
+ENV_VARS_SETTINGS_INTRO = ("Ticked variables show in Advanced, under Available tools. Nothing is set "
                            "until a config selects one and gives it a value.")
 ENV_VARS_NONE_SHOWN = "None shown"
 ENV_VAR_ADD_LABEL = "Add variable"
@@ -12430,6 +13087,7 @@ def launch_briefing(cfg, lab_presets=None):
         # The environment variables this launch sets, secrets masked ([] = none; the
         # card then says nothing about them).
         "env_lines": launch_env_lines(c),
+        "env_names": list(launch_env_vars(c)),
         "env_title": ENV_VARS_BRIEFING_TITLE,
     }
 
@@ -14017,7 +14675,7 @@ def headless_missing_config_reason(wanted, names):
     names = [str(n).strip() for n in (names or []) if str(n or "").strip()]
     if wanted:
         if config_is_in_deleted_list(wanted):
-            lines = ['No saved config named "%s" on this computer. It is in Deleted configs in '
+            lines = ['No saved config named "%s" on this computer. It is in Old configs in '
                      "the launcher's Settings and can be recovered there." % wanted]
         else:
             lines = ['No saved config named "%s" on this computer. It may have been '
@@ -15696,8 +16354,10 @@ UI_TIPS = {
     "env_vars": "Variables a study or script can read. Tick one to show it in Advanced, not "
                 "selected. Nothing is set until a config selects it and gives it a value.",
     "launch_tools": "Optional helpers, off by default. A tool that is off changes nothing. A "
-                    "tool that is on adds a box to Before you launch and gives its value to "
-                    "scripts as an environment variable.",
+                    "tool that is on asks for a value, on the Lab card or in Before you launch, "
+                    "and gives it to scripts as an environment variable.",
+    "available_tools": "What you can add to this launch. Nothing here runs or is set until "
+                       "you tick it; then it moves up, into use.",
     "link_check": "Checked from this computer once the server was up: the link's address "
                   "is one of this computer's addresses, and the server answers on it. "
                   "A firewall on this computer is not tested this way: if the "
@@ -15788,6 +16448,11 @@ UI_TIPS = {
                 "it is placed. Before oTree it simply opens, after oTree it opens when the "
                 "server is ready. The oTree admin page stays after oTree.",
     "local_changes_block": "Git pull does not undo local edits.",
+    "branch_switch": "Shows the study's branch on the main screen, with Check branches to "
+                     "list the branches on GitHub and switch to one, for example to run "
+                     "lab-2026-11-10 and switch back afterwards. The launcher switches only "
+                     "when the folder has no changes of its own apart from the lab support "
+                     "block, which it takes out and adds back.",
 }
 
 
@@ -15865,6 +16530,15 @@ QUIT_LAUNCHER_NOTE = "Closes the launcher. A launched study keeps running."
 LAUNCH_HISTORY_LABEL = "Launch history"
 LAUNCH_HISTORY_BUTTON_LABEL = "History"
 VIEW_BLOCK_LINK_LABEL = "View settings.py block"
+# Take the block out again (2026-11-09): next to the viewer link once settings.py has a
+# block, and in the block viewer. remove_block does it.
+REMOVE_BLOCK_LABEL = "Remove lab support block"
+REMOVE_BLOCK_TITLE = "Remove the lab support block?"
+REMOVE_BLOCK_TEXT = ("This takes the launcher's block out of settings.py and leaves the "
+                     "rest of the file as it is. A backup of settings.py is saved first. "
+                     "To run the study in the lab again, click " + GET_READY_LABEL + ".")
+REMOVE_BLOCK_DONE_TEXT = "Removed the lab support block. Backup: %s"
+REMOVE_BLOCK_NONE_TEXT = "settings.py has no lab support block, so nothing was changed."
 # When settings.py cannot be replaced (SettingsFileRefused).
 SETTINGS_BY_HAND_TEXT = ('Or open "%s", click Copy and paste the block into settings.py '
                          "by hand." % VIEW_BLOCK_LINK_LABEL)
@@ -15951,7 +16625,7 @@ SAVE_AS_NEW_TITLE = "Save as new config"
 SAVE_CHANGES_TITLE = "Save changes"
 SAVE_COPY_TITLE = "Save a copy as"
 SAVE_NEW_CHOICE = "Save as new"
-SAVE_REPLACE_CHOICE_NOTE = "The old version goes to Deleted configs."
+SAVE_REPLACE_CHOICE_NOTE = "The old version goes to Old configs."
 SAVE_OFFER_UNSAVED_LINE = "This isn't saved yet. It will be saved as:"
 SAVE_OFFER_CHANGED_LINE = "%s has unsaved changes"
 SAVE_OFFER_SAME_LINE = "Same as %s"
@@ -15959,7 +16633,7 @@ SAVE_TICK_UNSAVED = "Save as"
 SAVE_TICK_CHANGED = "Save as new"
 SAVE_REPLACE_LABEL = "Replace %s"
 SAVE_REPLACE_NOTE = ("Will replace %s. Its one-click shortcut will run these settings too. "
-                     "The old version goes to Deleted configs.")
+                     "The old version goes to Old configs.")
 SAVE_BACK_LABEL = "Save as new instead"
 SAVE_SKIP_NOTE = "The one-click shortcut and the next session keep the saved version."
 SAVE_NAME_LABEL = "Config name"
@@ -16191,7 +16865,7 @@ def save_config_choice(host, mode, name, researcher, fields, target="", lab_pres
     ``store_extra`` and ``_mutate_store``.
 
     A failed write is undone in memory and claims nothing. Replacing keeps the config's
-    name, author and dates, moves a full copy of the old version into the deleted list
+    name, author and dates, moves a full copy of the old version into Old configs
     FIRST (no copy, no replace), and writes a line to the edit log; a log failure never
     blocks the save and comes back as ``warning``.
 
@@ -16435,23 +17109,23 @@ def config_history_rows(limit=200, path=None):
     return rows
 
 
-# -- deleted configs: a copy of each in deleted_configs.json, recoverable from Settings ---
+# -- Old configs: a copy of each in deleted_configs.json, recoverable from Settings ---
 
 DELETED_CONFIGS_FILENAME = "deleted_configs.json"
-DELETED_CONFIGS_LABEL = "Deleted configs"
-DELETED_CONFIGS_EMPTY = "No deleted configs."
+DELETED_CONFIGS_LABEL = "Old configs"
+DELETED_CONFIGS_EMPTY = "No old configs."
 DELETED_RECOVER_LABEL = "Recover"
-DELETE_CONFIRM_TEXT = ("This removes it from your configs. You can find it under Deleted "
-                       "configs in the settings.")
+DELETE_CONFIRM_TEXT = ("This removes it from your configs. You can find it under Old "
+                       "configs in Settings.")
 DELETE_COPY_FAILED = "Not deleted: could not keep a copy of it. %s"
 REPLACE_COPY_FAILED = "Not replaced: could not keep a copy of the old version. %s"
 DELETED_REASON_DELETED = "deleted"
 DELETED_REASON_REPLACED = "replaced"
-RECOVER_GONE = "That deleted config is no longer in the list."
+RECOVER_GONE = "That old config is no longer in the list."
 RECOVER_FAILED = "Could not recover: %s"
 RECOVERED_TEXT = 'Recovered "%s".'
 RECOVERED_RENAMED_TEXT = 'Recovered as "%s", because "%s" already exists.'
-RECOVER_LIST_WARNING = "Recovered, but it could not be taken off the deleted list: %s"
+RECOVER_LIST_WARNING = "Recovered, but it could not be taken off Old configs: %s"
 CONFIG_ACTION_DELETE = "delete"
 CONFIG_ACTION_RECOVER = "recover"
 CONFIG_ACTION_LABELS.update({CONFIG_ACTION_DELETE: "Deleted", CONFIG_ACTION_RECOVER: "Recovered"})
@@ -16559,15 +17233,15 @@ UNDO_NOTICE_SECONDS = 20
 UNDO_DELETED_NOTICE = "Deleted \u201c%s\u201d."
 UNDO_REPLACED_NOTICE = "Replaced \u201c%s\u201d."
 UNDO_REPLACE_DONE = ("Put back the previous version of \u201c%s\u201d. The version you replaced it "
-                     "with is in Deleted configs.")
-UNDO_GONE = "That copy is no longer in Deleted configs, so there is nothing to undo."
+                     "with is in Old configs.")
+UNDO_GONE = "That copy is no longer in Old configs, so there is nothing to undo."
 
 
 def undo_config_change(host, copy_id, name="", keep_order=False):
-    """Undo a Delete or a Replace from its notice, through the same copy Deleted configs
+    """Undo a Delete or a Replace from its notice, through the same copy Old configs
     holds. A delete: :func:`recover_deleted_config`, under the original name, or the usual
     -RECOVERED name when that name was taken since (the message says so). A replace: the
-    config of that name gets its previous version back; the version it had goes to Deleted
+    config of that name gets its previous version back; the version it had goes to Old
     configs, so nothing is lost either way. Never touches the form.
 
     Returns ``{"ok", "message", "warning", "name", "renamed", "preset"}``."""
@@ -16726,7 +17400,7 @@ def _deleted_when(stamp):
 
 
 def deleted_config_rows(lab_presets=None):
-    """The Deleted configs popup, newest first. Fail-soft: no file or a bad one = []."""
+    """The Old configs popup, newest first. Fail-soft: no file or a bad one = []."""
     try:
         entries = _read_deleted_entries()
     except Exception:  # noqa: BLE001 - e.g. a newer launcher's file: nothing to offer here
@@ -17047,7 +17721,8 @@ def finish_machine_setup(home_lab, pg_admin=None, databases=None, default_index=
             return out
         existing = load_lab_info() or {}
         info = build_lab_info(new_labs, admin=default_admin or {"username": "admin"})
-        for key in (GITHUB_SYNC_ENABLED_KEY, GITHUB_ORG_KEY, DB_LOCALHOST_ONLY_KEY):
+        for key in (GITHUB_SYNC_ENABLED_KEY, GITHUB_ORG_KEY, DB_LOCALHOST_ONLY_KEY,
+                    BRANCH_SWITCH_KEY):
             if key in existing:
                 info[key] = existing[key]
         save_lab_info(info)

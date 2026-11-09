@@ -47,20 +47,24 @@ extra.
 | Config dropdown | `select_config` | loads that saved config's fields |
 | Browse (project) | `pick_project_folder` | native folder dialog → validate → show apps |
 | Browse (participant file) | `pick_participant_file` | native file dialog |
-| Save config... | `save_dialog_state`, `save_config_as` | the same rules as the launch row (`core.save_config_choice`): new, or Replace (old version to Deleted configs) |
+| Save config... | `save_dialog_state`, `save_config_as` | the same rules as the launch row (`core.save_config_choice`): new, or Replace (old version to Old configs) |
 | Before you launch, save row | `launch_save_offer`, `launch(save=...)` | saves those fields first, then launches them; a failed save does not launch |
 | Sidebar click, delete, Quit, window close | `unsaved_question` | Save / Discard / Cancel when the form has unsaved work |
 | History > Config edits | `config_history` | read-only edit log |
-| Settings > Deleted configs | `deleted_configs`, `recover_config` | the list; Recover refreshes the sidebar and leaves the form alone |
+| Settings > Old configs | `deleted_configs`, `recover_config` | the list; Recover refreshes the sidebar and leaves the form alone |
 | Launch session | `launch_briefing` → `launch` | shows the per-machine instructions popup first (which lab/host, which per-seat link); on OKAY: resetdb (if ticked), starts `otree prodserver` in a new console, opens the page, then hands off to oTree and the launcher can close |
 | Save one-click shortcut… | `save_shortcut` | for a SAVED, unmodified config: writes a headless one-click shortcut (`.vbs`/`.command`) that re-runs the launcher for that config; the DB password stays in `machine.json`, never in the file |
 | Copy block | `settings_block_text` | copies the `settings.py` chunk for the researcher to paste themselves |
-| Advanced > What happens on launch | `launch_timeline`, `move_launch_item`, `validate_script`, `validate_service` | the timeline in run order (scripts, reset, oTree, then browser pages) and below it what is not selected; core decides both lists. The page keeps only the choices: `script_choices`, `extra_scripts`, `launch_order`, `service_choices`, `extra_services`, `open_browser`. Saved with the config. `launch_caption` gives the collapsed line ("2 scripts, oTree admin + 1 service") |
+| Lab card > Select seats | `seat_pick_state` | per launch, in the page only (`SEAT_PICK`), never in the form; goes to `launch(tools=)`; the switch only when the participant list is on Edit for this run (`seatClickTarget`, core `seat_click_target`) |
+| Advanced > Launch timeline, Available tools | `launch_timeline`, `move_launch_item`, `validate_script`, `validate_service` | the timeline in run order (scripts, reset, oTree, then browser pages) and below it what is not in use, in groups (`core.timeline_available_groups`); core decides both lists. The page keeps only the choices: `script_choices`, `extra_scripts`, `launch_order`, `service_choices`, `extra_services`, `open_browser`. Saved with the config. `launch_caption` gives the collapsed line ("2 scripts, oTree admin + 1 service") |
 | Launch result box | pushed by `_run_launch` (`report`, `headline`) | with at least one script: one row per timeline item with a mark that claims only what was checked (`core.launch_box_report`, PRINCIPLES 14); a failed script stops the launch and comes first. With no script: the browser-pages list |
 | Advanced > Edit on an own script | `own_script_stored`, `edit_own_script` | on a saved config writes only that script straight into `saved_configs.json`; the page moves its dirty baseline for that script only (`patchCleanSnapshot`) |
 | Settings > Additional services | `add_lab_service`, `update_lab_service`, `delete_lab_service` | per lab, in `lab_info.json` (name, web address, Include by default) |
 | Settings > Launch scripts | `add_lab_script`, `update_lab_script`, `delete_lab_script` | per lab, in `lab_info.json` (name, typed text, Include by default, Hidden, default position, wait rule) |
 | Get ready for the lab | `append_settings_block` | appends the lab support block to the selected project's `settings.py`, after a timestamped `.bak` backup; refuses to append twice |
+| Remove lab support block (link next to View settings.py block, and the block viewer) | `remove_settings_block` | after the page's question: `core.remove_block` takes the block out and nothing else, after a timestamped `.bak` |
+| Settings > GitHub > Allow experimenters to switch branches | `set_branch_switch` | lab setting in `lab_info.json` (`github_branch_switch`, off by default); `github_state` carries it as `branch_switch` |
+| Branch line + Check branches + Switch (study card, `#branchBox`, `renderBranchBox`) | `project_status(...).branch`, `study_branches`, `switch_branch` | the branch and core's note when it is not the default one (shown whatever the setting); with the setting: `git fetch` and the list, Switch after a question (`core.git_switch_branch`), the result under the list |
 
 The launcher writes into a researcher's own code in exactly **one** place, and
 never silently: the **Get ready for the lab** button (`append_settings_block`)

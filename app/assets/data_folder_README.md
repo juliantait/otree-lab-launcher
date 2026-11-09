@@ -24,7 +24,7 @@ example lab settings, the example room maps) live in `app/assets/`.
   record, not proof of who did it. Shown in History > Config edits.
 - `deleted_configs.json` - full copies of deleted configs and of versions replaced by Replace.
   **It holds what `saved_configs.json` holds, passwords included**, so treat it the same: never
-  copy it to another computer or share it. Shown in Settings > Deleted configs. Never cleaned up
+  copy it to another computer or share it. Shown in Settings > Old configs. Never cleaned up
   automatically.
 - `seats/` - generated participant-label files.
 - `locks/` - short-lived lock files (removed after use).

@@ -19,6 +19,7 @@ import collections
 import datetime as _dt
 import getpass
 import json
+import math
 import os
 import re
 import shlex
@@ -2536,7 +2537,6 @@ class SeatMapCanvas(tk.Canvas):
 
 class LauncherApp(object):
     # Room, Port and Participant list: one label width, in characters.
-    LAB_ROW_LABEL_WIDTH = 14
 
     def __init__(self, root, store_path=None):
         self.root = root
@@ -3198,6 +3198,33 @@ class LauncherApp(object):
         self.view_block_link.bind("<Button-1>", lambda _e: self.show_block())
         self.view_block_link.bind("<Return>", lambda _e: self.show_block())
         self.view_block_link.bind("<space>", lambda _e: self.show_block())
+        # Remove lab support block (2026-11-09): a second quiet link under the viewer
+        # link, only while settings.py has a block (_sync_remove_block_link).
+        self.remove_block_link = tk.Label(
+            holder, text=core.REMOVE_BLOCK_LABEL, bg=COLORS["card"], fg=COLORS["faint"],
+            font=self.fonts.small, cursor="hand2", anchor="w", takefocus=1)
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            self.remove_block_link.bind(sequence, lambda _e: self.remove_block())
+        # The branch (2026-11-09): which branch the study folder is on when it is not
+        # the default one, and with the lab setting "Allow experimenters to switch
+        # branches" a Check branches button that opens the selector (BranchDialog).
+        # Filled by _sync_branch_row; packed just above the divider.
+        self.branch_row = tk.Frame(holder, bg=COLORS["card"])
+        branch_line = tk.Frame(self.branch_row, bg=COLORS["card"])
+        branch_line.pack(fill="x")
+        tk.Label(branch_line, text=core.BRANCH_ROW_LABEL, bg=COLORS["card"],
+                 fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
+        self.branch_name = tk.Label(branch_line, text="", bg=COLORS["card"],
+                                    fg=COLORS["text"], font=self.fonts.small_bold)
+        self.branch_name.pack(side="left", padx=(8, 0))
+        self.branch_check_btn = ttk.Button(branch_line, text=core.CHECK_BRANCHES_LABEL,
+                                           style="Slim.TButton",
+                                           command=self.open_branch_dialog)
+        self.branch_note = tk.Label(self.branch_row, text="", bg=COLORS["card"],
+                                    fg=COLORS["warn"], font=self.fonts.small_bold,
+                                    anchor="w", justify="left", wraplength=380)
+        self._branch_info = {}
+        self._branch_info_path = None
 
         # The admin row is ONE summary line (UX simplification, #9):
         #
@@ -3384,20 +3411,48 @@ class LauncherApp(object):
         # removing moves it back down (core.launch_timeline decides both lists).
         self.timeline_frame = tk.Frame(body, bg=COLORS["card"])
         self.timeline_frame.pack(fill="x", pady=(4, 0))
-        # Not selected: collapsed on every start, nothing about it is remembered.
-        self.available_open = False
         self.script_shown = set()
+        # Under the timeline, each only when it has something: the selected variables with
+        # their values, the tools that are on.
+        self.env_slot = tk.Frame(body, bg=COLORS["card"])
+        self.env_slot.pack(fill="x")
+        self.tools_slot = tk.Frame(body, bg=COLORS["card"])
+        self.tools_slot.pack(fill="x")
+        # Available tools: everything not in use, one collapsed line per group
+        # (core.timeline_available_groups). Collapsed on every start, nothing remembered.
         self.available_box = tk.Frame(body, bg=COLORS["card"])
-        self.available_box.pack(fill="x", pady=(8, 0))
-        self.available_toggle = tk.Label(self.available_box, text="", bg=COLORS["card"],
-                                         fg=COLORS["muted"], font=fonts.small_bold, anchor="w",
-                                         cursor="hand2")
-        self.available_toggle.bind("<Button-1>", self._toggle_not_selected)
-        self.available_frame = tk.Frame(self.available_box, bg=COLORS["card"])
+        self.available_box.pack(fill="x", pady=(10, 0))
+        tk.Frame(self.available_box, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(0, 8))
+        avail_title = tk.Frame(self.available_box, bg=COLORS["card"])
+        avail_title.pack(fill="x")
+        self.available_title = tk.Label(avail_title, text=core.TIMELINE_AVAILABLE_TITLE,
+                                        bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold,
+                                        anchor="w")
+        self.available_title.pack(side="left")
+        info_tip(avail_title, core.ui_tip("available_tools"), font=fonts.small).pack(side="left")
+        self.available_groups = {}
+        for group in (core.TIMELINE_GROUP_TOOLS, core.TIMELINE_GROUP_ENV, core.TIMELINE_GROUP_STEPS):
+            holder = tk.Frame(self.available_box, bg=COLORS["card"])
+            toggle = tk.Label(holder, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                              font=fonts.small_bold, anchor="w", cursor="hand2")
+            toggle.pack(fill="x", pady=(4, 0))
+            toggle.bind("<Button-1>", lambda _e, g=group: self._toggle_available_group(g))
+            frame = tk.Frame(holder, bg=COLORS["card"])
+            self.available_groups[group] = {"holder": holder, "toggle": toggle, "frame": frame,
+                                            "open": False, "caption": ""}
+        self.tool_off_frame = tk.Frame(self.available_groups[core.TIMELINE_GROUP_TOOLS]["frame"],
+                                       bg=COLORS["card"])
+        self.tool_off_frame.pack(fill="x")
+        env_group = self.available_groups[core.TIMELINE_GROUP_ENV]["frame"]
+        self.env_available_frame = tk.Frame(env_group, bg=COLORS["card"])
+        self.env_available_frame.pack(fill="x")
+        steps_group = self.available_groups[core.TIMELINE_GROUP_STEPS]["frame"]
+        self.available_frame = tk.Frame(steps_group, bg=COLORS["card"])
+        self.available_frame.pack(fill="x")
 
         # Two buttons; each opens its form. One at a time.
-        add_buttons = tk.Frame(body, bg=COLORS["card"])
-        add_buttons.pack(fill="x", pady=(8, 0))
+        add_buttons = tk.Frame(steps_group, bg=COLORS["card"])
+        add_buttons.pack(fill="x", pady=(6, 0))
         self.script_open_button = ttk.Button(add_buttons, text=core.SCRIPT_ADD_OWN_LABEL,
                                              style="Slim.TButton",
                                              command=lambda: self._open_add_form("script"))
@@ -3406,16 +3461,17 @@ class LauncherApp(object):
                                               style="Slim.TButton",
                                               command=lambda: self._open_add_form("website"))
         self.service_open_button.pack(side="left", padx=(6, 0))
-        # Its own row: three buttons and the link do not fit on one line.
-        self.env_open_row = tk.Frame(body, bg=COLORS["card"])
+        self.script_vars_link = _tool_help_link(add_buttons, fonts, "variables")
+        self.script_vars_link.pack(side="right")
+        self.add_forms = tk.Frame(steps_group, bg=COLORS["card"])
+        self.add_forms.pack(fill="x")
+        self.env_open_row = tk.Frame(env_group, bg=COLORS["card"])
         self.env_open_button = ttk.Button(self.env_open_row, text=core.ENV_VAR_ADD_OWN_LABEL,
                                           style="Slim.TButton",
                                           command=lambda: self._open_add_form("env"))
         self.env_open_button.pack(side="left")
-        self.script_vars_link = _tool_help_link(add_buttons, fonts, "variables")
-        self.script_vars_link.pack(side="right")
-        self.add_forms = tk.Frame(body, bg=COLORS["card"])
-        self.add_forms.pack(fill="x")
+        self.env_forms = tk.Frame(env_group, bg=COLORS["card"])
+        self.env_forms.pack(fill="x")
 
         add_script = self.script_form = tk.Frame(self.add_forms, bg=COLORS["card"])
         add_script.columnconfigure(0, weight=1)
@@ -3474,8 +3530,8 @@ class LauncherApp(object):
                                      wraplength=420)
         self.services_msg.pack(fill="x")
         self._build_env_var_form()
-        self._build_env_var_list(body)
-        self._build_tools_list(body)
+        self._build_env_var_list(self.env_slot)
+        self._build_tools_list(self.tools_slot)
         self.address_shown = set()
         self.timeline_open_buttons = {}
         self.timeline_rows = {}
@@ -3499,7 +3555,7 @@ class LauncherApp(object):
     def _build_env_var_form(self):
         """The form behind "Add your own variable"."""
         fonts = self.fonts
-        form = self.env_form = tk.Frame(self.add_forms, bg=COLORS["card"])
+        form = self.env_form = tk.Frame(self.env_forms, bg=COLORS["card"])
         form.columnconfigure(1, weight=1)
         self.env_new_name = tk.StringVar(self.root, value="")
         self.env_new_value = tk.StringVar(self.root, value="")
@@ -3525,7 +3581,7 @@ class LauncherApp(object):
                    command=self._close_add_forms).pack(side="left", padx=(6, 0))
 
     def _build_env_var_list(self, body):
-        """Only what this config selected; the rest is under Not selected."""
+        """Only what this config selected; the rest is under Available tools."""
         fonts = self.fonts
         box = self.env_list = tk.Frame(body, bg=COLORS["card"])
         tk.Frame(box, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(10, 8))
@@ -3663,7 +3719,7 @@ class LauncherApp(object):
     def _render_env_vars(self, data):
         """Repaint the selected variables only when what they show changed."""
         if data["env_can_add"]:
-            self.env_open_row.pack(fill="x", pady=(4, 0), before=self.add_forms)
+            self.env_open_row.pack(fill="x", pady=(4, 0), before=self.env_forms)
         else:
             self.env_open_row.pack_forget()
         rows = data["env_vars"]
@@ -3679,7 +3735,7 @@ class LauncherApp(object):
             for row in rows:
                 self._env_row(self.env_rows_frame, row)
         if rows:
-            self.env_list.pack(fill="x", before=self.tools_list)
+            self.env_list.pack(fill="x")
         else:
             self.env_list.pack_forget()
         self._env_syncing = True
@@ -3699,12 +3755,12 @@ class LauncherApp(object):
             self._env_syncing = False
 
     def _build_tools_list(self, body):
-        """Tools in Advanced: one tick row per tool, off by default. A tick only changes the
-        config's launch_tools field; what it does happens at launch."""
+        """The tools: on, one tick row under the timeline; off, one under Available tools.
+        Each tool has both rows on one variable and shows the row that fits. A tick only
+        changes the config's launch_tools field; what it does happens at launch."""
         fonts = self.fonts
         box = self.tools_list = tk.Frame(body, bg=COLORS["card"])
-        box.pack(fill="x", pady=(10, 0))
-        tk.Frame(box, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(0, 8))
+        tk.Frame(box, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(10, 8))
         title = tk.Frame(box, bg=COLORS["card"])
         title.pack(fill="x")
         tk.Label(title, text=core.TOOLS_TITLE, bg=COLORS["card"], fg=COLORS["text"],
@@ -3712,40 +3768,68 @@ class LauncherApp(object):
         info_tip(title, core.ui_tip("launch_tools"), font=fonts.small).pack(side="left")
         self.tool_vars = {}
         self.tool_checks = {}
+        self.tool_lines = {}
         self._tool_syncing = False
-        for row in core.LAUNCH_TOOL_ROWS:
-            line = tk.Frame(box, bg=COLORS["card"])
-            line.pack(fill="x", pady=(3, 0))
-            var = tk.BooleanVar(self.root, value=False)
+
+        def tool_row(parent, row, var, on):
+            line = tk.Frame(parent, bg=COLORS["card"])
             check = tk.Checkbutton(line, text=row["name"], variable=var, bg=COLORS["card"],
-                                   fg=COLORS["text"], font=fonts.small, anchor="w",
-                                   activebackground=COLORS["card"], selectcolor=COLORS["card"],
-                                   highlightthickness=0, bd=0,
+                                   fg=COLORS["text"], font=fonts.body, anchor="w",
+                                   activebackground=COLORS["card"],
+                                   selectcolor=COLORS["accent"] if on else COLORS["card"],
+                                   highlightthickness=0, bd=0, padx=0, cursor="hand2",
                                    command=self._on_tool_tick)
             check.pack(side="left")
             Tooltip(check, lambda text=row["tip"]: text).attach(check)
-            self.tool_vars[row["id"]] = var
-            self.tool_checks[row["id"]] = check
             if row["id"] == core.TOOL_LAB_SESSION:
-                self.lab_session_help = tk.Label(
+                help_icon = tk.Label(
                     line, text=" " + glyph_or_fallback("\u24d8", "(i)"), bg=COLORS["card"],
                     fg=COLORS["accent"], cursor="hand2", bd=0, padx=0, pady=0, font=fonts.small)
-                self.lab_session_help.pack(side="left")
-                self.lab_session_help.bind(
+                help_icon.pack(side="left")
+                help_icon.bind(
                     "<Button-1>", lambda _e: show_tool_help(self.root, self.fonts, "session"))
-                Tooltip(self.lab_session_help, lambda: core.TOOL_HELP_LINK).attach(
-                    self.lab_session_help)
+                Tooltip(help_icon, lambda: core.TOOL_HELP_LINK).attach(help_icon)
+                if on:
+                    self.lab_session_help = help_icon
             else:
                 info_tip(line, row["tip"], font=fonts.small).pack(side="left")
+            if on:
+                tk.Label(line, text=row["on_note"], bg=COLORS["card"], fg=COLORS["muted"],
+                         font=fonts.small, anchor="w").pack(side="left", padx=(6, 0))
+            return line, check
+
+        for row in core.LAUNCH_TOOL_ROWS:
+            var = tk.BooleanVar(self.root, value=False)
+            on_line, on_check = tool_row(box, row, var, True)
+            off_line, off_check = tool_row(self.tool_off_frame, row, var, False)
+            self.tool_vars[row["id"]] = var
+            self.tool_lines[row["id"]] = {True: (on_line, on_check), False: (off_line, off_check)}
+            off_line.pack(fill="x", pady=(3, 0))
+            self.tool_checks[row["id"]] = off_check
 
     def _on_tool_tick(self):
         if self._tool_syncing:
             return
+        before = core.launch_tools_on({core.LAUNCH_TOOLS_KEY: self._raw_tools()})
         ticked = [tool for tool, var in self.tool_vars.items() if var.get()]
         self.var[core.LAUNCH_TOOLS_KEY].set(json.dumps(core.normalize_launch_tools(ticked)))
+        # Seat selection on: its box and map are ready on the Lab card. Off: they go.
+        now = core.TOOL_SEATS in ticked
+        if now != (core.TOOL_SEATS in before):
+            self.seat_panel_open = now
+            if now:
+                self._map_expanded = True
+            self._apply_lab_view()
+
+    def _raw_tools(self):
+        try:
+            return json.loads(self.var[core.LAUNCH_TOOLS_KEY].get() or "[]")
+        except (ValueError, tk.TclError):
+            return []
 
     def _sync_tool_ticks(self, cfg):
-        """The ticks follow the form (loading another config changes them)."""
+        """The ticks follow the form (loading another config changes them), and each tool
+        shows in the list that fits: on under the timeline, off under Available tools."""
         if not getattr(self, "tool_vars", None):
             return
         on = core.launch_tools_on(cfg)
@@ -3756,6 +3840,16 @@ class LauncherApp(object):
                     var.set(tool in on)
         finally:
             self._tool_syncing = False
+        for tool in self.tool_vars:
+            shown = tool in on
+            line, check = self.tool_lines[tool][shown]
+            self.tool_lines[tool][not shown][0].pack_forget()
+            line.pack(fill="x", pady=(3, 0))
+            self.tool_checks[tool] = check
+        if on:
+            self.tools_list.pack(fill="x")
+        else:
+            self.tools_list.pack_forget()
 
     def _toggle_advanced(self, _event=None):
         self.advanced_shown.set(not self.advanced_shown.get())
@@ -3937,26 +4031,54 @@ class LauncherApp(object):
         form = {"script": self.script_form, "env": self.env_form}.get(kind, self.service_form)
         form.pack(fill="x", pady=(8, 0))
 
-    def _toggle_not_selected(self, _event=None):
-        self.available_open = not self.available_open
-        self._render_not_selected()
+    def _toggle_available_group(self, group):
+        self.available_groups[group]["open"] = not self.available_groups[group]["open"]
+        self._render_available_groups()
 
-    def _render_not_selected(self, count=None):
-        if count is not None:
-            self._available_count = count
-        count = getattr(self, "_available_count", 0)
-        if not count:
-            self.available_toggle.pack_forget()
-            self.available_frame.pack_forget()
-            return
-        self.available_toggle.configure(
-            text=("▾  " if self.available_open else "▸  ")
-            + core.timeline_available_caption(count).upper())
-        self.available_toggle.pack(fill="x")
-        if self.available_open:
-            self.available_frame.pack(fill="x", pady=(2, 0))
-        else:
-            self.available_frame.pack_forget()
+    def _render_available_groups(self, groups=None):
+        if groups is not None:
+            self._available_data = {g["id"]: g for g in groups}
+        data = getattr(self, "_available_data", {})
+        for group, parts in self.available_groups.items():
+            found = data.get(group)
+            if found is None:
+                parts["holder"].pack_forget()
+                continue
+            parts["toggle"].configure(text=("▾  " if parts["open"] else "▸  ")
+                                      + found["caption"].upper())
+            parts["holder"].pack(fill="x")
+            if parts["open"]:
+                parts["frame"].pack(fill="x", padx=(16, 0), pady=(2, 6))
+            else:
+                parts["frame"].pack_forget()
+
+    def _open_tools_section(self):
+        """The Lab card's note: straight to where Seat selection is turned on."""
+        if not self.advanced_shown.get():
+            self._toggle_advanced()
+        self.available_groups[core.TIMELINE_GROUP_TOOLS]["open"] = True
+        self._render_available_groups()
+        line, check = self.tool_lines[core.TOOL_SEATS][False]
+        self._scroll_to(line)
+        try:
+            check.focus_set()
+            check.configure(bg=COLORS["accent_soft"])
+            self.root.after(1400, lambda: check.winfo_exists() and check.configure(bg=COLORS["card"]))
+        except tk.TclError:
+            pass
+
+    def _scroll_to(self, widget):
+        """Bring a widget of the settings column into view."""
+        try:
+            self.root.update_idletasks()
+            scroll = self.settings_pane
+            inner = scroll.inner
+            top = widget.winfo_rooty() - inner.winfo_rooty()
+            height = max(inner.winfo_height(), 1)
+            view = scroll.canvas.winfo_height()
+            scroll.canvas.yview_moveto(max(0.0, (top - view / 2.0) / height))
+        except (tk.TclError, AttributeError):
+            pass
 
     def _toggle_script_text(self, script_id, label, button):
         """Show script: a hover is no use on a keyboard or for a long script."""
@@ -4043,7 +4165,7 @@ class LauncherApp(object):
         if signature == self._services_signature:
             return
         self._services_signature = signature
-        for frame in (self.timeline_frame, self.available_frame):
+        for frame in (self.timeline_frame, self.available_frame, self.env_available_frame):
             for child in list(frame.winfo_children()):
                 child.destroy()
         self.timeline_rows, self.timeline_checks = {}, {}
@@ -4063,8 +4185,9 @@ class LauncherApp(object):
                 block = self._timeline_block(self.timeline_frame, data["timeline"][index:])
             self._timeline_row(block, row, True)
         for row in data["available"]:
-            self._timeline_row(self.available_frame, row, False)
-        self._render_not_selected(len(data["available"]))
+            self._timeline_row(self.env_available_frame if row["kind"] == "env_var"
+                               else self.available_frame, row, False)
+        self._render_available_groups(data["groups"])
 
     def _row_arrows(self, parent, row, side="left"):
         """A row's up and down arrows. Off because of a rule, a hover says which."""
@@ -4124,8 +4247,8 @@ class LauncherApp(object):
                 line, text=row.get("label", row["name"]), variable=var, bg=COLORS["card"],
                 fg=COLORS["text"],
                 activebackground=COLORS["card"], activeforeground=COLORS["text"],
-                selectcolor=COLORS["accent"], font=fonts.body, anchor="w", bd=0,
-                highlightthickness=0, padx=0, cursor="hand2",
+                selectcolor=COLORS["accent"] if selected else COLORS["card"], font=fonts.body,
+                anchor="w", bd=0, highlightthickness=0, padx=0, cursor="hand2",
                 command=lambda r=row, v=var: self._on_timeline_tick(r, v))
             check.pack(side="left")
             self.timeline_checks[row["id"]] = (check, var)
@@ -4439,22 +4562,26 @@ class LauncherApp(object):
         # One label width, so the values of Room, Port and Participant list line up.
         def value_row(parent, label):
             tk.Label(parent, text=label, bg=COLORS["card"], fg=COLORS["muted"], font=self.fonts.body,
-                     width=self.LAB_ROW_LABEL_WIDTH, anchor="w").pack(side="left", padx=(0, 6))
+                     width=self._lab_label_width(), anchor="w", padx=0).pack(side="left", padx=(0, 4))
             pill = tk.Label(parent, text="", bg=COLORS["accent_soft"], fg=COLORS["accent"],
                             font=self.fonts.small_bold, padx=8, pady=2, highlightthickness=1,
-                            highlightbackground=COLORS["accent"])
+                            highlightbackground=COLORS["accent"], justify="left")
             pill.pack(side="left")
             pen = tk.Label(parent, text=" ✎", bg=COLORS["card"], fg=COLORS["muted"],
                            font=self.fonts.small_bold, cursor="hand2")
-            pen.pack(side="left", padx=(2, 0))
+            pen.pack(side="left", padx=(1, 0))
             self._pen_hover(pen)
             tag = tk.Label(parent, text="", bg=COLORS["card"], fg=COLORS["muted"],
                            font=self.fonts.small, anchor="w")
-            tag.pack(side="left", padx=(6, 0))
+            tag.pack(side="left", padx=(4, 0))
             return pill, pen, tag
         self.room_value_label, self.room_edit_link, self.room_default_tag = value_row(
             self.room_row, "Room")
         self.room_value_label.configure(textvariable=self.var["room_name"])
+        # A long room name wraps inside its pill: the row stays in the card.
+        self.room_row.bind("<Configure>", lambda e: self.room_value_label.configure(
+            wraplength=max(e.width - self.fonts.body.measure("Participant list")
+                           - self.fonts.small.measure("(this config)") - 60, 100)))
         self.room_edit_link.bind("<Button-1>", lambda _e: self.pick_room())
         Tooltip(self.room_edit_link, lambda: core.ROOM_PEN_TIP).attach(self.room_edit_link)
         self.var["room_name"].trace_add("write", lambda *_a: self._update_room_default_tag())
@@ -4496,8 +4623,8 @@ class LauncherApp(object):
         partrow = tk.Frame(body, bg=COLORS["card"])
         partrow.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         tk.Label(partrow, text="Participant list", bg=COLORS["card"], fg=COLORS["muted"],
-                 font=self.fonts.body, width=self.LAB_ROW_LABEL_WIDTH, anchor="w").pack(
-            side="left", padx=(0, 6))
+                 font=self.fonts.body, width=self._lab_label_width(), anchor="w", padx=0).pack(
+            side="left", padx=(0, 4))
         self.seat_mode_box = ttk.Combobox(
             partrow, textvariable=self.seat_mode_label, state="readonly", width=22,
             values=[SEAT_MODE_LABELS[m] for m in
@@ -4553,11 +4680,23 @@ class LauncherApp(object):
                                     cursor="hand2")
         self.map_caption.grid(row=0, column=0, sticky="w")
         self.map_caption.bind("<Button-1>", self._toggle_map)
+        # Select seats: the same small selectable button as localhost / Other host.
+        self.seat_select_button = self._make_small_toggle(self.map_holder, core.SEAT_PICK_BUTTON,
+                                                          self._toggle_seat_panel)
+        self.seat_select_button["frame"].grid(row=0, column=1, sticky="e")
+        for part in self.seat_select_button.values():
+            Tooltip(part, lambda: core.LAUNCH_TOOL_ROWS[0]["tip"]).attach(part)
         self.map_subcaption = tk.Label(self.map_holder, text="", bg=COLORS["card"],
                                        fg=COLORS["faint"], font=self.fonts.small, anchor="w")
-        self.map_subcaption.grid(row=1, column=0, sticky="w", pady=(1, 5))
+        self.map_subcaption.grid(row=1, column=0, columnspan=2, sticky="w", pady=(1, 5))
+        self._build_seat_panel()
         self.seat_map = SeatMapCanvas(self.map_holder, self.fonts)
-        self.seat_map.grid(row=2, column=0, sticky="ew")
+        self.seat_map.grid(row=3, column=0, columnspan=2, sticky="ew")
+        self.seat_hint = tk.Label(self.map_holder, text="", bg=COLORS["card"], fg=COLORS["faint"],
+                                  font=self.fonts.small, anchor="w", justify="left", wraplength=400)
+        self.seat_hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.seat_hint.grid_remove()
+        self.map_holder.bind("<Configure>", self._wrap_seat_words)
 
         # -- settings.py block. Nothing shows here when the block is fine (round
         #    6): only when it is MISSING or broken does a short problem line plus
@@ -4576,6 +4715,83 @@ class LauncherApp(object):
             relief="flat", padx=12, pady=5, cursor="hand2")
         self.block_button.grid(row=0, column=0, sticky="w")
         body.bind("<Configure>", self._resize_lab_labels)
+
+    def _make_small_toggle(self, parent, text, command):
+        """A small bordered button in the lab-tile style, pressed look set by the caller."""
+        button = tk.Frame(parent, bg=COLORS["card"], highlightthickness=1,
+                          highlightbackground=COLORS["card_line"],
+                          highlightcolor=COLORS["accent"], cursor="hand2", takefocus=1)
+        label = tk.Label(button, text=text, bg=COLORS["card"], fg=COLORS["text"],
+                         font=self.fonts.small_bold, padx=10, pady=3, cursor="hand2")
+        label.pack()
+        for widget in (button, label):
+            widget.bind("<Button-1>", command)
+        for key in ("<space>", "<Return>"):
+            button.bind(key, command)
+        return {"frame": button, "label": label}
+
+    def _wrap_seat_words(self, event):
+        """The Lab card's width decides where its words wrap, also the caption beside Select
+        seats."""
+        width = max(event.width - 6, 160)
+        for label in (self.seat_off_note, self.seat_error, self.seat_note, self.seat_hint):
+            label.configure(wraplength=width)
+        button = self.seat_select_button["frame"].winfo_reqwidth()
+        self.map_caption.configure(wraplength=max(width - button - 10, 120), justify="left")
+
+    def _build_seat_panel(self):
+        """The number box, its messages, the note for a tool that is off, and the switch."""
+        fonts = self.fonts
+        panel = self.seat_panel = tk.Frame(self.map_holder, bg=COLORS["card"])
+        panel.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 5))
+        self.seat_panel_open = False
+        self.seat_state = None
+        self._seat_lab = None
+        self._seat_sync = False
+        self._seat_session_keep = ""
+        self.seat_pick = {"seat_number": "", "seats_picked": None}
+        self.seat_clicks = core.SEAT_CLICKS_SEATS
+        self.seat_off_box = tk.Frame(panel, bg=COLORS["card"])
+        self.seat_off_note = tk.Label(self.seat_off_box, text=core.SEAT_PICK_OFF_NOTE,
+                                      bg=COLORS["card"], fg=COLORS["warn"], font=fonts.small,
+                                      anchor="w", justify="left", wraplength=400)
+        self.seat_off_note.pack(fill="x")
+        self.seat_off_link = tk.Label(self.seat_off_box, text=core.SEAT_PICK_OFF_LINK,
+                                      bg=COLORS["card"], fg=COLORS["accent"], font=fonts.small_bold,
+                                      anchor="w", cursor="hand2")
+        self.seat_off_link.pack(fill="x")
+        self.seat_off_link.bind("<Button-1>", lambda _e: self._open_tools_section())
+        self.seat_number_row = tk.Frame(panel, bg=COLORS["card"])
+        seat_label = tk.Label(self.seat_number_row, text=core.SEAT_PICK_LABEL, bg=COLORS["card"],
+                              fg=COLORS["text"], font=fonts.small_bold, anchor="w")
+        seat_label.pack(side="left")
+        Tooltip(seat_label, lambda: core.LAUNCH_TOOL_ROWS[0]["tip"]).attach(seat_label)
+        self.seat_number_var = tk.StringVar(self.root, value="")
+        self.seat_number_entry = ttk.Entry(self.seat_number_row, textvariable=self.seat_number_var,
+                                           width=7)
+        self.seat_number_entry.pack(side="left", padx=(8, 0))
+        # Enter here must not launch: it is too easy to press after typing a number.
+        self.seat_number_entry.bind("<Return>", lambda _e: "break")
+        tk.Label(self.seat_number_row, text=core.TOOL_SEATS_BLANK_HINT, bg=COLORS["card"],
+                 fg=COLORS["faint"], font=fonts.small, anchor="w").pack(side="left", padx=(8, 0))
+        self.seat_number_var.trace_add("write", self._seat_number_typed)
+        self.seat_error = tk.Label(panel, text="", bg=COLORS["card"], fg=COLORS["error"],
+                                   font=fonts.small_bold, anchor="w", justify="left", wraplength=400)
+        self.seat_note = tk.Label(panel, text="", bg=COLORS["card"], fg=COLORS["muted"],
+                                  font=fonts.small, anchor="w", justify="left", wraplength=400)
+        self.seat_switch = tk.Frame(panel, bg=COLORS["card"])
+        tk.Label(self.seat_switch, text=core.SEAT_SWITCH_LABEL, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=fonts.small, anchor="w").pack(side="left", padx=(0, 6))
+        self.seat_switch_buttons = {}
+        for which, text in ((core.SEAT_CLICKS_SEATS, core.SEAT_SWITCH_SEATS),
+                            (core.SEAT_CLICKS_LIST, core.SEAT_SWITCH_LIST)):
+            label = tk.Label(self.seat_switch, text=text, bg=COLORS["card"], fg=COLORS["muted"],
+                             font=fonts.small_bold, padx=9, pady=2, cursor="hand2",
+                             highlightthickness=1, highlightbackground=COLORS["card_line"])
+            label.pack(side="left")
+            label.bind("<Button-1>", lambda _e, w=which: self._set_seat_clicks(w))
+            self.seat_switch_buttons[which] = label
+        panel.grid_remove()
 
     def _rebuild_lab_tiles(self, ncols=2, config_lab=None):
         """(Re)build one tile per lab the selector should offer. Called at
@@ -4723,9 +4939,195 @@ class LauncherApp(object):
             parts["label"].configure(bg=bg, fg=fg)
             parts["sub"].configure(bg=bg, fg=subfg)
 
+    def _lab_label_width(self):
+        """The label column of Room, Port and Participant list, in the characters Tk counts
+        in: as narrow as the longest label in this font, so the rows read as one group."""
+        font = self.fonts.body
+        return int(math.ceil(font.measure("Participant list") / float(max(font.measure("0"), 1))))
+
     def _toggle_map(self, _event=None):
         self._map_expanded = not getattr(self, "_map_expanded", False)
         self._apply_lab_view()
+
+    # -- Select seats on the Lab card. Core decides (core.seat_pick_state); the number and the
+    #    clicks live here until a launch, never on the form, so they are no config edit and
+    #    no save offer. Switching lab or config clears them; a launch that worked too. The
+    #    map is the one the participant list uses: core.seat_click_target says which of the
+    #    two a click changes, and neither path touches the other's data.
+
+    def _seat_values(self):
+        return dict(self.seat_pick)
+
+    def _seat_clear(self):
+        self.seat_pick = {"seat_number": "", "seats_picked": None}
+        self.seat_clicks = core.SEAT_CLICKS_SEATS
+        self._seat_sync = True
+        try:
+            self.seat_number_var.set("")
+        finally:
+            self._seat_sync = False
+
+    def _seat_pseudo(self):
+        return self.var["lab"].get() in (LAB_CUSTOM, LAB_LOCAL)
+
+    def _seat_tool_on(self):
+        return core.TOOL_SEATS in core.launch_tools_on({core.LAUNCH_TOOLS_KEY: self._raw_tools()})
+
+    def _seat_panel_shown(self):
+        return self._seat_tool_on() if self._seat_pseudo() else bool(self.seat_panel_open)
+
+    def _seat_target(self):
+        return core.seat_click_target(self.var["seat_mode"].get(), self._seat_panel_shown(),
+                                      self.seat_clicks)
+
+    def _toggle_seat_panel(self, _event=None):
+        self.seat_panel_open = not self.seat_panel_open
+        if self.seat_panel_open:
+            self._map_expanded = True
+        self._apply_lab_view()
+        if self.seat_panel_open and self._seat_tool_on():
+            self.seat_number_entry.focus_set()
+
+    def _set_seat_clicks(self, which):
+        self.seat_clicks = which
+        self._apply_lab_view()
+
+    def _seat_number_typed(self, *_args):
+        if self._seat_sync:
+            return
+        number = self.seat_number_var.get()
+        if number != self.seat_pick["seat_number"]:
+            self.seat_pick = {"seat_number": number, "seats_picked": None}
+            self._seat_show()
+
+    def _seat_map_click(self, seat):
+        """What a click does is decided at the click, so it can never act on what the switch
+        said a moment ago."""
+        target = self._seat_target()
+        if target == core.SEAT_CLICKS_LIST:
+            self._toggle_seat(seat)
+            self._seat_show()
+        elif target == core.SEAT_CLICKS_SEATS:
+            now = list(self.seat_state["selected"])
+            if seat in now:
+                now.remove(seat)
+            else:
+                now.append(seat)
+            self.seat_pick = {"seat_number": str(len(now)), "seats_picked": now}
+            self._seat_show()
+
+    def _show_seat_map(self, lab):
+        """The one place the Lab card's map is drawn."""
+        state, shown = self.seat_state, self._seat_panel_shown()
+        edit = self.var["seat_mode"].get() == SEAT_EDIT
+        target = self._seat_target()
+        # While seats are being selected only a real exclusion is struck through (core).
+        excluded = self.seat_excluded if (edit or not shown) else ()
+        selected = state["selected"] if state and (shown or self._seat_tool_on()) else None
+        self.seat_map.show(self._lab_seatmap_data(lab, keep_order=shown), excluded=excluded,
+                           interactive=bool(target), on_toggle=self._seat_map_click,
+                           selected=selected, strike=shown)
+
+    def _seat_show(self):
+        """Put the current selection on the card: the box, its messages, the map, the caption."""
+        if not hasattr(self, "seat_panel"):
+            return
+        try:
+            cfg = self.form_values()
+        except tk.TclError:
+            return
+        state = self.seat_state = core.seat_pick_state(cfg, self.lab_presets, self._seat_values())
+        if not state["error"]:
+            self.seat_pick["seat_number"] = state["typed"]
+            if self.seat_number_var.get().strip() != state["typed"]:
+                self._seat_sync = True
+                try:
+                    self.seat_number_var.set(state["typed"])
+                finally:
+                    self._seat_sync = False
+        lab = self.var["lab"].get()
+        shown, pseudo = self._seat_panel_shown(), self._seat_pseudo()
+        tool_on = state["tool_on"]
+        target = self._seat_target()
+
+        def say(label, text):
+            label.configure(text=text)
+            if text:
+                label.pack(fill="x", pady=(3, 0))
+            else:
+                label.pack_forget()
+        # Fixed order in the panel: note, number, messages, switch.
+        for widget in (self.seat_off_box, self.seat_number_row, self.seat_error, self.seat_note,
+                       self.seat_switch):
+            widget.pack_forget()
+        if shown:
+            if not tool_on:
+                self.seat_off_box.pack(fill="x", pady=(0, 5))
+            self.seat_number_row.pack(fill="x")
+            say(self.seat_error, state["error"])
+            say(self.seat_note, state["note"])
+            if core.seat_switch_shown(self.var["seat_mode"].get(), shown) and not pseudo:
+                self.seat_switch.pack(fill="x", pady=(7, 0))
+                self._style_seat_switch()
+            self.seat_panel.grid()
+        else:
+            self.seat_panel.grid_remove()
+        hint = core.seat_map_hint(target) if shown and not pseudo and state["has_list"] else ""
+        self.seat_hint.configure(text=hint)
+        if hint and self.seat_map.winfo_manager():
+            self.seat_hint.grid()
+        else:
+            self.seat_hint.grid_remove()
+        self._style_seat_button(shown)
+        if not pseudo:
+            self._seat_caption(lab)
+            if self.seat_map.winfo_manager():
+                self._show_seat_map(lab)
+
+    def _seat_caption(self, lab):
+        """The caption: core's seats line, and how many are to start when that means something."""
+        mode = self.var["seat_mode"].get()
+        cfg = self.form_values()
+        default_seats = self._lab_default_seats(cfg)
+        excluded = len(self.seat_excluded & set(default_seats)) if mode == SEAT_EDIT else 0
+        text = core.seats_caption(len(default_seats), excluded)
+        state = self.seat_state
+        if state and state["tool_on"] and not state["error"] and state["count"]:
+            text += " · " + core.SEAT_PICK_COUNT_CAPTION % state["count"]
+        arrow = "▾" if self.seat_map.winfo_manager() else "▸"
+        self.map_caption.configure(text="%s  %s" % (arrow, text.upper()))
+
+    def _style_seat_button(self, pressed):
+        parts = self.seat_select_button
+        if pressed:
+            bg, fg, border = COLORS["accent_soft"], COLORS["accent"], COLORS["accent"]
+        else:
+            bg, fg, border = COLORS["card"], COLORS["text"], COLORS["card_line"]
+        parts["frame"].configure(bg=bg, highlightbackground=border)
+        parts["label"].configure(bg=bg, fg=fg)
+
+    def _style_seat_switch(self):
+        for which, label in self.seat_switch_buttons.items():
+            on = which == self.seat_clicks
+            label.configure(bg=COLORS["accent_soft"] if on else COLORS["card"],
+                            fg=COLORS["accent"] if on else COLORS["muted"],
+                            highlightbackground=COLORS["accent"] if on else COLORS["card_line"],
+                            font=self.fonts.small_bold)
+
+    def _change_seats(self, session_value=""):
+        """Before you launch's Change: back to the card, the box ready. What was typed as lab
+        session number is kept for the popup that opens next."""
+        self._seat_session_keep = session_value
+        dialog = getattr(self, "_briefing_dialog", None)
+        if dialog is not None:
+            dialog._close()
+        self.seat_panel_open = True
+        self._map_expanded = True
+        self._apply_lab_view()
+        try:
+            self.seat_number_entry.focus_set()
+        except tk.TclError:
+            pass
 
     # -- the launch port --------------------------------------------------------
 
@@ -4804,37 +5206,44 @@ class LauncherApp(object):
             self.custom_fields.grid_remove()
             self.room_row.grid()
 
+        # Switching lab clears the seat selection: it was for that lab's seats.
+        if lab != self._seat_lab:
+            self._seat_lab = lab
+            self._seat_clear()
+        if mode != SEAT_EDIT:
+            self.seat_clicks = core.SEAT_CLICKS_SEATS
         # The room-layout map: collapsible in Lab-default mode (collapsed by
-        # default), auto-opened in Edit mode where the seats are the selector.
-        if not pseudo and mode in (SEAT_DEFAULT, SEAT_EDIT):
+        # default), auto-opened in Edit mode where the seats are the selector. With Seat
+        # selection on it shows whatever the participant list is: the tool reads the lab's
+        # list. Off a real lab that is the number box only.
+        tool_on = self._seat_tool_on()
+        if pseudo and tool_on:
+            self.map_caption.grid_remove()
+            self.seat_select_button["frame"].grid_remove()
+            self.map_subcaption.grid_remove()
+            self.seat_map.show(None)
+            self.seat_map.grid_remove()
+            self.map_holder.grid()
+        elif not pseudo and (mode in (SEAT_DEFAULT, SEAT_EDIT) or tool_on):
+            self.map_caption.grid()
+            self.seat_select_button["frame"].grid()
             interactive = (mode == SEAT_EDIT)
             if getattr(self, "_map_default_for", None) != lab:
                 self._map_default_for = lab
-                self._map_expanded = self._lab_has_drawn_map(lab)
+                self._map_expanded = self._lab_has_drawn_map(lab) or self.seat_panel_open
             expanded = interactive or self._map_expanded
-            default_seats = self._lab_default_seats(self.form_values())
-            total = len(default_seats)
-            arrow = "▾" if expanded else "▸"   # ▾ / ▸
-            if interactive:
+            if interactive and not self._seat_panel_shown():
                 # The caption counts what is left ("29 of 31 seats"); the one line
                 # under it is the instruction.
-                excluded = len(self.seat_excluded & set(default_seats))
-                self.map_caption.configure(
-                    text="%s  %s" % (arrow, core.seats_caption(total, excluded).upper()))
                 self.map_subcaption.configure(text="Click a seat to include or exclude it")
             else:
-                # Captions are small-caps in both faces (S6): the core text in caps.
-                self.map_caption.configure(
-                    text="%s  %s" % (arrow, core.seats_caption(total).upper()))
                 # Round 7: no "Front of the room..." caption above the map.
                 self.map_subcaption.configure(text="")
             # The subcaption only carries the interactive seat count now; in Lab-
             # default mode there is nothing to say, so it stays hidden (no gap).
             if expanded:
-                self.seat_map.show(self._lab_seatmap_data(lab), excluded=self.seat_excluded,
-                                   interactive=interactive, on_toggle=self._toggle_seat)
                 self.seat_map.grid()
-                if interactive:
+                if self.map_subcaption.cget("text"):
                     self.map_subcaption.grid()
                 else:
                     self.map_subcaption.grid_remove()
@@ -4846,6 +5255,7 @@ class LauncherApp(object):
         else:
             self.seat_map.show(None)
             self.map_holder.grid_remove()
+        self._seat_show()
 
         # settings.py block status + action (or hidden when no seat list).
         self._apply_block_actions()
@@ -5254,6 +5664,13 @@ class LauncherApp(object):
         self.dirty = False
         self.apply_db_mode()
         self.apply_seat_mode()
+        # A loaded config starts a new selection: empty, and open when the tool is on.
+        self._seat_clear()
+        self._seat_lab = self.var["lab"].get()
+        self.seat_panel_open = self._seat_tool_on()
+        if self.seat_panel_open:
+            self._map_expanded = True
+            self._map_default_for = self._seat_lab
         self._apply_lab_view()
         self._apply_admin_visibility()   # collapse the admin panel
         self.refresh_previews()
@@ -5504,7 +5921,8 @@ class LauncherApp(object):
                          cursor="arrow" if self._launch_block else "hand2")
 
     def _sync_view_block_link(self, path):
-        """The quiet block-viewer link shows once a folder is chosen."""
+        """The quiet block-viewer link shows once a folder is chosen; the Remove link
+        under it while settings.py has a block."""
         link = self.view_block_link
         if not (path or "").strip() or core.project_folder_missing(path):
             link.pack_forget()
@@ -5513,6 +5931,74 @@ class LauncherApp(object):
                           if w.winfo_manager())                     # above the git lines
             indent = 20 if self.app_bullets.grid_info() else 0      # lines up with the app names
             link.pack(anchor="w", padx=(indent, 0), pady=(2, 0), before=before)
+        self._sync_remove_block_link(path)
+        self._sync_branch_row(path)
+
+    def _sync_remove_block_link(self, path):
+        link = getattr(self, "remove_block_link", None)
+        if link is None:
+            return
+        shown = self.view_block_link.winfo_manager() and \
+            inspect_settings(path).get("has_block")
+        if not shown:
+            link.pack_forget()
+            return
+        indent = 20 if self.app_bullets.grid_info() else 0
+        link.pack(anchor="w", padx=(indent, 0), pady=(0, 0), after=self.view_block_link)
+
+    def _sync_branch_row(self, path, force=False):
+        """The branch line (core.study_branch_info, read locally, cached per folder):
+        shown with the lab setting on, or when the folder is not on its default
+        branch; Check branches only with the setting on."""
+        row = getattr(self, "branch_row", None)
+        if row is None:
+            return
+        path = (path or "").strip()
+        if force or path != self._branch_info_path:
+            self._branch_info_path = path
+            self._branch_info = core.study_branch_info(path) if path else {}
+        info = self._branch_info or {}
+        allowed = core.load_branch_switch_enabled()
+        note = info.get("note", "")
+        if not info.get("is_repo") or not (allowed or note):
+            row.pack_forget()
+            return
+        self.branch_name.configure(text=info.get("current") or info.get("commit", ""),
+                                   fg=COLORS["warn"] if note else COLORS["text"])
+        self.branch_note.configure(text=note)
+        if note:
+            self.branch_note.pack(anchor="w", pady=(2, 0))
+        else:
+            self.branch_note.pack_forget()
+        if allowed:
+            self.branch_check_btn.pack(side="right")
+        else:
+            self.branch_check_btn.pack_forget()
+        row.pack(fill="x", pady=(6, 0), before=self._git_divider)
+
+    def open_branch_dialog(self):
+        """Check branches: the selector, for the chosen study folder."""
+        path = (self.var["project_path"].get() or "").strip()
+        if not path:
+            return None
+        return BranchDialog(self.root, self.fonts, path, port=self.form_values().get("port", ""),
+                            log=self.log, on_switched=self._branch_switched)
+
+    def _branch_switched(self, result):
+        """After a switch: the folder holds another branch's files: its apps, its
+        block, a new update check, no old pull result."""
+        path = (self.var["project_path"].get() or "").strip()
+        self._git_result_path = ""
+        try:
+            for child in self.git_result.winfo_children():
+                child.destroy()
+            self.git_result.pack_forget()
+        except tk.TclError:
+            pass
+        self._branch_info_path = None
+        self.refresh_previews()
+        self.refresh_block_status()
+        self._sync_update_check(path, reselect=True)
 
     def refresh_seats(self, cfg=None):
         cfg = cfg or self.form_values()
@@ -5551,17 +6037,9 @@ class LauncherApp(object):
 
     def _refresh_map_selection(self, cfg, mode):
         """Redraw the map's exclusions and update its caption without a rebuild."""
-        if cfg["lab"] == LAB_CUSTOM or mode not in (SEAT_DEFAULT, SEAT_EDIT):
+        if cfg["lab"] in (LAB_CUSTOM, LAB_LOCAL) or not self.seat_map.winfo_manager():
             return
-        interactive = (mode == SEAT_EDIT)
-        self.seat_map.show(self._lab_seatmap_data(cfg["lab"]), excluded=self.seat_excluded,
-                           interactive=interactive, on_toggle=self._toggle_seat)
-        if interactive:
-            total = len(self._lab_default_seats(cfg))
-            chosen = len(self._resolve_seats(cfg))
-            self.map_caption.configure(
-                text="▾  %s" % core.seats_caption(total, total - chosen).upper())
-            self.map_subcaption.configure(text="Click a seat to include or exclude it")
+        self._seat_show()
 
     def refresh_block_status(self, cfg=None):
         cfg = cfg or self.form_values()
@@ -5575,6 +6053,8 @@ class LauncherApp(object):
         elif state["readable"] and (state["rooms_after"] or not state["complete"]):
             self.block_status.set("warn", state["message"])
         self._apply_block_actions()
+        if getattr(self, "remove_block_link", None) is not None:
+            self._sync_remove_block_link(cfg["project_path"])
 
     def refresh_dirty(self):
         if self.selected_index is None:
@@ -6600,7 +7080,7 @@ class LauncherApp(object):
 
     def _undo_notice(self, text, copy_id, name):
         """The notice after a Delete or a Replace, with Undo while it is up. When it has gone,
-        the copy is still in Deleted configs."""
+        the copy is still in Old configs."""
         self._undo_clear()
         if not copy_id:
             return
@@ -6791,8 +7271,34 @@ class LauncherApp(object):
         state = inspect_settings(cfg["project_path"])
         self.block_state = state
         BlockDialog(self.root, self.fonts, state, self.add_block, self.log,
-                    on_show_log=self.reveal_activity_log)
+                    on_show_log=self.reveal_activity_log, remove_callback=self.remove_block)
         self.refresh_block_status()
+
+    def remove_block(self, parent=None, ask=None):
+        """Remove lab support block: asks first, then core.remove_block takes the
+        launcher's block out of settings.py and nothing else (a timestamped .bak
+        first; other edits stay; no old backup is put back)."""
+        cfg = self.form_values()
+        ask = ask or messagebox.askyesno
+        if not ask(core.REMOVE_BLOCK_TITLE, core.REMOVE_BLOCK_TEXT, default="no",
+                   parent=parent or self.root):
+            return False
+        try:
+            backup, path = core.remove_block(cfg["project_path"])
+        except core.BlockNotPresent:
+            messagebox.showinfo(core.REMOVE_BLOCK_LABEL, core.REMOVE_BLOCK_NONE_TEXT,
+                                parent=parent or self.root)
+            self.refresh_block_status()
+            return False
+        except OSError as error:
+            messagebox.showerror("Could not remove the block", str(error),
+                                 parent=parent or self.root)
+            self.log("Could not remove the block: %s" % error, "err")
+            return False
+        self.log("Backed up settings.py to %s" % backup, "ok")
+        self.log("Removed the oTree lab support block from %s" % path, "ok")
+        self.refresh_block_status()
+        return True
 
     def add_block(self):
         """Append the block to settings.py, after a timestamped backup. Runs on
@@ -7501,6 +8007,8 @@ class LauncherApp(object):
         def tools_state(values):
             return core.launch_tools_state(cfg, self.lab_presets, values)
 
+        keep, self._seat_session_keep = self._seat_session_keep, ""
+
         def okay():
             # What was typed goes on this launch's own dict, never on the form.
             problem, launch_cfg = core.with_launch_run(
@@ -7511,7 +8019,8 @@ class LauncherApp(object):
             self.root, self.fonts, get_briefing,
             on_okay=okay,
             tools_state=tools_state,
-            tools_map=lambda: self._lab_seatmap_data(cfg["lab"], keep_order=True),
+            tools_values=dict(self._seat_values(), lab_session=keep),
+            on_change_seats=self._change_seats,
             gather_issues=lambda: self.gather_launch_issues(cfg),
             save_offer=lambda: core.launch_save_offer(
                 cfg, self._selected_name(), self.presets, self.store_extra, self.lab_presets,
@@ -7676,6 +8185,13 @@ class LauncherApp(object):
         """Reset the launch button and tell the briefing/takeover popup the REAL
         outcome, so its banner reflects success or failure honestly."""
         self._launch_finished()
+        if ok:
+            # Done with this launch's selection: the next one starts empty.
+            try:
+                self._seat_clear()
+                self._seat_show()
+            except (tk.TclError, AttributeError):
+                pass
         if not ok:
             # The popup may be closed: the failure also stays on the status line,
             # always with the [See activity log] button (the details are there).
@@ -8267,9 +8783,11 @@ class BlockDialog(object):
     project, which is why it takes an explicit click and a backup.
     """
 
-    def __init__(self, parent, fonts, state, add_callback, log, on_show_log=None):
+    def __init__(self, parent, fonts, state, add_callback, log, on_show_log=None,
+                 remove_callback=None):
         self.parent = parent
         self.add_callback = add_callback
+        self.remove_callback = remove_callback
         self.log = log
         self.on_show_log = on_show_log
         top = self.top = tk.Toplevel(parent)
@@ -8327,6 +8845,14 @@ class BlockDialog(object):
         ttk.Button(buttons, text="Copy", command=self._copy).pack(side="right", padx=(0, 8))
         if state.get("has_block") or not state.get("readable"):
             self.add_button.state(["disabled"])
+        # The block in the file: Remove lab support block instead of the (then idle)
+        # Get ready button.
+        self.remove_button = None
+        if remove_callback is not None and state.get("readable") and state.get("has_block"):
+            self.add_button.pack_forget()
+            self.remove_button = ttk.Button(buttons, text=core.REMOVE_BLOCK_LABEL,
+                                            command=self._remove)
+            self.remove_button.pack(side="right", padx=(0, 8))
 
         top.bind("<Escape>", lambda _e: top.destroy())
         _grab_modal(top)
@@ -8346,11 +8872,152 @@ class BlockDialog(object):
         self.top.clipboard_append(LAB_BLOCK)
         self.log("Copied the oTree lab support block to the clipboard.", "muted")
 
+    def _remove(self):
+        if self.remove_callback(parent=self.top):
+            self.remove_button.state(["disabled"])
+            self.status.set("ok", "Removed. A timestamped copy of the old settings.py is "
+                                  "beside it. See the activity log for its path.")
+
     def _add(self):
         if self.add_callback():
             self.add_button.state(["disabled"])
             self.status.set("ok", "Added. A timestamped copy of the old settings.py is "
                                   "beside it. See the activity log for both paths.")
+
+
+class BranchDialog(object):
+    """Check branches (2026-11-09): the branches of the chosen study folder, local
+    and on GitHub merged (core.study_branches runs git fetch first), the current one
+    marked, a Switch button on the others. Switch asks first, then
+    core.git_switch_branch does it (the lab block out and back in, a fast-forward
+    pull, everything put back on a failure, refused on any other local change).
+    The work runs in the background (``runner``: run_in_background)."""
+
+    def __init__(self, parent, fonts, path, port="", log=None, on_switched=None,
+                 ask=None, runner=None, start=True):
+        self.fonts = fonts
+        self.path = path
+        self.port = port
+        self.log = log or (lambda *_a: None)
+        self.on_switched = on_switched
+        self.ask = ask or messagebox.askyesno
+        self.runner = runner or run_in_background
+        self.listing = None
+        self.busy = False
+        self.row_buttons = []
+        top = self.top = tk.Toplevel(parent)
+        top.title(core.CHECK_BRANCHES_LABEL)
+        top.configure(bg=COLORS["card"])
+        _attach_shade(parent, top)
+        top.transient(parent)
+        top.minsize(460, 260)
+        body = tk.Frame(top, bg=COLORS["card"])
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+        tk.Label(body, text="Branches of %s" % os.path.basename(os.path.normpath(path)),
+                 bg=COLORS["card"], fg=COLORS["text"], font=fonts.bold,
+                 anchor="w").pack(fill="x")
+        self.rows = tk.Frame(body, bg=COLORS["card"])
+        self.rows.pack(fill="x", pady=(10, 4))
+        self.status = StatusLine(body, fonts.small)
+        self.status.set_wraplength(430)
+        self.status.pack(fill="x", pady=(4, 8))
+        buttons = tk.Frame(body, bg=COLORS["card"])
+        buttons.pack(fill="x", side="bottom")
+        ttk.Button(buttons, text="Close", command=top.destroy).pack(side="right")
+        self.check_button = ttk.Button(buttons, text=core.CHECK_BRANCHES_LABEL,
+                                       command=self.check)
+        self.check_button.pack(side="right", padx=(0, 8))
+        top.bind("<Escape>", lambda _e: top.destroy())
+        _grab_modal(top)
+        if start:
+            self.check()
+
+    def _set_busy(self, busy):
+        self.busy = busy
+        for button in [self.check_button] + self.row_buttons:
+            try:
+                button.state(["disabled"] if busy else ["!disabled"])
+            except tk.TclError:
+                pass
+
+    def check(self):
+        if self.busy:
+            return
+        self._set_busy(True)
+        self.status.set("muted", core.CHECKING_BRANCHES_LABEL)
+        path = self.path
+        self.runner(self.top, lambda: core.study_branches(path), self._show)
+
+    def _show(self, listing):
+        self._set_busy(False)
+        self.listing = listing = listing or {"ok": False,
+                                             "message": "Could not read the branches."}
+        for child in list(self.rows.winfo_children()):
+            child.destroy()
+        self.row_buttons = []
+        note = listing.get("note", "")
+        for index, row in enumerate(listing.get("branches") or []):
+            line = tk.Frame(self.rows, bg=COLORS["card"])
+            line.pack(fill="x", pady=(0, 4))
+            marks = [core.BRANCH_CURRENT_MARK] if row.get("current") else []
+            if row.get("default"):
+                marks.append(core.BRANCH_DEFAULT_MARK)
+            colour = (COLORS["warn"] if note else COLORS["accent"]) if row.get("current") \
+                else COLORS["text"]
+            tk.Label(line, text=("✓ " if row.get("current") else "") + row["name"],
+                     bg=COLORS["card"], fg=colour, font=self.fonts.mono, anchor="w").pack(
+                side="left")
+            if marks:
+                tk.Label(line, text="  " + " · ".join(marks), bg=COLORS["card"],
+                         fg=COLORS["muted"], font=self.fonts.small).pack(side="left")
+            if not row.get("current"):
+                button = ttk.Button(line, text=core.BRANCH_SWITCH_BUTTON_LABEL,
+                                    style="Slim.TButton",
+                                    command=lambda i=index: self.switch(i))
+                button.pack(side="right")
+                self.row_buttons.append(button)
+        if not listing.get("ok"):
+            self.status.set("error", listing.get("message", ""))
+        elif note:
+            self.status.set("warn", " ".join(b for b in (note, listing.get("message", "")) if b))
+        else:
+            self.status.set("muted", listing.get("message", ""))
+
+    def switch(self, index):
+        rows = (self.listing or {}).get("branches") or []
+        if self.busy or not (0 <= index < len(rows)):
+            return
+        row = rows[index]
+        if not self.ask(row.get("title") or core.BRANCH_SWITCH_TITLE % row["name"],
+                        row.get("confirm", ""), default="no", parent=self.top):
+            return
+        self._set_busy(True)
+        self.status.set("muted", "Switching to %s…" % row["name"])
+        path, port, name = self.path, self.port, row["name"]
+        self.runner(self.top, lambda: core.git_switch_branch(path, name, port=port),
+                    self._switched)
+
+    def _switched(self, result):
+        result = result or {"ok": False, "message": "Switching failed."}
+        self.log(result.get("message", ""), "ok" if result.get("ok") else "err")
+        if result.get("output"):
+            self.log(result["output"], "info")
+        for backup in result.get("backups") or []:
+            self.log("Backed up settings.py to %s" % backup, "ok")
+        if result.get("status") == "switched" and self.listing:
+            listing = self.listing
+            for row in listing.get("branches") or []:
+                row["current"] = row["name"] == result.get("branch")
+            listing["current"] = result.get("branch")
+            listing["message"] = ""
+            listing["note"] = core.branch_note(result.get("branch"), listing.get("default", ""))
+            self._show(listing)
+        else:
+            self._set_busy(False)
+        text = " ".join(b for b in (result.get("message", ""), result.get("detail", "")) if b)
+        self.status.set("ok" if result.get("ok") else "error", text)
+        if result.get("status") == "switched" and callable(self.on_switched):
+            self.on_switched(result)
 
 
 class Collapsible(tk.Frame):
@@ -9587,13 +10254,17 @@ class LaunchBriefingDialog(object):
                  gather_issues=None, needs_save=None, on_save=None, on_view_block=None,
                  admin_username="", admin_password="", pre_auth=False, takeover_url="",
                  on_open_dashboard=None, on_show_log=None, save_offer=None, on_save_launch=None,
-                 tools_state=None, tools_map=None):
-        # ``tools_state(values)`` = core.launch_tools_state for this launch, ``tools_map()``
-        # the seat map data. Neither given (or no tool on): nothing is drawn for tools.
+                 tools_state=None, tools_values=None, on_change_seats=None):
+        # ``tools_state(values)`` = core.launch_tools_state for this launch. Not given (or no
+        # tool on): nothing is drawn for tools. ``tools_values``: what the Lab card holds
+        # (the seats) and a lab session number kept from a Change. ``on_change_seats(session)``
+        # goes back to the Lab card.
         self.tools_state = tools_state
-        self.tools_map = tools_map
         self._tools = None
-        self._tools_values = {"lab_session": "", "seat_number": "", "seats_picked": None}
+        self._tools_values = dict({"lab_session": "", "seat_number": "", "seats_picked": None},
+                                  **(tools_values or {}))
+        self.on_change_seats = on_change_seats
+        self._env_open = False
         self._tools_sync = False
         # ``briefing`` is either a static dict or a zero-arg callable returning a
         # fresh briefing. The callable form lets an inline fix (Change to SQLite,
@@ -9666,7 +10337,7 @@ class LaunchBriefingDialog(object):
         # (after an inline fix or a re-check) without disturbing the others:
         #   row 0  issues: MUST-FIX cards first, then the warning cards. No banner
         #          and no "launch anyway" here. Scrolls when the list is tall.
-        #   row 1  the boxes of the tools that are on (nothing when none is)
+        #   row 1  the lab session number box, when that tool is on
         #   row 2  caution bar + minimal "What will launch" card (rebuildable)
         #   row 3  save affordance (rebuildable)
         #   row 4  separator + the state-dependent bottom bar (rebuildable): the
@@ -9738,7 +10409,7 @@ class LaunchBriefingDialog(object):
             top.grab_set()
         except tk.TclError:
             pass
-        first = getattr(self, "tool_session_entry", None) or getattr(self, "tool_seats_entry", None)
+        first = getattr(self, "tool_session_entry", None)
         if first is not None:
             try:
                 first.focus_set()
@@ -9784,8 +10455,6 @@ class LaunchBriefingDialog(object):
         summary.columnconfigure(0, weight=1)
         self._build_summary(summary, self.fonts, briefing,
                             self.admin_username, self.admin_password, self.pre_auth)
-        self.tool_lines = tk.Frame(card, bg=COLORS["card"])
-        self.tool_lines.grid(row=1, column=0, sticky="ew", padx=12)
         self._render_tool_lines()
 
     # Text wrap width (px) shared by the issue rows and the summary.
@@ -9806,112 +10475,96 @@ class LaunchBriefingDialog(object):
         return self._tools is not None and not self._tools["ok"]
 
     def _render_tool_lines(self):
-        """What was typed, and no more. After a launch with scripts these are the report's
-        first rows instead."""
+        """The read-back: computers to start first, with the way back to change it, then the
+        participant list beside it, then the other values. core wrote the lines."""
         box = getattr(self, "tool_lines", None)
         if box is None:
             return
-        for child in list(box.winfo_children()):
-            child.destroy()
-        if self._tools is None or (getattr(self, "_launched", False)
-                                   and getattr(self, "_report", None)):
+        try:
+            for child in list(box.winfo_children()):
+                child.destroy()
+        except tk.TclError:
             return
-        lines = list(self._tools["lines"])
-        if self._tools.get("participant_line"):
-            lines.insert(0, self._tools["participant_line"])
-        for line in lines:
-            tk.Label(box, text=line, bg=COLORS["card"], fg=COLORS["text"], font=self.fonts.small,
-                     anchor="w", justify="left", wraplength=self.WRAP - 40).pack(fill="x",
-                                                                               pady=(0, 6))
+        self.seat_line = self.seat_change_link = None
+        state = self._tools
+        if state is None or (getattr(self, "_launched", False) and getattr(self, "_report", None)):
+            return
+        fonts = self.fonts
+
+        def line(text, font=fonts.small, fg=COLORS["text"]):
+            label = tk.Label(box, text=text, bg=COLORS["card"], fg=fg, font=font, anchor="w",
+                             justify="left", wraplength=self.WRAP - 40)
+            label.pack(fill="x", pady=(0, 3))
+            return label
+        seats = state["seats"]
+        if seats:
+            row = tk.Frame(box, bg=COLORS["card"])
+            row.pack(fill="x", pady=(0, 3))
+            self.seat_line = tk.Label(row, text=core.SEAT_PICK_LABEL if seats["error"] else seats["line"],
+                                      bg=COLORS["card"], fg=COLORS["text"], font=fonts.small_bold,
+                                      anchor="w", justify="left", wraplength=self.WRAP - 100)
+            self.seat_line.pack(side="left")
+            if not self._launching and not getattr(self, "_launched", False):
+                self.seat_change_link = tk.Label(row, text=core.SEAT_PICK_CHANGE, bg=COLORS["card"],
+                                                 fg=COLORS["accent"], font=fonts.small_bold,
+                                                 anchor="w", cursor="hand2")
+                self.seat_change_link.pack(side="left", anchor="n", padx=(8, 0))
+                self.seat_change_link.bind("<Button-1>", lambda _e: self._change_seats())
+                Tooltip(self.seat_change_link, lambda: core.SEAT_PICK_CHANGE_TIP).attach(
+                    self.seat_change_link)
+            if seats["error"]:
+                line(seats["error"], fonts.small_bold, COLORS["error"])
+            elif seats["note"] and not seats["has_list"]:
+                line(seats["note"], fonts.small, COLORS["muted"])
+        if state.get("participant_line"):
+            line(state["participant_line"])
+        for text in state["lines"]:
+            if not seats or text != seats["line"]:
+                line(text)
+
+    def _change_seats(self):
+        if self.on_change_seats is not None:
+            self.on_change_seats(self._tools_values.get("lab_session", ""))
 
     def _render_tools(self):
-        if self._tools is None:
+        """Only the lab session number has a box here; seats are chosen on the Lab card."""
+        if self._tools is None or not self._tools["session"]:
+            self.tool_session_entry = self.tool_session_error = None
             return
         fonts = self.fonts
         box = tk.Frame(self.tools_frame, bg=COLORS["card"], highlightthickness=1,
                        highlightbackground=COLORS["card_line"])
         box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         box.columnconfigure(2, weight=1)
-        self.tool_session_var = tk.StringVar(self.top, value="")
-        self.tool_seats_var = tk.StringVar(self.top, value="")
-        self.tool_session_entry = self.tool_seats_entry = self.tool_map = None
-        self.tool_session_error = self.tool_seats_error = self.tool_seats_note = None
-        r = 0
-
-        def message(row, fg):
-            label = tk.Label(box, text="", bg=COLORS["card"], fg=fg, font=fonts.small, anchor="w",
-                             justify="left", wraplength=self.WRAP - 40)
-            label.grid(row=row, column=0, columnspan=3, sticky="w", padx=10)
-            label.grid_remove()    # takes no room while it has nothing to say
-            return label
-
-        def field(row, text, var, width, hint):
-            tk.Label(box, text=text, bg=COLORS["card"], fg=COLORS["text"],
-                     font=fonts.small_bold, anchor="w").grid(row=row, column=0, sticky="w",
-                                                             padx=(10, 8), pady=(8, 2))
-            entry = ttk.Entry(box, textvariable=var, width=width)
-            entry.grid(row=row, column=1, sticky="w", pady=(8, 2))
-            # Enter here must not launch: it is too easy to press after typing a number.
-            entry.bind("<Return>", lambda _e: "break")
-            tk.Label(box, text=hint, bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small,
-                     anchor="w").grid(row=row, column=2, sticky="w", padx=(8, 10), pady=(8, 2))
-            return entry
-
-        if self._tools["session"]:
-            part = self._tools["session"]
-            self.tool_session_entry = field(r, part["label"], self.tool_session_var, 24,
-                                            part["hint"])
-            self.tool_session_error = message(r + 1, COLORS["error"])
-            r += 2
-        if self._tools["seats"]:
-            part = self._tools["seats"]
-            self.tool_seats_title = tk.Label(box, text=part["box_title"], bg=COLORS["card"],
-                                             fg=COLORS["text"], font=fonts.bold, anchor="w")
-            self.tool_seats_title.grid(row=r, column=0, columnspan=3, sticky="w", padx=10, pady=(6, 0))
-            r += 1
-            self.tool_seats_entry = field(r, part["label"], self.tool_seats_var, 8, part["hint"])
-            self.tool_seats_error = message(r + 1, COLORS["error"])
-            self.tool_seats_note = message(r + 2, COLORS["muted"])
-            r += 3
-            if part["has_list"]:
-                self.tool_map = SeatMapCanvas(box, fonts)
-                self.tool_map.grid(row=r, column=0, columnspan=3, sticky="ew", padx=10, pady=(4, 2))
-                tk.Label(box, text=part["pick_hint"], bg=COLORS["card"], fg=COLORS["faint"],
-                         font=fonts.small, anchor="w").grid(row=r + 1, column=0, columnspan=3,
-                                                            sticky="w", padx=10)
-                r += 2
-        tk.Frame(box, bg=COLORS["card"], height=6).grid(row=r, column=0)
+        self.tool_session_var = tk.StringVar(self.top, value=self._tools_values["lab_session"])
+        part = self._tools["session"]
+        tk.Label(box, text=part["label"], bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.small_bold, anchor="w").grid(row=0, column=0, sticky="w",
+                                                         padx=(10, 8), pady=(8, 6))
+        self.tool_session_entry = ttk.Entry(box, textvariable=self.tool_session_var, width=24)
+        self.tool_session_entry.grid(row=0, column=1, sticky="w", pady=(8, 6))
+        # Enter here must not launch: it is too easy to press after typing a number.
+        self.tool_session_entry.bind("<Return>", lambda _e: "break")
+        tk.Label(box, text=part["hint"], bg=COLORS["card"], fg=COLORS["faint"], font=fonts.small,
+                 anchor="w").grid(row=0, column=2, sticky="w", padx=(8, 10), pady=(8, 6))
+        self.tool_session_error = tk.Label(box, text="", bg=COLORS["card"], fg=COLORS["error"],
+                                           font=fonts.small, anchor="w", justify="left",
+                                           wraplength=self.WRAP - 40)
+        self.tool_session_error.grid(row=1, column=0, columnspan=3, sticky="w", padx=10)
+        self.tool_session_error.grid_remove()    # takes no room while it has nothing to say
         self.tool_session_var.trace_add("write", lambda *_a: self._tool_typed())
-        self.tool_seats_var.trace_add("write", lambda *_a: self._tool_typed())
         self._tools_show()
 
     def _tools_show(self):
-        """Put the current state on the widgets; the fields keep their focus."""
+        """Put the current state on the widgets; the field keeps its focus."""
         state = self._tools
-
-        def say(label, text):
-            label.configure(text=text)
+        if state["session"] and getattr(self, "tool_session_error", None) is not None:
+            text = state["session"]["error"]
+            self.tool_session_error.configure(text=text)
             if text:
-                label.grid()
+                self.tool_session_error.grid()
             else:
-                label.grid_remove()
-        if state["session"]:
-            say(self.tool_session_error, state["session"]["error"])
-        seats = state["seats"]
-        if seats:
-            say(self.tool_seats_error, seats["error"])
-            say(self.tool_seats_note, seats["note"])
-            if not seats["error"] and self.tool_seats_var.get().strip() != seats["typed"]:
-                self._tools_sync = True
-                try:
-                    self.tool_seats_var.set(seats["typed"])
-                finally:
-                    self._tools_sync = False
-            if self.tool_map is not None:
-                self.tool_map.show(self.tools_map() if self.tools_map else None,
-                                   interactive=True, on_toggle=self._tool_pick,
-                                   selected=seats["selected"], excluded=seats["excluded"],
-                                   strike=True)
+                self.tool_session_error.grid_remove()
         self._render_tool_lines()
         if not self._launching:
             self._render_action()
@@ -9924,21 +10577,6 @@ class LaunchBriefingDialog(object):
         if self._tools_sync or self._launching:
             return
         self._tools_values["lab_session"] = self.tool_session_var.get()
-        number = self.tool_seats_var.get()
-        if number != self._tools_values["seat_number"]:
-            self._tools_values["seat_number"] = number
-            self._tools_values["seats_picked"] = None
-        self._tools_refresh()
-
-    def _tool_pick(self, seat):
-        """A click on the map swaps that seat; the number follows."""
-        now = list(self._tools["seats"]["selected"])
-        if seat in now:
-            now.remove(seat)
-        else:
-            now.append(seat)
-        self._tools_values["seats_picked"] = now
-        self._tools_values["seat_number"] = str(len(now))
         self._tools_refresh()
 
     def _build_summary(self, summary, fonts, briefing, admin_username, admin_password, pre_auth):
@@ -9955,6 +10593,22 @@ class LaunchBriefingDialog(object):
         self._hide_link_reveal()
         self.copy_link_button = None
         self.room_chip = None
+        self.tool_lines = None
+
+        def section(row, title, first=False, name=None):
+            """A group of the summary: a line above it, then its heading."""
+            frame = tk.Frame(summary, bg=COLORS["card"])
+            frame.grid(row=row, column=0, sticky="ew", pady=(0, 4))
+            frame.columnconfigure(0, weight=1)
+            if not first:
+                tk.Frame(frame, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(2, 8))
+            if title:
+                tk.Label(frame, text=title, bg=COLORS["card"], fg=COLORS["text"],
+                         font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 4))
+            return frame
+
+        section(sr, core.SUMMARY_WHERE_TITLE, first=True)
+        sr += 1
 
         # 1. Top line: the Lab, with the (i) that folds in Server + Room.
         head = tk.Frame(summary, bg=COLORS["card"])
@@ -9968,10 +10622,17 @@ class LaunchBriefingDialog(object):
         self.info_icon.grid(row=0, column=1, sticky="e")
         if briefing.get("port_line"):
             # On the card itself, not behind the (i): Julian wants the port named.
-            self.port_line = tk.Label(summary, text=briefing["port_line"], bg=COLORS["card"],
-                                      fg=COLORS["muted"], font=fonts.small, anchor="w")
-            self.port_line.grid(row=sr, column=0, sticky="w", pady=(0, 8))
+            where = tk.Frame(summary, bg=COLORS["card"])
+            where.grid(row=sr, column=0, sticky="w", pady=(0, 8))
             sr += 1
+            self.port_line = tk.Label(where, text=briefing["port_line"], bg=COLORS["card"],
+                                      fg=COLORS["muted"], font=fonts.small, anchor="w")
+            self.port_line.pack(side="left")
+            self.room_line = tk.Label(where, text="·  Room: %s" % briefing.get("room", ""),
+                                      wraplength=self.WRAP - 120, justify="left",
+                                      bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small,
+                                      anchor="w")
+            self.room_line.pack(side="left", padx=(6, 0))
         if self._info_open:
             info = tk.Frame(summary, bg=COLORS["field_off"], highlightthickness=1,
                             highlightbackground=COLORS["card_line"])
@@ -10059,8 +10720,8 @@ class LaunchBriefingDialog(object):
             line = tk.Frame(summary, bg=COLORS["card"])
             line.grid(row=sr, column=0, sticky="w", pady=(0, 8))
             sr += 1
-            tk.Label(line, text="Open", bg=COLORS["card"], fg=COLORS["muted"],
-                     font=fonts.body).pack(side="left")
+            tk.Label(line, text="Open", bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.bold).pack(side="left")
             chip = self.room_chip = tk.Label(
                 line,
                 text=briefing.get("shortcut_label") or briefing.get("shortcut_name", ""),
@@ -10069,7 +10730,7 @@ class LaunchBriefingDialog(object):
                 highlightbackground=COLORS["accent"], cursor="hand2")
             chip.pack(side="left", padx=7)
             tk.Label(line, text="on each participant computer.", bg=COLORS["card"],
-                     fg=COLORS["muted"], font=fonts.body).pack(side="left")
+                     fg=COLORS["text"], font=fonts.bold).pack(side="left")
             if template:
                 chip.bind("<Enter>", lambda _e, t=template, l=link_label:
                           self._schedule_link_reveal(t, l))
@@ -10127,15 +10788,21 @@ class LaunchBriefingDialog(object):
         self.opens_copy_buttons = []
         self.opens_eye_buttons = []
         services = briefing.get("services") or []
-        # Launch scripts: before the launch the run list with each script's text.
+        # Values for this launch: what was typed and picked. After a launch with a report they
+        # are that report's rows, with their marks.
+        report = getattr(self, "_report", None)
+        launched = getattr(self, "_launched", False)
+        if self._tools is not None and not (launched and report):
+            box = section(sr, core.SUMMARY_VALUES_TITLE)
+            sr += 1
+            self.tool_lines = tk.Frame(box, bg=COLORS["card"])
+            self.tool_lines.pack(fill="x")
+        # Launch scripts: before the launch the run list, each script's text one click away.
         self.scripts_box = None
         run = briefing.get("scripts_run") or []
         if run and not getattr(self, "_launched", False):
-            box = self.scripts_box = tk.Frame(summary, bg=COLORS["card"])
-            box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
+            box = self.scripts_box = section(sr, briefing.get("scripts_title", ""))
             sr += 1
-            tk.Label(box, text=briefing.get("scripts_title", ""), bg=COLORS["card"],
-                     fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
             for index, item in enumerate(run):
                 head = "%d. %s" % (index + 1, item["name"])
                 if item.get("wait_text"):
@@ -10147,42 +10814,60 @@ class LaunchBriefingDialog(object):
                 tk.Label(box, text=head, bg=COLORS["card"], fg=COLORS["text"], font=fonts.body,
                          anchor="w").pack(fill="x")
                 if item.get("script"):
-                    self._script_view(box, item["script"])
+                    self._script_reveal(box, item["script"])
         # After a launch: every row with what the launcher really knows about it.
-        report = getattr(self, "_report", None)
-        if getattr(self, "_launched", False) and report:
-            self.report_box = tk.Frame(summary, bg=COLORS["card"])
-            self.report_box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
+        if launched and report:
+            self.report_box = section(sr, "")
             sr += 1
-            self._render_report(self.report_box, report, getattr(self, "_headline", None))
+            self._render_report(self.report_box, report, getattr(self, "_headline", None),
+                                env_elsewhere=True,
+                                participant_line=(self._tools or {}).get("participant_line", ""))
         elif briefing.get("pages"):
-            box = self.services_box = tk.Frame(summary, bg=COLORS["card"])
-            box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
-            sr += 1
             title = briefing.get("services_title", "")
             if getattr(self, "_launched", False):
                 title = briefing.get("services_title_launched") or title
-            tk.Label(box, text=title, bg=COLORS["card"], fg=COLORS["text"],
-                     font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
+            box = self.services_box = section(sr, title)
+            sr += 1
             for page in briefing["pages"]:
                 self._opens_row(box, page.get("name", ""), page.get("url", ""))
 
-        # The environment variables this launch sets, secrets masked: only when there are any.
+        # The environment variables this launch sets: a tick and the name. The values, secrets
+        # masked, are one click away. Only when there are any.
         self.env_box = None
+        self.env_value_labels = []
         if briefing.get("env_lines"):
-            box = self.env_box = tk.Frame(summary, bg=COLORS["card"])
-            box.grid(row=sr, column=0, sticky="ew", pady=(4, 8))
+            box = self.env_box = section(sr, briefing.get("env_title", ""))
             sr += 1
-            tk.Label(box, text=briefing.get("env_title", ""), bg=COLORS["card"], fg=COLORS["text"],
-                     font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
-            for line in briefing["env_lines"]:
-                tk.Label(box, text=line, bg=COLORS["card"], fg=COLORS["text"],
-                         font=fonts.mono_small, anchor="w", justify="left",
-                         wraplength=self.WRAP - 40).pack(fill="x")
+            for name in briefing.get("env_names") or []:
+                line = tk.Frame(box, bg=COLORS["card"])
+                line.pack(fill="x")
+                tk.Label(line, text="✓", bg=COLORS["card"], fg=COLORS["ok"],
+                         font=fonts.small_bold).pack(side="left", padx=(0, 5))
+                tk.Label(line, text=name, bg=COLORS["card"], fg=COLORS["text"],
+                         font=fonts.mono_small, anchor="w").pack(side="left")
+            self.env_values_toggle = tk.Label(
+                box, text=("▾  " if self._env_open else "▸  ") + core.ENV_VALUES_SHOW_LABEL,
+                bg=COLORS["card"], fg=COLORS["muted"], font=fonts.small_bold, anchor="w",
+                cursor="hand2")
+            self.env_values_toggle.pack(fill="x", pady=(4, 0))
+
+            def toggle_env(_event=None):
+                self._env_open = not self._env_open
+                self._render_summary()
+            self.env_values_toggle.bind("<Button-1>", toggle_env)
+            if self._env_open:
+                for line in briefing["env_lines"]:
+                    label = tk.Label(box, text=line, bg=COLORS["card"], fg=COLORS["text"],
+                                     font=fonts.mono_small, anchor="w", justify="left",
+                                     wraplength=self.WRAP - 40)
+                    label.pack(fill="x", padx=(16, 0))
+                    self.env_value_labels.append(label)
 
         # Dashboard login: collapsed by default, so the username/password are not
         # on screen until asked for (the password stays masked behind Show).
         if admin_username or admin_password:
+            section(sr, "")
+            sr += 1
             self._expander(summary, sr, "Dashboard login (if the browser asks)", "_creds_open")
             sr += 1
             if self._creds_open:
@@ -10198,9 +10883,34 @@ class LaunchBriefingDialog(object):
         frame.pack(fill="x", padx=(16, 0), pady=(1, 4))
         return frame.view
 
-    def _render_report(self, box, report, headline=None):
+    def _script_reveal(self, box, text):
+        """Before a launch a script's name is on the row; its text is one click or hover away
+        (Julian, 2026-11-05: secondary detail tucked away)."""
+        toggle = tk.Label(box, text="▸  " + core.SCRIPT_SHOW_LABEL, bg=COLORS["card"],
+                          fg=COLORS["muted"], font=self.fonts.small, anchor="w", cursor="hand2")
+        toggle.pack(fill="x", padx=(16, 0))
+        Tooltip(toggle, lambda t=core.script_tip_text(text): t).attach(toggle)
+        state = {"view": None}
+
+        def flip(_event=None):
+            if state["view"] is None:
+                state["view"] = _capped_script_view(box, self.fonts, text)
+                state["view"].pack(fill="x", padx=(16, 0), pady=(1, 4), after=toggle)
+                toggle.configure(text="▾  " + core.SCRIPT_HIDE_LABEL)
+            else:
+                state["view"].destroy()
+                state["view"] = None
+                toggle.configure(text="▸  " + core.SCRIPT_SHOW_LABEL)
+        toggle.bind("<Button-1>", flip)
+        toggle.flip = flip
+        return toggle
+
+    def _render_report(self, box, report, headline=None, env_elsewhere=False,
+                       participant_line=""):
         """The launch report (core.launch_report). A mark claims only what was
-        checked: a full tick for checked, a neutral ring for "started"."""
+        checked: a full tick for checked, a neutral ring for "started". What happened comes
+        first, then the values under their own heading. ``env_elsewhere``: the summary has its
+        own Environment variables set group, so the report's row for them is not repeated."""
         fonts = self.fonts
         self.report_marks = {}
         colors = {core.MARK_OK: COLORS["ok"], core.MARK_NEUTRAL: COLORS["muted"],
@@ -10212,7 +10922,15 @@ class LaunchBriefingDialog(object):
             tk.Label(box, text=headline["text"], bg=COLORS["card"], fg=COLORS["text"],
                      font=fonts.small_bold, anchor="w", justify="left",
                      wraplength=460).pack(fill="x", pady=(0, 4))
-        for row in report:
+        steps = [r for r in report if r.get("section") not in (core.REPORT_SECTION_VALUES,
+                                                               core.REPORT_SECTION_ENV)]
+        values = [r for r in report if r.get("section") == core.REPORT_SECTION_VALUES
+                  or (r.get("section") == core.REPORT_SECTION_ENV and not env_elsewhere)]
+        for row in steps + values:
+            if values and row is values[0]:
+                tk.Frame(box, bg=COLORS["card_line"], height=1).pack(fill="x", pady=(8, 8))
+                tk.Label(box, text=core.SUMMARY_VALUES_TITLE, bg=COLORS["card"],
+                         fg=COLORS["text"], font=fonts.bold, anchor="w").pack(fill="x", pady=(0, 3))
             line = tk.Frame(box, bg=COLORS["card"])
             line.pack(fill="x", pady=(0, 2))
             mark = tk.Label(line, text=row["glyph"], bg=COLORS["card"], fg=colors[row["mark"]],
@@ -10234,6 +10952,10 @@ class LaunchBriefingDialog(object):
                          anchor="w", justify="left", wraplength=430).pack(fill="x", padx=(24, 0))
             if row.get("script"):
                 self._script_view(box, row["script"])
+        if values and participant_line:
+            tk.Label(box, text=participant_line, bg=COLORS["card"], fg=COLORS["text"],
+                     font=fonts.small, anchor="w", justify="left", wraplength=430).pack(
+                fill="x", padx=(24, 0))
 
     def _opens_row(self, box, name, url):
         """One browser page of the popup: its name, the copy and eye icons right after it,
@@ -10928,6 +11650,7 @@ class LaunchBriefingDialog(object):
                 self._render_save()
                 return
         self._launching = True
+        self._render_tool_lines()    # no way back to change anything from here
         self.on_okay()
         self._enter_launching()
 
@@ -12682,7 +13405,7 @@ class LaunchHistoryDialog(object):
 
 
 class DeletedConfigsDialog(object):
-    """Deleted configs, newest first (core.deleted_config_rows). Choose a row to see what
+    """Old configs, newest first (core.deleted_config_rows). Choose a row to see what
     is in it; Recover acts on the chosen row and names it (a ttk table cannot hold a button
     per row). Footer packed first, the table scrolls inside itself, as in the history."""
 
@@ -13464,7 +14187,32 @@ class LabSettingsDialog(object):
                                         fg=COLORS["faint"], font=fonts.small, anchor="w",
                                         justify="left", wraplength=560)
         self.gh_login_status.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        # Branch switch (2026-11-09): a lab setting in lab_info.json, off by default.
+        branch_row = tk.Frame(body, bg=COLORS["card"])
+        branch_row.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.branch_switch_var = tk.BooleanVar(self.top,
+                                               value=core.load_branch_switch_enabled())
+        self.branch_switch_check = tk.Checkbutton(
+            branch_row, text=core.BRANCH_SWITCH_LABEL, variable=self.branch_switch_var,
+            command=self._save_branch_switch, bg=COLORS["card"], fg=COLORS["text"],
+            activebackground=COLORS["card"], activeforeground=COLORS["text"],
+            selectcolor=COLORS["card"], font=fonts.small_bold, anchor="w",
+            bd=0, highlightthickness=0, cursor="hand2")
+        self.branch_switch_check.pack(side="left")
+        info_tip(branch_row, core.ui_tip("branch_switch"), font=fonts.small).pack(side="left")
         self._refresh_gh_status()
+
+    def _save_branch_switch(self):
+        """Persist "Allow experimenters to switch branches" and redraw the study
+        card's branch line."""
+        stored = core.save_branch_switch_enabled(self.branch_switch_var.get())
+        self.branch_switch_var.set(stored)
+        sync = getattr(self.app, "_sync_branch_row", None)
+        if callable(sync):
+            try:
+                sync(self.app.var["project_path"].get())
+            except (tk.TclError, KeyError, AttributeError):
+                pass
 
     def _open_github_login(self):
         make = getattr(self.app, "make_github_login_dialog", None)

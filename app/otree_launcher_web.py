@@ -376,6 +376,19 @@ def _ui_text():
         "deleted_recover": core.DELETED_RECOVER_LABEL,
         "delete_confirm": core.DELETE_CONFIRM_TEXT,
         "view_block_link": core.VIEW_BLOCK_LINK_LABEL,
+        # Remove lab support block + the branch selector (2026-11-09).
+        "remove_block": core.REMOVE_BLOCK_LABEL,
+        "remove_block_title": core.REMOVE_BLOCK_TITLE,
+        "remove_block_text": core.REMOVE_BLOCK_TEXT,
+        "remove_block_done": core.REMOVE_BLOCK_DONE_TEXT,
+        "branch_switch_label": core.BRANCH_SWITCH_LABEL,
+        "branch_row": core.BRANCH_ROW_LABEL,
+        "check_branches": core.CHECK_BRANCHES_LABEL,
+        "checking_branches": core.CHECKING_BRANCHES_LABEL,
+        "branch_switch_button": core.BRANCH_SWITCH_BUTTON_LABEL,
+        "branch_current": core.BRANCH_CURRENT_MARK,
+        "branch_default": core.BRANCH_DEFAULT_MARK,
+        "branch_switch_title": core.BRANCH_SWITCH_TITLE,
         "unsaved_changes": core.UNSAVED_CHANGES_TEXT,
         "unsaved_settings": core.UNSAVED_SETTINGS_TITLE,
         # Saving a config: the words the page needs before it has asked Python.
@@ -393,6 +406,7 @@ def _ui_text():
         "config_history_note": core.CONFIG_HISTORY_NOTE,
         "config_history_empty": core.CONFIG_HISTORY_EMPTY,
         "tools": core.launch_tools_ui_text(),
+        "seat_pick": core.seat_pick_ui_text(),
         "env_vars": core.env_vars_ui_text(),
     }
 
@@ -434,6 +448,10 @@ def project_status(path):
             # GitHub Organisation Sync setting): the page hides the button for a
             # plain folder.
             "is_repo": _study_is_git_repo(path),
+            # Which branch the folder is on, read locally (2026-11-09): the page shows
+            # core's note when it is not the default branch, and the branch selector
+            # when the lab allows switching.
+            "branch": core.study_branch_info(path),
             "missing": core.project_folder_missing(path)}
 
 
@@ -1282,7 +1300,7 @@ class Api(object):
 
     @api_call
     def deleted_configs(self):
-        """The Deleted configs popup: no password ever reaches the page."""
+        """The Old configs popup: no password ever reaches the page."""
         return {"ok": True, "rows": core.deleted_config_rows(self._labs())}
 
     @api_call
@@ -1664,7 +1682,9 @@ class Api(object):
                 "summary": core.github_summary(sync, tokens),
                 "expiry_notice": core.github_token_expiry_notice(tokens=tokens or None),
                 "token_url": core.github_token_create_url(sync["org"]),
-                "clone_parent": core.clone_parent_default()}
+                "clone_parent": core.clone_parent_default(),
+                # "Allow experimenters to switch branches" (lab_info.json, off by default).
+                "branch_switch": core.load_branch_switch_enabled()}
 
     @api_call
     def github_state(self):
@@ -1677,6 +1697,38 @@ class Api(object):
         field switches it off. Fail-soft."""
         core.save_github_org(org)
         return self._github_state()
+
+    @api_call
+    def set_branch_switch(self, enabled):
+        """Persist "Allow experimenters to switch branches" (a lab setting in
+        lab_info.json, off by default). Returns the GitHub state, which carries it."""
+        core.save_branch_switch_enabled(bool(enabled))
+        return self._github_state(with_login=False)
+
+    @api_call
+    def study_branches(self, project_path=""):
+        """"Check branches": git fetch, then the branches of the study folder, local and
+        on GitHub, merged (core.study_branches). Downloads only; no file changes."""
+        path = str(project_path or "").strip()
+        self._wait_for_update_check(path)
+        return core.study_branches(path)
+
+    @api_call
+    def switch_branch(self, project_path="", branch="", port=""):
+        """Switch the study folder to ``branch`` (core.git_switch_branch: the lab block
+        out and back in, a fast-forward-only pull, everything put back on a failure,
+        refused on any other local change). The page asked first. Returns core's
+        result plus the project and settings summaries of the folder as it is now."""
+        path = str(project_path or "").strip()
+        self._wait_for_update_check(path)
+        result = dict(core.git_switch_branch(path, branch, port=port))
+        if result.get("status") == "switched":
+            # Another branch: the last update check was about the old one.
+            with self._update_lock:
+                self._update_status.pop(self._update_key(path), None)
+        result["project"] = project_status(path)
+        result["settings"] = core.inspect_settings(path, self._lab_room_for())
+        return result
 
     @api_call
     def set_databases_localhost_only(self, enabled):
@@ -2566,7 +2618,7 @@ class Api(object):
     @api_call
     def launch_timeline(self, fields=None):
         """Advanced's two lists for the on-screen fields, all decided by core: the
-        timeline in run order and what is not selected."""
+        timeline in run order and the Available tools."""
         cfg = fields_to_config(fields or {})
         presets = core.lab_presets_from_store(self.store_extra)
         answer = core.launch_timeline(cfg, presets)
@@ -2824,6 +2876,28 @@ class Api(object):
                         ["ok", "Appended the oTree lab support block to %s" % path]]}
 
     @api_call
+    def remove_settings_block(self, project_path):
+        """"Remove lab support block": take the launcher's block out of settings.py
+        and nothing else (core.remove_block: timestamped .bak first, other edits kept,
+        no old backup restored). The page asked first."""
+        project_path = (project_path or "").strip()
+        lab_room = self._lab_room_for()
+        try:
+            backup, path = core.remove_block(project_path)
+        except core.BlockNotPresent:
+            return {"ok": False, "message": core.REMOVE_BLOCK_NONE_TEXT,
+                    "settings": core.inspect_settings(project_path, lab_room)}
+        except OSError as error:
+            return {"ok": False, "message": "Could not remove the block: %s" % error,
+                    "settings": core.inspect_settings(project_path, lab_room),
+                    "log": [["err", "Could not remove the block: %s" % error]]}
+        return {"ok": True, "backup": backup, "path": path,
+                "message": core.REMOVE_BLOCK_DONE_TEXT % backup,
+                "settings": core.inspect_settings(project_path, lab_room),
+                "log": [["ok", "Backed up settings.py to %s" % backup],
+                        ["ok", "Removed the oTree lab support block from %s" % path]]}
+
+    @api_call
     def refresh_settings_block(self, project_path):
         """Replace an OUTDATED lab support block with the current one (Pass 7).
 
@@ -3001,6 +3075,13 @@ class Api(object):
         only renders). Nothing here is stored: the values live until this launch."""
         cfg = fields_to_config(fields or {})
         return core.launch_tools_state(cfg, core.lab_presets_from_store(self.store_extra), values)
+
+    @api_call
+    def seat_pick_state(self, fields, values=None):
+        """Select seats on the Lab card, tool on or off (core decides, the page only renders).
+        Nothing here is stored: a launch gets these values through launch_tools_state."""
+        cfg = fields_to_config(fields or {})
+        return core.seat_pick_state(cfg, core.lab_presets_from_store(self.store_extra), values)
 
     @api_call
     def launch_issues(self, fields, config_name=""):
