@@ -620,8 +620,9 @@ launch does besides starting oTree:
   opens Advanced with that form ready.
 
 **Change** (or **Open**) opens Advanced as a window over the page: the **Launch timeline** on
-the left, **Add your own** on the right. **Done** closes it. Nothing you typed in a form is
-lost by closing.
+the left, **Add your own** on the right. **Done** closes it. If a form has something typed in
+it, Advanced asks first: **Keep editing** goes back to the form, **Discard** clears it and
+closes. It always opens again on its start view.
 
 *Launch timeline.* The launch itself, top to bottom: your scripts, **Reset database** when it
 is ticked (always directly before oTree, and it moves with it; its tick stays on the Database
@@ -655,15 +656,19 @@ card), **Launch oTree server**, then the browser pages.
 
 *Values for this launch*, under the timeline, lists the values in use: see **Values** below.
 
-*Add your own.* Two buttons, **Script** and **Website**. Each opens a short form that first says
-what the thing is and does.
+*Add your own.* Up to three buttons, **Script**, **Website** and **Value**. Each opens a short
+form that first says what the thing is and does.
 
 - **Script**: a name, what to run, **When** (before or after oTree starts) and **Then** (carry
   on, wait until it has finished, or wait until a port answers). **Add to timeline** puts it
   where When says. **What a script can read** lists the variables a script gets.
 - **Website**: a name and an address. It goes last; move it with the arrows.
+- **Value**: a name and a value that oTree and your scripts can read (an environment variable),
+  for this config only. See **Values** below.
 - A problem keeps the form open with what you typed. Cancel closes and clears.
-- If your lab does not allow own scripts or websites, the button is not there and a line says so.
+- If your lab does not allow own scripts, websites or values, that button is not there and a
+  line under the buttons says so, for example "This lab does not let you add your own values".
+  Your lab manager decides that in Settings.
 
 *Ready to add* is one list of everything that is not in this launch: what the lab offers, and
 your own things you took out. Each row says what it is in one grey line. **Add** puts it in.
@@ -823,7 +828,7 @@ The value is fixed when the server starts, so a second session in the same launc
 - **It goes to the oTree server and to your scripts**, under its variable name, never pasted into a script's text. It is saved with the config like any other edit.
 - **A value the lab has on from the start** comes with the lab's value. Type your own to change it for this config, or take it out with the **x**. *Set by the lab* means the lab fixed the value: you see it and cannot change it.
 - **A value that is not in use stays as it was**: if this computer already sets that variable, the launcher leaves that alone for the server. Scripts do not inherit `OTREE_*` names, as always.
-- **Add your own value**, under the Script and Website buttons, adds a name and value for this config only. A lab manager turns it on per lab with **Staff may add their own: values** in Settings; on localhost and Other host it is always there. With it off, a config that already has its own variable keeps it and can still change or remove it.
+- **Value**, the third button under **Add your own** beside Script and Website, adds a name and value for this config only. A lab manager turns it on per lab with **Staff may add their own: values** in Settings; on localhost and Other host it is always there. With it off, the button is not there and a line under the buttons says the lab does not let you add your own values; a config that already has its own variable keeps it and can still change or remove it.
 - **Before you launch** lists what will be set, by name; **Show values** shows the values. A name that looks secret (holding PASSWORD, PASS, PWD, TOKEN, SECRET, KEY or CREDENTIAL) has its value hidden there, in the activity log and in History; History then keeps only the name. It is still stored in plain text in `data/saved_configs.json`, as passwords are.
 - **A folder that does not exist** gets a warning before you launch, not a block.
 - **To read one in oTree**, with `import os` at the top of the file: `os.environ.get('OTREE_DATA_FOLDER', '')`. The value is fixed when the server starts, so a change needs a relaunch. The launcher says it set the variable; it does not check whether your study reads it.

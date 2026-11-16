@@ -875,6 +875,8 @@ pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep)
 .adv-sheet{width:min(960px,100%);background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r-xl);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;max-height:calc(100vh - 68px)}
 .adv-sheet-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line-soft)}
 .adv-sheet-head h3{margin:0;font-size:16px;color:var(--text-strong)}
+.adv-unsaved{flex:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 22px;background:var(--warn-soft);border-bottom:1px solid var(--line-soft);font-size:13px;color:var(--text-strong)}
+.adv-unsaved b:first-child{margin-right:auto}
 .adv-sheet-note{flex:1;min-width:0;font-size:12.5px;color:var(--muted)}
 .adv-sheet .adv-body{margin:0;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);min-height:0;overflow:auto}
 .adv-pane{padding:16px 22px 22px;min-width:0}
@@ -884,8 +886,9 @@ pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep)
 .adv-values{margin-top:16px;padding-top:13px;border-top:1px solid var(--line-soft)}
 .adv-ready{margin-top:18px}
 .adv-settings-note{margin-top:14px}
-.adv-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.adv-tile{display:block;text-align:left;padding:12px 13px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;box-shadow:var(--shadow-sm);font-family:inherit}
+/* As many equal columns as tiles shown: two or three across, never an empty slot. */
+.adv-tiles{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:10px}
+.adv-tile{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;padding:12px 13px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;box-shadow:var(--shadow-sm);font-family:inherit}
 .adv-tile:hover,.adv-tile:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .adv-tile[hidden]{display:none}
 .adv-tile-ico{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);margin-bottom:8px}
@@ -893,8 +896,7 @@ pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep)
 .adv-tile b{display:block;color:var(--text-strong);font-size:13.5px}
 .adv-tile span{font-size:12px;color:var(--muted)}
 .adv-own-off{margin:10px 0 0;font-size:12px;color:var(--muted)}
-.adv-value-link{margin:10px 0 0;font-size:12px}
-.adv-value-link a,.adv-reads a{color:var(--accent);font-weight:600}
+.adv-reads a{color:var(--accent);font-weight:600}
 .adv-explain{background:var(--panel);border:1px solid var(--line-soft);border-left:3px solid var(--accent);border-radius:var(--r-sm);padding:9px 12px;font-size:12.5px;margin:0 0 10px}
 .adv-explain b{color:var(--text-strong)}
 .adv-explain ul{margin:6px 0 0;padding-left:18px}
@@ -2188,11 +2190,17 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
 <!-- Advanced, open (2026-11-12): a sheet over the page. Left the launch timeline and the
      values in use, right "Add your own" and ONE list of what is ready to add. Core decides
      every row (core.launch_timeline); the page keeps only the choices. -->
-<div class="adv-scrim" id="advScrim" hidden onclick="if(event.target===this)closeAdvanced()">
+<div class="adv-scrim" id="advScrim" hidden onclick="if(event.target===this)requestCloseAdvanced()">
   <div class="adv-sheet" id="advSheet" role="dialog" aria-modal="true" aria-labelledby="advSheetTitle">
     <div class="adv-sheet-head">
       <h3 id="advSheetTitle">Advanced</h3><span class="adv-sheet-note" id="advSheetNote"></span>
-      <button type="button" class="btn tiny accent" id="advDone" onclick="closeAdvanced()"><b>Done</b></button>
+      <button type="button" class="btn tiny accent" id="advDone" onclick="requestCloseAdvanced()"><b>Done</b></button>
+    </div>
+    <!-- Closing with something typed in an Add form: the sheet stays and asks (2026-11-16). -->
+    <div class="adv-unsaved" id="advUnsaved" hidden role="alert">
+      <b id="advUnsavedText">You have an unsaved script.</b>
+      <button type="button" class="btn tiny accent" id="advUnsavedKeep" onclick="unsavedKeep()"><b>Keep editing</b></button>
+      <button type="button" class="btn tiny" id="advUnsavedDiscard" onclick="unsavedDiscard()">Discard</button>
     </div>
     <div class="adv-body" id="advBody">
       <div class="adv-pane adv-left">
@@ -2212,9 +2220,10 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           <div class="adv-tiles">
             <button type="button" class="adv-tile" id="scrAddOpen" onclick="addFormOpen('script')"><span class="adv-tile-ico" id="scrTileIco"></span><b id="scrTileName">Script</b><span id="scrTileLine"></span></button>
             <button type="button" class="adv-tile" id="svcAddOpen" onclick="addFormOpen('website')"><span class="adv-tile-ico" id="svcTileIco"></span><b id="svcTileName">Website</b><span id="svcTileLine"></span></button>
+            <!-- Value: only when the lab lets staff add their own (core.own_add_allowed). -->
+            <button type="button" class="adv-tile" id="envAddOpen" hidden onclick="addFormOpen('env')"><span class="adv-tile-ico" id="envTileIco"></span><b id="envTileName">Value</b><span id="envTileLine"></span></button>
           </div>
           <p class="adv-own-off" id="addOwnOff" hidden></p>
-          <p class="adv-value-link"><a href="#" id="envAddOpen" hidden onclick="addFormOpen('env');return false;">Add your own value</a></p>
           <div class="adv-ready" id="tlAvailCard">
             <div class="svc-head"><b id="tlAvailTitle">Ready to add</b><span id="readyTip"></span></div>
             <div id="tlAvail"></div>
@@ -2584,7 +2593,7 @@ var UI_TEXT={
   timeline_title:"Launch timeline",timeline_reorder:"Reorder",timeline_reorder_done:"Done",
   timeline_available:"Available tools",timeline_available_none:"Nothing else to add.",
   seat_pick:{"label":"Computers to start","button":"Select seats","change":"Change","change_tip":"Back to the Lab card to change the computers to start","count_caption":"%d to start","off_note":"Computers to start is off, so seats chosen here are not used for anything and scripts get nothing.","off_link":"Turn it on","switch_label":"Clicks choose:","switch_seats":"Computers to start","switch_list":"Participant list","blank_hint":"Blank = 0 seats.","hint_seats":"Click a seat to swap it. This does not change the participant list.","hint_list":"Click a seat to take it out of the participant list or put it back. This does not change the computers to start.","tool_tip":"For scripts that start computers. Lets you choose seats on the Lab card, with a number box and the seat map. Scripts get LAB_SEATS and LAB_SEAT_COUNT. The oTree room and its seat list do not change.","values_title":"Values for this launch","where_title":"Where","env_show":"Show values"},
-  advanced:{"sheet_note":"What happens when you press Launch","timeline_intro":"Runs top to bottom. Use the arrows to change the order.","otree_note":"The launcher waits here until oTree answers","values_title":"Values for this launch","values_intro":"What oTree and the scripts are told, as environment variables. Some are asked at each launch, the others are typed here and saved with the config.","values_none":"None in use.","add_own_title":"Add your own","add_own_intro":"Saved with this config. Nothing in your study changes.","script_tile":["Script","Run a command when you launch"],"website_tile":["Website","Open a page in your browser"],"value_link":"Add your own value (an environment variable)","own_off_note":"This lab does not let you add your own %s. What is in the config stays.","ready_title":"Ready to add","ready_intro":"Set up by the lab, or taken out of this launch earlier. Add puts it in. The lab manager decides what is offered: Settings, Advanced: scripts, websites and values.","ready_add":"Add","ready_settings_note":"The lab manager decides what is on this list: Settings, Advanced: scripts, websites and values.","show":"Show","hide":"Hide","remove_tip":"Take out of this launch","value_remove_tip":"Stop using it","locked_tag":"always on in this lab","locked_tip":"The lab keeps this on. Change it in Settings, under Advanced.","source_lab":"From the lab","source_own":"Yours","add_to_timeline":"Add to timeline","when_label":"When","when_options":[["before","Before oTree starts"],["after","After oTree starts"]],"reads_link":"What a script can read","script_explain":{"title":"Add your own script","lead":"A script is a command this computer runs each time you launch this config.","points":["It runs in its own window, at its place in the timeline.","If it fails, the launch stops there: later steps do not run. Windows and pages that are already open stay open.","The launcher never closes it. Close its window yourself when you are done.","It is saved with this config only and changes nothing in your study."]},"website_explain":{"title":"Add your own website","lead":"A website is a page the launcher sends to your browser on launch.","points":["It opens in a new tab once oTree is ready, after the other pages. Move it with the arrows.","Good for a payment sheet, a survey or a lab tool next to the admin page.","The launcher hands the address to the browser. It does not check that the page loads.","It is saved with this config only."]},"card_title":"Advanced: scripts, websites and values","card_intro":"Everything staff can add to a launch in Advanced.","card_action":"Choose per item what staff get.","group_scripts":["Scripts","Commands that run on launch"],"group_websites":["Websites","Pages that open in the browser"],"group_values":["Values","What oTree and scripts are told (environment variables)"],"add_website":"Add website","add_value":"Add value","own_label":"Staff may add their own:","own_kinds":[["script","scripts"],["website","websites"],["value","values"]],"builtin_tag":"built in","this_computer":"(this computer)","none":"None yet.","state_label":"For staff","states":[["off","Off"],["available","Available"],["default","On by default"],["locked","Always on"]],"legend":[["off","Staff do not see it. A config that already uses a script, website or variable keeps it. A built-in value is off in every config."],["available","Listed under Ready to add in Advanced."],["default","In every launch unless staff take it out."],["locked","In every launch. Staff cannot take it out."]],"fixed_label":"Staff can change the value","fixed_tip":"On: the value here is a starting value, staff type their own. Off: this value is always used and staff cannot change it.","label_label":"Name staff see (optional)","seat_not_offered":"This lab does not offer Computers to start.","fixed_tag":"set by the lab"},
+  advanced:{"sheet_note":"What happens when you press Launch","timeline_intro":"Runs top to bottom. Use the arrows to change the order.","otree_note":"The launcher waits here until oTree answers","values_title":"Values for this launch","values_intro":"What oTree and the scripts are told, as environment variables. Some are asked at each launch, the others are typed here and saved with the config.","values_none":"None in use.","add_own_title":"Add your own","add_own_intro":"Saved with this config. Nothing in your study changes.","script_tile":["Script","Run a command when you launch"],"website_tile":["Website","Open a page in your browser"],"value_tile":["Value","Pass a setting to oTree"],"own_off_note":"This lab does not let you add your own %s. What is in the config stays.","own_off_kinds":[["script","scripts"],["website","websites"],["value","values"]],"ready_title":"Ready to add","ready_intro":"Set up by the lab, or taken out of this launch earlier. Add puts it in. The lab manager decides what is offered: Settings, Advanced: scripts, websites and values.","ready_add":"Add","ready_settings_note":"The lab manager decides what is on this list: Settings, Advanced: scripts, websites and values.","show":"Show","hide":"Hide","remove_tip":"Take out of this launch","value_remove_tip":"Stop using it","locked_tag":"always on in this lab","locked_tip":"The lab keeps this on. Change it in Settings, under Advanced.","source_lab":"From the lab","source_own":"Yours","add_to_timeline":"Add to timeline","when_label":"When","when_options":[["before","Before oTree starts"],["after","After oTree starts"]],"reads_link":"What a script can read","script_explain":{"title":"Add your own script","lead":"A script is a command this computer runs each time you launch this config.","points":["It runs in its own window, at its place in the timeline.","If it fails, the launch stops there: later steps do not run. Windows and pages that are already open stay open.","The launcher never closes it. Close its window yourself when you are done.","It is saved with this config only and changes nothing in your study."]},"website_explain":{"title":"Add your own website","lead":"A website is a page the launcher sends to your browser on launch.","points":["It opens in a new tab once oTree is ready, after the other pages. Move it with the arrows.","Good for a payment sheet, a survey or a lab tool next to the admin page.","The launcher hands the address to the browser. It does not check that the page loads.","It is saved with this config only."]},"value_explain":{"title":"Add your own value","lead":"A value is a name and a setting that oTree and your scripts can read when you launch this config.","points":["The launcher passes it along as an environment variable, for example MY_FOLDER.","It is fixed when the server starts. A change needs a relaunch.","The launcher sets it. It does not check whether your study reads it.","It is saved with this config only and changes nothing in your study."]},"card_title":"Advanced: scripts, websites and values","card_intro":"Everything staff can add to a launch in Advanced.","card_action":"Choose per item what staff get.","group_scripts":["Scripts","Commands that run on launch"],"group_websites":["Websites","Pages that open in the browser"],"group_values":["Values","What oTree and scripts are told (environment variables)"],"add_website":"Add website","add_value":"Add value","own_label":"Staff may add their own:","own_kinds":[["script","scripts"],["website","websites"],["value","values"]],"builtin_tag":"built in","this_computer":"(this computer)","none":"None yet.","state_label":"For staff","states":[["off","Off"],["available","Available"],["default","On by default"],["locked","Always on"]],"legend":[["off","Staff do not see it. A config that already uses a script, website or variable keeps it. A built-in value is off in every config."],["available","Listed under Ready to add in Advanced."],["default","In every launch unless staff take it out."],["locked","In every launch. Staff cannot take it out."]],"fixed_label":"Staff can change the value","fixed_tip":"On: the value here is a starting value, staff type their own. Off: this value is always used and staff cannot change it.","label_label":"Name staff see (optional)","seat_not_offered":"This lab does not offer Computers to start.","fixed_tag":"set by the lab","unsaved_text":"You have an unsaved %s. It is not in the launch yet.","unsaved_kinds":{"script":"script","website":"website","env":"value"},"unsaved_keep":"Keep editing","unsaved_discard":"Discard"},
   scripts_card:"Launch scripts",script_add:"Add script",script_add_own:"Add your own script",
   script_add:"Add script",website_add:"Add website",script_show:"Show script",script_hide:"Hide script",timeline_copy_link:"Copy link",
   website_add_own:"Add your own website",script_include:"Include by default",script_hidden:"Hidden",
@@ -3868,7 +3877,7 @@ function seatSyncFromTools(){
 }
 /* From Advanced to the Lab card: the sheet closes, the number box is ready. */
 function goSeatCard(){
-  closeAdvanced();
+  if(!requestCloseAdvanced())return;
   var row=el("mapRow"),box=el("seatNumber");
   if(row){row.scrollIntoView({block:"center"});row.classList.remove("seat-flash");void row.offsetWidth;row.classList.add("seat-flash");}
   if(box&&!box.closest("[hidden]"))box.focus();
@@ -4140,20 +4149,54 @@ function sortedServiceChoices(){
   return out;
 }
 /* Advanced is a sheet over the page (2026-11-12). The card itself is the primer and never
-   grows. An unfinished Add form stays as typed until Cancel or Add: closing the sheet
-   loses nothing. */
+   grows. Closing it (Done, Escape, a click outside, the card's toggle) goes through
+   requestCloseAdvanced: an Add form with something typed in it keeps the sheet open and
+   asks Keep editing / Discard; an untouched form just goes. Advanced always opens on its
+   home view: no form open, scrolled to the top (Julian, 2026-11-16). */
 var ADV_RETURN=null;
 function advText(){return UI_TEXT.advanced||{};}
-function toggleAdvanced(){if(advOpen)closeAdvanced();else openAdvanced();}
+function toggleAdvanced(){if(advOpen)requestCloseAdvanced();else openAdvanced();}
+function advHomeView(){
+  addFormReset();el("advUnsaved").hidden=true;
+  el("advBody").scrollTop=0;el("advScrim").scrollTop=0;
+}
 function openAdvanced(form){
-  if(!advOpen){ADV_RETURN=document.activeElement;advOpen=true;}
+  if(!advOpen){advHomeView();ADV_RETURN=document.activeElement;advOpen=true;}
   el("advScrim").hidden=false;
   el("advToggle").setAttribute("aria-expanded","true");
   if(form)addFormOpen(form);
   else if(el("addHome")&&!el("addHome").hidden){var d=el("advDone");if(d)d.focus();}
 }
+/* Is there anything typed in the open Add form? (Anything not as the form opens.) */
+function addFormDirty(){
+  var kind=addFormKind(),typed=function(ids){return ids.some(function(i){return (el(i).value||"").trim()!=="";});};
+  if(kind==="script")return typed(["scrNewName","scrNewText","scrNewPort"])||el("scrNewWait").value!=="carry_on"||el("scrNewWhen").selectedIndex>0;
+  if(kind==="website")return typed(["svcNewName","svcNewUrl"]);
+  if(kind==="env")return typed(["envNewName","envNewValue","envNewDesc"])||!!el("envNewFolder").checked;
+  return false;
+}
+/* Every way of closing the sheet by hand. True when it closed. */
+function requestCloseAdvanced(){
+  if(addFormDirty()){
+    var t=advText(),kind=addFormKind(),noun=(t.unsaved_kinds||{})[kind]||kind;
+    el("advUnsavedText").textContent=(t.unsaved_text||"You have an unsaved %s.").replace("%s",noun);
+    if(t.unsaved_keep)el("advUnsavedKeep").innerHTML="<b>"+escapeHtml(t.unsaved_keep)+"</b>";
+    if(t.unsaved_discard)el("advUnsavedDiscard").textContent=t.unsaved_discard;
+    el("advUnsaved").hidden=false;el("advUnsavedKeep").focus();
+    return false;
+  }
+  closeAdvanced();return true;
+}
+function unsavedKeep(){
+  el("advUnsaved").hidden=true;
+  var kind=addFormKind(),f=kind?el(ADD_FORMS[kind][1]):null;if(f)f.focus();
+}
+function unsavedDiscard(){closeAdvanced();}
+/* Closes and drops whatever the forms hold: callers that must not lose typing use
+   requestCloseAdvanced. */
 function closeAdvanced(){
   advOpen=false;
+  advHomeView();
   el("advScrim").hidden=true;
   el("advToggle").setAttribute("aria-expanded","false");
   hoverTipHide();
@@ -4179,17 +4222,18 @@ function fillAdvancedWords(){
   set("envHelpBtn",(UI_TEXT.env_vars||{}).help_link);
   set("scrTileName",(t.script_tile||[])[0]);set("scrTileLine",(t.script_tile||[])[1]);
   set("svcTileName",(t.website_tile||[])[0]);set("svcTileLine",(t.website_tile||[])[1]);
-  set("envAddOpen",t.value_link);set("tlAvailTitle",t.ready_title);
+  set("envTileName",(t.value_tile||[])[0]);set("envTileLine",(t.value_tile||[])[1]);
+  set("tlAvailTitle",t.ready_title);
   set("scrNewWhenLabel",t.when_label);set("scrVarsOpen",t.reads_link);
   set("scrNewWaitLabel",UI_TEXT.script_wait);
   if(el("scrTileIco"))el("scrTileIco").innerHTML=KIND_SVG.script;
   if(el("svcTileIco"))el("svcTileIco").innerHTML=KIND_SVG.page;
+  if(el("envTileIco"))el("envTileIco").innerHTML=KIND_SVG.value;
   var explain=function(id,titleId,x){
     if(!x||!el(id))return;set(titleId,x.title);
     el(id).innerHTML='<b>'+escapeHtml(x.lead)+'</b><ul>'+(x.points||[]).map(function(q){return '<li>'+escapeHtml(q)+'</li>';}).join("")+'</ul>';};
   explain("scrExplain","scrFormTitle",t.script_explain);explain("svcExplain","svcFormTitle",t.website_explain);
-  if(el("envExplain"))el("envExplain").innerHTML='<b>'+escapeHtml(t.values_intro||"")+'</b><ul>'+(((toolsText().env_help||{}).blocks||[]).filter(function(b){return b[0]==="p";}).slice(0,1).map(function(b){return '<li>'+escapeHtml(b[1])+'</li>';}).join(""))+'</ul>';
-  set("envFormTitle",(UI_TEXT.env_vars||{}).add_own);
+  explain("envExplain","envFormTitle",t.value_explain);
   ["scrAddBtn","svcAddBtn"].forEach(function(id){var e=el(id);if(e&&t.add_to_timeline)e.innerHTML='<b>'+escapeHtml(t.add_to_timeline)+'</b>';});
   var w=el("scrNewWhen");if(w)w.innerHTML=(t.when_options||[]).map(function(o){return '<option value="'+escapeHtml(o[0])+'">'+escapeHtml(o[1])+'</option>';}).join("");
 }
@@ -4357,7 +4401,7 @@ function tlListHtml(rows){
 }
 var SCRIPT_SHOWN={};   /* rows with their text open; nothing is remembered between starts */
 function toggleScriptText(id){SCRIPT_SHOWN[id]=!SCRIPT_SHOWN[id];renderTimeline(TL_DATA,null);}
-/* ---- Add your own: the two tiles, or ONE form in their place. Cancel and a successful add
+/* ---- Add your own: the tiles (Script, Website, Value), or ONE form in their place. Cancel and a successful add
    clear the form; closing the sheet leaves it as typed. ---- */
 var ADD_FORMS={script:["scrAddForm","scrNewName","scrAddMsg"],website:["svcAddForm","svcNewName","svcAddMsg"],env:["envAddForm","envNewName","envAddMsg"]};
 function addFormKind(){var k=null;Object.keys(ADD_FORMS).forEach(function(x){if(!el(ADD_FORMS[x][0]).hidden)k=x;});return k;}
@@ -4367,11 +4411,15 @@ function addFormClear(){
   el("scrNewWait").value="carry_on";if(el("scrNewWhen").options.length)el("scrNewWhen").selectedIndex=0;
   scrNewWaitChanged();serviceMessage("");
 }
-function addFormClose(){
-  var was=addFormKind();
+function addFormReset(){
   addFormClear();
   Object.keys(ADD_FORMS).forEach(function(x){el(ADD_FORMS[x][0]).hidden=true;});
   el("addHome").hidden=false;
+}
+function addFormClose(){
+  var was=addFormKind();
+  addFormReset();
+  el("advUnsaved").hidden=true;
   if(was&&advOpen){var b=el(was==="script"?"scrAddOpen":was==="website"?"svcAddOpen":"envAddOpen");if(b&&!b.hidden)b.focus();else el("advDone").focus();}
 }
 function addFormOpen(kind){
@@ -4402,8 +4450,15 @@ function renderReady(data){
   }).join("");
   var can=data.can_add||{script:true,website:true,value:!!data.env_can_add};
   el("scrAddOpen").hidden=!can.script;el("svcAddOpen").hidden=!can.website;el("envAddOpen").hidden=!can.value;
-  var off=[];if(!can.script)off.push("scripts");if(!can.website)off.push("websites");
-  var note=el("addOwnOff");note.hidden=!off.length;note.textContent=off.length?(t.own_off_note||"").replace("%s",off.join(" or ")):"";
+  /* What the lab does not allow, values included, so staff learn the lab manager decides. */
+  var off=typeof data.own_off==="string"?data.own_off:ownOffNote(can,t);
+  var note=el("addOwnOff");note.hidden=!off;note.textContent=off;
+}
+/* core.own_off_note, for the static preview that has no answer from core. */
+function ownOffNote(can,t){
+  var off=(t.own_off_kinds||[["script","scripts"],["website","websites"],["value","values"]]).filter(function(k){return can[k[0]]===false;}).map(function(k){return k[1];});
+  if(!off.length)return "";
+  return (t.own_off_note||"").replace("%s",off.length===1?off[0]:off.slice(0,-1).join(", ")+" or "+off[off.length-1]);
 }
 /* ---- Edit an own script: on a saved config it is written straight into that config,
    only this script (core.save_own_script_edit). Other unsaved edits stay unsaved. ---- */
@@ -5660,8 +5715,8 @@ document.addEventListener("keydown",function(e){
     if(!el("logModal").hidden){closeLogModal();return;}
     if(!el("infoModal").hidden){closeModal();return;}
     if(el("advScrim")&&!el("advScrim").hidden){
-      /* Never loses typed text: the sheet closes, an open form stays as it is. */
-      closeAdvanced();
+      /* Never loses typed text: an Add form with something in it asks first. */
+      requestCloseAdvanced();
       return;}
     /* wizModal: intentionally NOT closable by Escape (no close X / backdrop). */
     return;

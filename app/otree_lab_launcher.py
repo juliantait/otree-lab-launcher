@@ -3411,16 +3411,29 @@ class LauncherApp(object):
         top.withdraw()
         top.title(core.SERVICES_ADVANCED_LABEL)
         top.configure(bg=COLORS["card"])
-        top.protocol("WM_DELETE_WINDOW", self._close_advanced)
-        top.bind("<Escape>", lambda _e: self._close_advanced())
+        top.protocol("WM_DELETE_WINDOW", self._request_close_advanced)
+        top.bind("<Escape>", lambda _e: self._request_close_advanced())
         bar = tk.Frame(top, bg=COLORS["card"])
         bar.pack(fill="x", padx=PAD + 6, pady=(PAD, 8))
         tk.Label(bar, text=core.SERVICES_ADVANCED_LABEL, bg=COLORS["card"], fg=COLORS["text"],
                  font=fonts.heading).pack(side="left")
         tk.Label(bar, text=core.ADVANCED_SHEET_NOTE, bg=COLORS["card"], fg=COLORS["muted"],
                  font=fonts.small).pack(side="left", padx=(12, 0))
-        self.advanced_done_button = ttk.Button(bar, text="Done", command=self._close_advanced)
+        self.advanced_done_button = ttk.Button(bar, text="Done", command=self._request_close_advanced)
         self.advanced_done_button.pack(side="right")
+        # Closing with something typed in an Add form: the window stays and asks (2026-11-16).
+        # Packed under the bar only while it asks.
+        self._advanced_bar = bar
+        note = self.advanced_unsaved = tk.Frame(top, bg=COLORS["warn_soft"])
+        self.advanced_unsaved_label = tk.Label(note, text="", bg=COLORS["warn_soft"],
+                                               fg=COLORS["text"], font=fonts.bold, anchor="w")
+        self.advanced_unsaved_label.pack(side="left", padx=(PAD + 6, 0), pady=6)
+        self.advanced_unsaved_discard = ttk.Button(note, text=core.ADVANCED_UNSAVED_DISCARD,
+                                                   command=self._unsaved_discard)
+        self.advanced_unsaved_discard.pack(side="right", padx=(6, PAD + 6), pady=6)
+        self.advanced_unsaved_keep = ttk.Button(note, text=core.ADVANCED_UNSAVED_KEEP,
+                                                command=self._unsaved_keep)
+        self.advanced_unsaved_keep.pack(side="right", pady=6)
         tk.Frame(top, bg=COLORS["card_line"], height=1).pack(fill="x")
         scroll = self.advanced_scroll = ScrollFrame(top, COLORS["card"])
         scroll.pack(fill="both", expand=True)
@@ -3452,7 +3465,7 @@ class LauncherApp(object):
                                      wraplength=420)
         self.services_msg.pack(fill="x")
 
-        # RIGHT: Add your own (two buttons, one form at a time), then Ready to add.
+        # RIGHT: Add your own (Script, Website, Value; one form at a time), then Ready to add.
         # What explains is behind an info tip (PRINCIPLES 13).
         own_title = tk.Frame(right, bg=COLORS["card"])
         own_title.pack(fill="x")
@@ -3471,13 +3484,13 @@ class LauncherApp(object):
         self.service_open_button.pack(side="left", padx=(6, 0))
         Tooltip(self.service_open_button,
                 lambda: core.ADD_OWN_WEBSITE_TILE[1]).attach(self.service_open_button)
+        # Value: packed by _render_add_tiles only when the lab lets staff add their own.
+        self.env_open_button = ttk.Button(add_buttons, text=core.ADD_OWN_VALUE_TILE[0],
+                                          command=lambda: self._open_add_form("env"))
+        Tooltip(self.env_open_button,
+                lambda: core.ADD_OWN_VALUE_TILE[1]).attach(self.env_open_button)
         self.add_own_off = tk.Label(right, text="", bg=COLORS["card"], fg=COLORS["muted"],
                                     font=fonts.small, anchor="w", justify="left", wraplength=340)
-        self.env_open_row = tk.Frame(right, bg=COLORS["card"])
-        self.env_open_button = ttk.Button(self.env_open_row, text=core.ADD_OWN_VALUE_LINK,
-                                          style="Slim.TButton",
-                                          command=lambda: self._open_add_form("env"))
-        self.env_open_button.pack(side="left")
         self.add_forms = tk.Frame(right, bg=COLORS["card"])
         self.add_forms.pack(fill="x")
         self.env_forms = self.add_forms
@@ -3546,6 +3559,7 @@ class LauncherApp(object):
         self.script_vars_link.configure(text=core.SCRIPT_READS_LINK)
         self.script_vars_link.pack(side="right")
 
+        self._add_form_explain = explain
         add = self.service_form = tk.Frame(self.add_forms, bg=COLORS["card"])
         add.columnconfigure(1, weight=1)
         tk.Label(add, text=core.WEBSITE_EXPLAIN["title"], bg=COLORS["card"], fg=COLORS["text"],
@@ -3654,6 +3668,12 @@ class LauncherApp(object):
         fonts = self.fonts
         form = self.env_form = tk.Frame(self.env_forms, bg=COLORS["card"])
         form.columnconfigure(1, weight=1)
+        # First what a value is and does, like the script and website forms.
+        tk.Label(form, text=core.VALUE_EXPLAIN["title"], bg=COLORS["card"], fg=COLORS["text"],
+                 font=fonts.bold, anchor="w").grid(row=0, column=0, columnspan=3, sticky="w",
+                                                   pady=(8, 2))
+        self._add_form_explain(form, core.VALUE_EXPLAIN, 1)
+        top = 2
         self.env_new_name = tk.StringVar(self.root, value="")
         self.env_new_value = tk.StringVar(self.root, value="")
         self.env_new_description = tk.StringVar(self.root, value="")
@@ -3663,18 +3683,19 @@ class LauncherApp(object):
                                            (core.ENV_VAR_DESCRIPTION_LABEL,
                                             self.env_new_description))):
             tk.Label(form, text=text, bg=COLORS["card"], fg=COLORS["faint"],
-                     font=fonts.small).grid(row=row, column=0, sticky="w", padx=(0, 6), pady=(0, 3))
+                     font=fonts.small).grid(row=top + row, column=0, sticky="w", padx=(0, 6),
+                                            pady=(0, 3))
             entry = ttk.Entry(form, textvariable=var)
-            entry.grid(row=row, column=1, sticky="ew", pady=(0, 3))
+            entry.grid(row=top + row, column=1, sticky="ew", pady=(0, 3))
             if row == 0:
                 self.env_name_entry = entry
         tk.Checkbutton(form, text=core.ENV_VAR_FOLDER_LABEL, variable=self.env_new_folder,
                        bg=COLORS["card"], fg=COLORS["text"], font=fonts.small,
                        activebackground=COLORS["card"], selectcolor=COLORS["card"],
-                       highlightthickness=0, bd=0).grid(row=3, column=1, sticky="w")
+                       highlightthickness=0, bd=0).grid(row=top + 3, column=1, sticky="w")
         acts = tk.Frame(form, bg=COLORS["card"])
-        acts.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        self.env_add_button = ttk.Button(acts, text=core.ENV_VAR_ADD_LABEL,
+        acts.grid(row=top + 4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.env_add_button = ttk.Button(acts, text=core.ADD_OWN_VALUE_BUTTON,
                                          command=self._add_own_env_var)
         self.env_add_button.pack(side="left")
         ttk.Button(acts, text=core.ADD_FORM_CANCEL_LABEL,
@@ -3892,11 +3913,6 @@ class LauncherApp(object):
     def _render_env_vars(self, data):
         """Repaint the values in use only when what they show changed: typing must not
         rebuild the box it is typing in."""
-        can_add = data["can_add"]
-        if can_add["value"]:
-            self.env_open_row.pack(fill="x", pady=(6, 0), before=self.add_forms)
-        else:
-            self.env_open_row.pack_forget()
         rows = data["values"]
         signature = json.dumps([[r["id"], r["tag"], r.get("secret"), r["locked"], r.get("fixed"),
                                  r["value"] if r.get("fixed") else "", r.get("tip"),
@@ -3987,7 +4003,8 @@ class LauncherApp(object):
 
     def _go_seat_card(self):
         """From Advanced to the Lab card: the window closes, the number box is ready."""
-        self._close_advanced()
+        if not self._request_close_advanced():
+            return
         try:
             self._scroll_to(self.seat_number_entry)
             self.seat_number_entry.focus_set()
@@ -3996,7 +4013,7 @@ class LauncherApp(object):
 
     def _toggle_advanced(self, _event=None):
         if self.advanced_shown.get():
-            self._close_advanced()
+            self._request_close_advanced()
         else:
             self._open_advanced()
 
@@ -4004,6 +4021,7 @@ class LauncherApp(object):
         """Show the Advanced window (``form``: with that Add form open, cursor in Name)."""
         top = self.advanced_window
         if not self.advanced_shown.get():
+            self._advanced_home_view()
             self.advanced_shown.set(True)
             self.advanced_toggle.configure(text="▾  " + core.SERVICES_ADVANCED_LABEL.upper())
             try:
@@ -4026,8 +4044,71 @@ class LauncherApp(object):
             except tk.TclError:
                 pass
 
+    def _add_form_open(self):
+        """Which Add form is open: "script", "website", "env" or None."""
+        for kind, frame in (("script", self.script_form), ("website", self.service_form),
+                            ("env", getattr(self, "env_form", None))):
+            if frame is not None and frame.winfo_manager():
+                return kind
+        return None
+
+    def _add_form_dirty(self):
+        """Anything typed in the open Add form (anything not as the form opens)."""
+        kind = self._add_form_open()
+        if kind == "script":
+            return bool(self.script_new_name.get().strip() or self.script_new_port.get().strip()
+                        or self.script_new_text.get("1.0", "end-1c").strip()
+                        or self.script_new_wait.get() != core.SCRIPT_WAIT_OPTIONS[0][1]
+                        or self.script_new_when.get() != core.SCRIPT_WHEN_OPTIONS[0][1])
+        if kind == "website":
+            return bool(self.service_new_name.get().strip() or self.service_new_url.get().strip())
+        if kind == "env":
+            return bool(self.env_new_name.get().strip() or self.env_new_value.get().strip()
+                        or self.env_new_description.get().strip() or self.env_new_folder.get())
+        return False
+
+    def _request_close_advanced(self):
+        """Done, Escape, the window's close box, the card's toggle. An Add form with something
+        typed in it keeps the window open and asks Keep editing / Discard; an untouched form
+        just goes. True when the window closed."""
+        if self._add_form_dirty():
+            kind = self._add_form_open()
+            self.advanced_unsaved_label.configure(
+                text=core.ADVANCED_UNSAVED_TEXT % core.ADVANCED_UNSAVED_KINDS.get(kind, kind))
+            if not self.advanced_unsaved.winfo_manager():
+                self.advanced_unsaved.pack(fill="x", after=self._advanced_bar)
+            try:
+                self.advanced_unsaved_keep.focus_set()
+            except tk.TclError:
+                pass
+            return False
+        self._close_advanced()
+        return True
+
+    def _unsaved_keep(self):
+        self.advanced_unsaved.pack_forget()
+        kind = self._add_form_open()
+        try:
+            {"script": self.script_name_entry, "env": self.env_name_entry}.get(
+                kind, self.service_name_entry).focus_set()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _unsaved_discard(self):
+        self._close_advanced()
+
+    def _advanced_home_view(self):
+        """No Add form open, no question, scrolled to the top."""
+        self._close_add_forms()
+        try:
+            self.advanced_scroll.canvas.yview_moveto(0)
+        except (tk.TclError, AttributeError):
+            pass
+
     def _close_advanced(self):
-        """Done, Escape or the window's close box. An unfinished Add form stays as typed."""
+        """Closes and drops whatever the Add forms hold; Advanced opens on its home view next
+        time. Callers that must not lose typing use _request_close_advanced."""
+        self._advanced_home_view()
         self.advanced_shown.set(False)
         self.advanced_toggle.configure(text="▸  " + core.SERVICES_ADVANCED_LABEL.upper())
         try:
@@ -4218,6 +4299,9 @@ class LauncherApp(object):
         self.services_msg.configure(text="")
         # A frame whose children are all unpacked keeps its last height: give it back.
         self.add_forms.configure(height=1)
+        unsaved = getattr(self, "advanced_unsaved", None)
+        if unsaved is not None:
+            unsaved.pack_forget()
 
     def _open_add_form(self, kind):
         """One form at a time, under the two buttons. Opens the window when it is closed."""
@@ -4376,18 +4460,24 @@ class LauncherApp(object):
             self.ready_box.pack(fill="x")
         else:
             self.ready_box.pack_forget()
-        # Add your own: what the lab allows.
-        can_add = data["can_add"]
-        for button, allowed in ((self.script_open_button, can_add["script"]),
-                                (self.service_open_button, can_add["website"])):
-            if allowed and not button.winfo_manager():
-                button.pack(side="left", padx=(0, 6))
-            elif not allowed:
+        self._render_add_tiles(data["can_add"])
+
+    def _render_add_tiles(self, can_add):
+        """Add your own: the Script, Website and Value tiles the lab allows, always in that
+        order, and the note naming what it does not allow (values included)."""
+        wanted = [button for button, allowed in ((self.script_open_button, can_add["script"]),
+                                                 (self.service_open_button, can_add["website"]),
+                                                 (self.env_open_button, can_add["value"]))
+                  if allowed]
+        if self.add_buttons.pack_slaves() != wanted:
+            for button in (self.script_open_button, self.service_open_button,
+                           self.env_open_button):
                 button.pack_forget()
-        off = [word for word, allowed in (("scripts", can_add["script"]),
-                                          ("websites", can_add["website"])) if not allowed]
+            for index, button in enumerate(wanted):
+                button.pack(side="left", padx=(6 if index else 0, 0))
+        off = core.own_off_note(can_add)
         if off:
-            self.add_own_off.configure(text=core.ADD_OWN_OFF_NOTE % " or ".join(off))
+            self.add_own_off.configure(text=off)
             self.add_own_off.pack(fill="x", pady=(4, 0), before=self.add_forms)
         else:
             self.add_own_off.pack_forget()

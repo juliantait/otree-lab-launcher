@@ -82,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.13.1"
+APP_VERSION = "1.13.2"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -11187,14 +11187,21 @@ def launch_timeline(cfg, lab_presets=None):
             "groups": timeline_available_groups(available, tools_on, env_can_add),
             # 2026-11-12: what both faces draw. ``values``: the values in use (the built-in
             # ones first). ``ready``: ONE flat list of what can be added. ``primer``: the
-            # collapsed card. ``can_add``: which "Add your own" the lab allows.
+            # collapsed card. ``can_add``: which "Add your own" the lab allows; ``own_off``:
+            # the note naming what it does not allow.
             "tools": tool_rows, "values": values,
             "ready": _ready_rows(available, tool_rows),
-            "can_add": can_add,
+            "can_add": can_add, "own_off": own_off_note(can_add),
             "primer": launch_primer(c, timeline, values, can_add)}
 
 
 ADVANCED_SHEET_NOTE = "What happens when you press Launch"
+# Closing Advanced with an Add form that has something typed in it (Julian, 2026-11-16):
+# the sheet stays open and asks. An untouched form just goes. Advanced always opens fresh.
+ADVANCED_UNSAVED_TEXT = "You have an unsaved %s. It is not in the launch yet."
+ADVANCED_UNSAVED_KINDS = {"script": "script", "website": "website", "env": "value"}
+ADVANCED_UNSAVED_KEEP = "Keep editing"
+ADVANCED_UNSAVED_DISCARD = "Discard"
 TIMELINE_INTRO = "Runs top to bottom. Use the arrows to change the order."
 TIMELINE_OTREE_NOTE = "The launcher waits here until oTree answers"
 VALUES_TITLE = "Values for this launch"
@@ -11206,8 +11213,23 @@ ADD_OWN_TITLE = "Add your own"
 ADD_OWN_INTRO = "Saved with this config. Nothing in your study changes."
 ADD_OWN_SCRIPT_TILE = ("Script", "Run a command when you launch")
 ADD_OWN_WEBSITE_TILE = ("Website", "Open a page in your browser")
-ADD_OWN_VALUE_LINK = "Add your own value (an environment variable)"
+# 2026-11-16: Value is a third tile beside Script and Website (it was a small text link).
+ADD_OWN_VALUE_TILE = ("Value", "Pass a setting to oTree")
+ADD_OWN_VALUE_BUTTON = "Add value"   # the value form's button, both faces
 ADD_OWN_OFF_NOTE = "This lab does not let you add your own %s. What is in the config stays."
+ADD_OWN_OFF_KINDS = (("script", "scripts"), ("website", "websites"), ("value", "values"))
+
+
+def own_off_note(can_add):
+    """The note under the tiles naming what this lab does not let staff add ("" when it
+    allows everything): "scripts", "scripts or values", "scripts, websites or values"."""
+    off = [word for kind, word in ADD_OWN_OFF_KINDS if not (can_add or {}).get(kind, True)]
+    if not off:
+        return ""
+    words = off[0] if len(off) == 1 else ", ".join(off[:-1]) + " or " + off[-1]
+    return ADD_OWN_OFF_NOTE % words
+
+
 READY_TITLE = "Ready to add"
 READY_INTRO = ("Set up by the lab, or taken out of this launch earlier. Add puts it in. The lab "
                "manager decides what is offered: Settings, Advanced: scripts, websites and values.")
@@ -11250,6 +11272,17 @@ WEBSITE_EXPLAIN = {
         "The launcher hands the address to the browser. It does not check that the page "
         "loads.",
         "It is saved with this config only.",
+    ),
+}
+VALUE_EXPLAIN = {
+    "title": "Add your own value",
+    "lead": "A value is a name and a setting that oTree and your scripts can read when you "
+            "launch this config.",
+    "points": (
+        "The launcher passes it along as an environment variable, for example MY_FOLDER.",
+        "It is fixed when the server starts. A change needs a relaunch.",
+        "The launcher sets it. It does not check whether your study reads it.",
+        "It is saved with this config only and changes nothing in your study.",
     ),
 }
 PRIMER_ON_LAUNCH = "On launch"
@@ -11424,7 +11457,8 @@ def advanced_ui_text():
         "values_title": VALUES_TITLE, "values_intro": VALUES_INTRO, "values_none": VALUES_NONE,
         "add_own_title": ADD_OWN_TITLE, "add_own_intro": ADD_OWN_INTRO,
         "script_tile": list(ADD_OWN_SCRIPT_TILE), "website_tile": list(ADD_OWN_WEBSITE_TILE),
-        "value_link": ADD_OWN_VALUE_LINK, "own_off_note": ADD_OWN_OFF_NOTE,
+        "value_tile": list(ADD_OWN_VALUE_TILE), "own_off_note": ADD_OWN_OFF_NOTE,
+        "own_off_kinds": [list(k) for k in ADD_OWN_OFF_KINDS],
         "ready_title": READY_TITLE, "ready_intro": READY_INTRO, "ready_add": READY_ADD_LABEL,
         "ready_settings_note": READY_SETTINGS_NOTE,
         "show": ROW_SHOW_LABEL, "hide": ROW_HIDE_LABEL, "remove_tip": ROW_REMOVE_TIP,
@@ -11436,6 +11470,8 @@ def advanced_ui_text():
                            "points": list(SCRIPT_EXPLAIN["points"])},
         "website_explain": {"title": WEBSITE_EXPLAIN["title"], "lead": WEBSITE_EXPLAIN["lead"],
                             "points": list(WEBSITE_EXPLAIN["points"])},
+        "value_explain": {"title": VALUE_EXPLAIN["title"], "lead": VALUE_EXPLAIN["lead"],
+                          "points": list(VALUE_EXPLAIN["points"])},
         "card_title": ADVANCED_CARD_TITLE, "card_intro": ADVANCED_CARD_INTRO,
         "card_action": ADVANCED_CARD_ACTION,
         "group_scripts": list(ADVANCED_GROUP_SCRIPTS),
@@ -11450,6 +11486,8 @@ def advanced_ui_text():
         "fixed_label": ENV_VAR_FIXED_LABEL, "fixed_tip": ENV_VAR_FIXED_TIP,
         "label_label": ENV_VAR_LABEL_LABEL,
         "seat_not_offered": SEAT_PICK_NOT_OFFERED, "fixed_tag": ENV_VAR_FIXED_TAG,
+        "unsaved_text": ADVANCED_UNSAVED_TEXT, "unsaved_kinds": dict(ADVANCED_UNSAVED_KINDS),
+        "unsaved_keep": ADVANCED_UNSAVED_KEEP, "unsaved_discard": ADVANCED_UNSAVED_DISCARD,
     }
 
 
