@@ -239,7 +239,7 @@ takes the setup.
    - **"Get ready for the lab" and updates.** The lab block is the launcher's
      own, so it never gets in the way. When `settings.py` also changed online and
      the block is the only difference from the committed file, the launcher backs
-     the file up (`.bak`), takes the block out, pulls, and puts the current block
+     the file up (a `.bak` in the study's `lablauncher_backups` folder), takes the block out, pulls, and puts the current block
      back: **Updated, lab support kept.** If the pull fails, the file is put back
      exactly as it was. A block you edited by hand, or any other edit in
      `settings.py`, counts as your own edit (next item).
@@ -248,7 +248,7 @@ takes the setup.
      **Show what's different** (changes nothing); **Get a fresh copy**, the
      recommended way; **Keep this version and launch**; and **Discard my edits to
      these files and update**, which asks first, naming the files, keeps a `.bak`
-     of each file, and is refused while a session of this study is running.
+     of each file in the `lablauncher_backups` folder, and is refused while a session of this study is running.
    - **Its own commits.** When someone committed in this folder, the line says
      **This folder has its own commits, so sort it out with Git or get a fresh
      copy.** Get a fresh copy is the only button.
@@ -311,36 +311,53 @@ oTree serves plain `http` on any port, also on 443, so links start with `http://
 that study in one click in later sessions, so common studies are always a
 double-click away.
 
-**Additional services.** A lab can list web pages that open in a new browser
-tab right after the oTree admin page, once the server is ready (for example
-the lab's FOG page). **Settings > Additional services > Edit**, then **Add
-service** under the lab: a name, a web address (`http://` or `https://` only;
-a program goes under **Launch scripts**) and **Include by default**. A ticked default opens for every
-config that has not made its own choice, so changing it later moves all of
-them at once. Saved per lab in `lab_info.json`, so copy that file to the
-other computers of the lab as usual.
+**Advanced: scripts, websites and values.** One card in Settings holds everything a lab
+offers staff in **Advanced** on the main page. **Settings > Advanced: scripts, websites and
+values > Edit**. It shows one lab at a time, this computer's lab first; the other labs are one
+click away at the top.
 
-**Launch scripts.** A lab can keep commands that run on launch, each in its own
-terminal window. **Settings > Launch scripts > Edit**, then **Add script** under
-the lab: a name, the text to run (several lines are fine, for example `cd some/folder`
-and then `python server.py`), the **Default position** (before or after oTree, after
-when you set nothing), what to do next (**Then**) and two ticks:
+- **Scripts** are commands that run on launch, each in its own terminal window. **Add script**:
+  a name, the text to run (several lines are fine, for example `cd some/folder` and then
+  `python server.py`), the **Default position** (before or after oTree, after when you set
+  nothing) and what to do next (**Then**). **Try it** runs the saved text once, now.
+- **Websites** are pages that open in a new browser tab on launch (for example the lab's FOG
+  page). **Add website**: a name and a web address (`http://` or `https://` only; a program is
+  a script).
+- **Values** are what oTree and scripts are told: environment variables. Three are built in
+  and cannot be deleted: **Computers to start** (the seats a script should start, chosen on the
+  Lab card at each launch; scripts only), **Lab session number** (typed at each launch; oTree
+  and scripts) and **Data folder** (`OTREE_DATA_FOLDER`, for the Download data button of the
+  oTree template). **Add value** adds your own: a variable name, a name staff see, a starting
+  value, a short description for its info tip, and **This is a folder** for a Browse button.
 
-- **Include by default** selects it for every config that has not chosen.
-- **Hidden** keeps it off the list of a config that never chose it, and it runs only
-  for a config that has explicitly selected it. A lab manager can park a script
-  hidden, unhide it for a moment, let one person select it into their config, and hide
-  it again. That config keeps it and still sees it, so it can remove it; once removed
-  it is gone from that config's list. This keeps the list tidy. It is not a lock:
-  anyone with `lab_info.json` can read the text.
+**Every row has one box, For staff:**
 
-See **Launch timeline** in Part 2 for how they run.
+| Choice | What staff get |
+|---|---|
+| **Off** | They do not see it. A config that already uses a script, website or variable keeps it. A built-in value (Computers to start, Lab session number) is off in every config, also in one saved with it on. |
+| **Available** | It is listed under **Ready to add** in Advanced. One click adds it. |
+| **On by default** | It is in every launch unless staff take it out. |
+| **Always on** | It is in every launch and staff cannot take it out. A lock shows on its row. |
 
-**Environment variables.** Most labs never need this. **Settings > Environment variables > Edit** lists what a config may set for a study, per lab. `OTREE_DATA_FOLDER` is always on the list, hidden until you tick it, for the folder of the Download data button in the oTree template. A variable you add starts visible. **Researchers can add their own variables**, off by default, shows Add your own variable on every config of that lab.
+- The box saves at once. Scripts and websites start as **Available**; the two launch values
+  (Computers to start, Lab session number) are **Available** until you change them; Data folder
+  starts **Off**.
+- **Always on** keeps a thing in the launch. It does not stop staff typing today's lab session
+  number or choosing today's seats.
+- A value has one more tick in its Edit form, **Staff can change the value**. Off: the value you
+  typed there is always used and staff see it but cannot change it. It then needs a value.
+- **On by default** and **Always on** also apply to configs saved earlier and to one-click
+  shortcuts. A shortcut whose lab switched on Computers to start or Lab session number asks for
+  them in its small box, like any config that has them on.
+- **Staff may add their own: scripts, websites, values**, at the bottom. Scripts and websites
+  are allowed unless you clear the tick; values only when you tick it. Clearing a tick hides
+  the Add button. What a config already has stays.
+- Saved per lab in `lab_info.json`, so copy that file to the other computers of the lab as
+  usual. This is a convenience for a shared lab, not a lock: anyone with `lab_info.json` can
+  read and change it, and a launcher from before this change ignores the choices it does not know.
 
-- **Tick a variable to show it in Advanced.** It then appears there for every config, new ones too, under **Available tools**. Nothing is set until someone selects it and gives it a value. Unticked is the default, and then Advanced shows nothing extra.
-- **Add variable** adds your own: a name, a default or example value that fills the value box when someone selects it, a short description for its info tip, and **This is a folder** for a Browse button. **Show in configs** ticks it right away.
-- The (i) next to a variable says what it does. **See more** opens a short guide (built-in variables only).
+See **Launch timeline** in Part 2 for how scripts and websites run.
+
 - Some names are refused: what the launcher sets itself (the `DB_*`, `OTREE_ADMIN_*` and `OTREE_LAB_*` names, for example) and what a launch depends on (`PATH`, `PYTHONPATH`, `HOME`, `TEMP` and similar). Names count as the same whatever their capitals, because Windows treats them that way.
 
 The list is tidiness, not a lock: anyone with `lab_info.json` can read it.
@@ -473,7 +490,7 @@ project.
 **Remove lab support block.** Once `settings.py` has the block, a second link,
 **Remove lab support block**, sits next to **View settings.py block** (in Tk under
 it; the block viewer has the same button). It asks first, saves a `.bak` copy of
-`settings.py`, and takes out the launcher's block only: anything else you changed in
+`settings.py` in the study's `lablauncher_backups` folder, and takes out the launcher's block only: anything else you changed in
 `settings.py` stays, and no older backup is put back. To run the study in the lab
 again, click **Get ready for the lab**.
 
@@ -582,7 +599,7 @@ it is.
 
 *What opens in your browser:* the screen lists it under **Browser pages that
 will open** (**Pages sent to the browser** once it runs). Hover a name for its address; the
-copy icon copies it and the eye icon writes it out. Each ticked item opens in its own tab, at its
+copy icon copies it and the eye icon writes it out. Each page on the timeline opens in its own tab, at its
 place in the order. To change that for your study, open **Advanced** (under Database).
 
 *What will launch* and *Session running* are in groups, each with a heading: **Where** (the lab,
@@ -591,51 +608,72 @@ what runs in order, the browser pages, and **Environment variables set** (a tick
 **Show values** shows them, secrets masked). A script's text is behind **Show script**. On
 Session running the result comes first, then **What happened**, row by row.
 
-*Launch timeline.* The top of Advanced is the launch itself, in run order:
-your scripts, **Reset database** when it is ticked (always directly before oTree,
-and it moves with it; its tick stays on the Database card), **Launch oTree server**,
-then the browser pages. Under it, only when you have any, are the **Environment variables** you
-selected, each with its value, and the **Tools** that are on. Below that, **Available tools** holds
-everything not in use, in three collapsed groups with a count: **Tools**, **Environment
-variables**, **Scripts and websites**.
+*Advanced.* The **Advanced** card under Database does not open in place. It names what this
+launch does besides starting oTree:
 
-- The card is short by default: names and marks. A group opens when you click it.
-  A script's text is behind **Show script** (and a hover, which shows the first lines); wherever
-  script text is shown it stops at about six lines and scrolls inside itself. A website's address
-  is behind a hover. **Open** sends it to your browser now, the copy icon copies it, and the eye
-  icon writes it out on the row until you press it again.
-- **Select or clear the tick** on a row to move it between the timeline and Available tools.
-  That covers the oTree admin page, the lab's scripts and websites, and your own.
-- **Reorder** shows arrows on every row. Reset database and Launch oTree server slide out as one
-  block with one pair of arrows, because they move together. Done puts the block back.
+- **On launch**: the steps in run order, for example *Wake lab PCs > oTree server > oTree
+  admin page > FOG*.
+- **Asks you for**: what you fill in at each launch (Computers to start, Lab session number).
+- **Sets**: the values saved in this config.
+- With nothing extra it says so in one line.
+- Two questions are always there: **Want to run your own script?** and **Add a website**. Each
+  opens Advanced with that form ready.
+
+**Change** (or **Open**) opens Advanced as a window over the page: the **Launch timeline** on
+the left, **Add your own** on the right. **Done** closes it. Nothing you typed in a form is
+lost by closing.
+
+*Launch timeline.* The launch itself, top to bottom: your scripts, **Reset database** when it
+is ticked (always directly before oTree, and it moves with it; its tick stays on the Database
+card), **Launch oTree server**, then the browser pages.
+
+- **In the timeline means on.** There are no tick boxes. The **x** at the end of a row takes it
+  out of this launch. It is not deleted: it goes to **Ready to add** on the right, and **Add**
+  there puts it back.
+- **The arrows are always there.** Reset database and Launch oTree server are one block with
+  one pair of arrows, because they move together.
+- **Show** opens a row: a script's text (it stops at about six lines and scrolls inside itself),
+  or a website's address with **Copy link** and **Open**. **Edit** is there for your own script.
+- A row says where it comes from: *From the lab* or *Yours*. A lab row you changed has **Use
+  lab default** behind Show, to follow the lab again.
+- **A lock instead of the x** means the lab keeps that step in every launch (*always on in this
+  lab*). Your lab manager changes that in Settings.
 - **A website opens where you place it.** Before oTree it simply opens, with no server yet. After
   oTree it opens when the server is ready. If a script fails, the launch stops and nothing after it
   opens: a website placed before that script is already open, and the report says "sent to the
-  browser" for it. A website that cannot open is only a warning.
+  browser" for it. The launcher hands the address to the browser; it does not check that the page
+  loads.
 - **The oTree admin page stays after Launch oTree server**, because it cannot open before the
   server exists; its arrow says so when it stops there. By default it comes after every script, so
   with a failed script it does not load. A config that was never reordered opens everything as
   before.
-- **Add your own script** or **Add your own website**, in the **Scripts and websites** group, opens a small form; **Add
-  script** or **Add website** adds it, Cancel closes and clears. A problem keeps the form open with
-  what you typed. **Delete** removes your own.
 - **Edit** on your own script changes its name, text, wait rule and port. On a saved config
   the edit is saved to the config straight away, with no Save and no new config; it keeps its
-  place and tick, and any other unsaved change on the form stays unsaved. On the Lab default or
+  place, and any other unsaved change on the form stays unsaved. On the Lab default or
   a config not saved yet there is nothing to write to, so it stays on the form until you save.
-  Adding, deleting, ticking and reordering stay on the form as usual. Lab scripts are edited
-  in Settings.
-- A row you never touched says *(lab default)* and follows the lab; one you changed says
-  *(your choice)*, with **Use lab default** to undo it. A config you never reordered also
-  follows the lab's default positions.
+  Adding, taking out and moving stay on the form as usual. Lab scripts are edited in Settings.
 
-The collapsed Advanced line counts what will happen, for example *2 scripts, oTree admin
-+ 1 service*. These choices are part of the config: save it to keep them. A page that
-cannot open never stops the launch; the activity log says so.
+*Values for this launch*, under the timeline, lists the values in use: see **Values** below.
+
+*Add your own.* Two buttons, **Script** and **Website**. Each opens a short form that first says
+what the thing is and does.
+
+- **Script**: a name, what to run, **When** (before or after oTree starts) and **Then** (carry
+  on, wait until it has finished, or wait until a port answers). **Add to timeline** puts it
+  where When says. **What a script can read** lists the variables a script gets.
+- **Website**: a name and an address. It goes last; move it with the arrows.
+- A problem keeps the form open with what you typed. Cancel closes and clears.
+- If your lab does not allow own scripts or websites, the button is not there and a line says so.
+
+*Ready to add* is one list of everything that is not in this launch: what the lab offers, and
+your own things you took out. Each row says what it is in one grey line. **Add** puts it in.
+Your own things have **Delete** there.
+
+These choices are part of the config: save it to keep them.
 
 *How a script runs.* In its own window, started minimised on Windows, titled
 `oTree script: <name>`. It starts in the project folder, with your normal environment plus
-`OTREE_LAB_PORT`, `OTREE_LAB_ROOM` and `OTREE_LAB_PROJECT` (and the values of the Tools that are on, see below). It never gets `DATABASE_URL` or
+`OTREE_LAB_PORT`, `OTREE_LAB_ROOM` and `OTREE_LAB_PROJECT` (and the values in use, see **Values** below). It never gets `DATABASE_URL` or
 the admin password. Text runs as a batch file on Windows and with `sh` on Mac and Linux.
 The launcher writes these files to a temporary folder, never into your project. The window
 closes when the script ends with exit code 0, and stays open on any other code so you can
@@ -729,20 +767,27 @@ see the activity log.
 
 ---
 
-#### Tools: seat selection and lab session number
+#### Values: computers to start, lab session number and variables
 
-**Tools** are in **Advanced**, under **Available tools**, both off. Ticked, a tool moves up under the timeline. A tool that is off changes nothing. Each tick is saved with the config.
+A **value** is something oTree and your scripts are told when you launch. Each has a name you
+read and a variable name under it. The values in use are listed in **Advanced**, under the
+timeline; the ones you can add are under **Ready to add**. Your lab manager decides which are
+offered, which are on from the start, and which are always on (a lock).
 
-What you give a tool is for this launch only: it starts empty, is never saved in the config, and does not count as a change to the config. **History** keeps it. Switching lab or config clears the seats.
+There are two kinds:
 
-**Seat selection** is for scripts that start computers, for example through an API. You choose the seats on the **Lab card**, under **Room layout**:
+- **Asked at each launch**: Computers to start and Lab session number. What you give is for
+  this launch only: it starts empty, is never saved in the config, and does not count as a
+  change to the config. **History** keeps it. Switching lab or config clears the seats.
+- **Typed once and saved with the config**: every other value, in its box in Advanced.
 
-- With the tool on, **Computers to start** and the clickable map are there, ready. **Select seats** folds them away and back.
+**Computers to start** is for scripts that start computers, for example through an API. You choose the seats on the **Lab card**, under **Room layout**:
+
+- **Select seats** turns it on for this config and opens the box and the map, in one click. Press it again to turn it off. It is on the Lab card whenever the lab offers it (Available, On by default or Always on), whatever the participant list is. With no participant list on the map, the button shows on its own and the map comes with it once you press it. Where the lab set it to Off, the button is not there and nothing is sent, also for a config saved with it on; where the lab has it always on, it stays pressed.
 - Type a number. That many seats are selected on the map, from the top of the lab's seat list, in the order written in the list.
 - Click seats to swap them. The number follows.
 - **Before you launch** reads it back, *Computers to start: 5 (A31, A30, A29, A28, A27)*, beside the participant list, with **Change** to go back to the Lab card. What you typed as lab session number is kept when you do.
-- With the tool off, **Select seats** still opens the box and the map, with a note: seats chosen there are not used for anything and scripts get nothing. The link in the note opens **Tools** in Advanced.
-- With **Participant list** on **Edit for this run**, clicks on that same map take a seat out of the room. A small switch then shows above the map, **Clicks choose: Computers to start | Participant list**, on Computers to start at first. The line under the map says what a click does. One never changes the other. With Select seats folded away, clicks are the participant list again.
+- With **Participant list** on **Edit for this run**, clicks on that same map take a seat out of the room. A small switch then shows above the map, **Clicks choose: Computers to start | Participant list**, on Computers to start at first. The line under the map says what a click does. One never changes the other.
 - A seat out of the participant list is struck through and can still be picked.
 - A number above the lab's seat count becomes the seat count, and a short note says so.
 - Blank means 0 seats: no computers are started, and the launch still goes ahead.
@@ -763,23 +808,22 @@ Read it with `player.session.config.get('lab_session')`. It appears in the wide 
 
 The value is fixed when the server starts, so a second session in the same launch gets the same value. A new value needs a relaunch. On oTree's Create session page it shows as a box under Configure session, filled in with this value. A change there goes into that session only; History keeps what was typed at launch.
 
-**For script writers.** **Variables for scripts**, next to the Add buttons under **Scripts and websites** in Advanced, lists all of them.
+**For script writers.** **What a script can read**, in the script form and behind Show on a script's row in Advanced, lists all of them.
 
 - Values arrive as environment variables and are never pasted into your script's text. On a Mac or Linux keep them in quotes: `"$LAB_SEATS"`.
-- A tool that is off provides nothing and removes any old value of that name from the environment, with no warning, even when your script mentions it.
+- A value that is not in use provides nothing and removes any old value of that name from the environment, with no warning, even when your script mentions it.
 - Windows has no empty variables: with no seats selected `LAB_SEATS` is not defined there, and `%LAB_SEATS%` in a batch file stays as that literal text. Check `LAB_SEAT_COUNT` first. A blank lab session number is not set on any computer.
 
-**The one-click shortcut** has no launch screen. If a tool is on in that config, it asks in a small box first, only for the tools that are on. The number of seats takes the first seats of the list. Cancel means no launch. Leaving the boxes blank is fine. With both tools off the shortcut does not ask anything. If the box cannot be shown at all (no Tk on this computer's Python and no other way to ask), the shortcut says so and starts nothing: turn the tool off in Advanced, or launch from the launcher window. On a Mac without Tk the shortcut asks with one native question per value instead.
+**The one-click shortcut** has no launch screen. If Computers to start or Lab session number is in use for that config (because the config has it, or because the lab has it on), it asks in a small box first, only for those. The number of seats takes the first seats of the list. Cancel means no launch. Leaving the boxes blank is fine. With neither in use the shortcut does not ask anything. If the box cannot be shown at all (no Tk on this computer's Python and no other way to ask), the shortcut says so and starts nothing: take the value out in Advanced, or launch from the launcher window. On a Mac without Tk the shortcut asks with one native question per value instead.
 
-#### Environment variables
+**Variables.** Only when your lab manager has made one available: it shows under **Ready to add** in **Advanced**, by the name the lab gave it. Most people never see this.
 
-Only when your lab manager has made one available: it shows under **Available tools** in **Advanced**, by name. Most people never see this.
-
-- **Tick it**: it moves up under the timeline. Type a value in the box that appears. For a folder, **Browse...** opens a folder picker; typing a path works too, and in a browser-only launcher it may be the only way.
-- **Only a selected variable with a value is set.** A selected one with an empty box is not set, and nothing breaks.
-- **The value goes to the oTree server and to your scripts**, under that name, never pasted into a script's text. It is saved with the config like any other edit.
-- **A variable that is not selected stays as it was**: if this computer already sets it, the launcher leaves that alone for the server. Scripts do not inherit `OTREE_*` names, as always.
-- **Add your own variable** adds a name and value for this config only. A lab manager turns it on per lab with **Researchers can add their own variables** in Settings; on localhost and Other host it is always there. With it off, a config that already has its own variable keeps it and can still change or remove it.
+- **Add** puts it under **Values for this launch**. Type a value in its box. For a folder, **Browse...** opens a folder picker; typing a path works too, and in a browser-only launcher it may be the only way.
+- **Only a value with something in its box is set.** One with an empty box is not set, and nothing breaks.
+- **It goes to the oTree server and to your scripts**, under its variable name, never pasted into a script's text. It is saved with the config like any other edit.
+- **A value the lab has on from the start** comes with the lab's value. Type your own to change it for this config, or take it out with the **x**. *Set by the lab* means the lab fixed the value: you see it and cannot change it.
+- **A value that is not in use stays as it was**: if this computer already sets that variable, the launcher leaves that alone for the server. Scripts do not inherit `OTREE_*` names, as always.
+- **Add your own value**, under the Script and Website buttons, adds a name and value for this config only. A lab manager turns it on per lab with **Staff may add their own: values** in Settings; on localhost and Other host it is always there. With it off, a config that already has its own variable keeps it and can still change or remove it.
 - **Before you launch** lists what will be set, by name; **Show values** shows the values. A name that looks secret (holding PASSWORD, PASS, PWD, TOKEN, SECRET, KEY or CREDENTIAL) has its value hidden there, in the activity log and in History; History then keeps only the name. It is still stored in plain text in `data/saved_configs.json`, as passwords are.
 - **A folder that does not exist** gets a warning before you launch, not a block.
 - **To read one in oTree**, with `import os` at the top of the file: `os.environ.get('OTREE_DATA_FOLDER', '')`. The value is fixed when the server starts, so a change needs a relaunch. The launcher says it set the variable; it does not check whether your study reads it.

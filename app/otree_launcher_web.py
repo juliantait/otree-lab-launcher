@@ -408,6 +408,7 @@ def _ui_text():
         "tools": core.launch_tools_ui_text(),
         "seat_pick": core.seat_pick_ui_text(),
         "env_vars": core.env_vars_ui_text(),
+        "advanced": core.advanced_ui_text(),
     }
 
 
@@ -501,11 +502,18 @@ def _lab_rows(presets):
              "default_room": p["default_room"], "shortcut_label": p["shortcut_label"],
              "default_port": p["default_port"],
              # The lab's additional services (Settings -> Additional services).
-             "services": core.normalize_lab_services(p.get(core.SERVICES_KEY)),
-             # The lab's launch scripts (Settings -> Launch scripts).
-             "scripts": core.normalize_lab_scripts(p.get(core.LAB_SCRIPTS_KEY)),
+             # Each with ``state``: its For staff choice (core.staff_state).
+             "services": [dict(s, state=core.staff_state(s))
+                          for s in core.normalize_lab_services(p.get(core.SERVICES_KEY))],
+             # The lab's launch scripts.
+             "scripts": [dict(s, state=core.staff_state(s))
+                         for s in core.normalize_lab_scripts(p.get(core.LAB_SCRIPTS_KEY))],
              # Its environment variables, built-in suggestions included.
              "env_vars": core.lab_env_var_rows(p),
+             # The two built-in values (the former tools) and what staff may add.
+             "tools": core.lab_tool_rows(p),
+             "scripts_add_own": p.get(core.LAB_SCRIPTS_ADD_OWN_KEY, True) is not False,
+             "services_add_own": p.get(core.LAB_SERVICES_ADD_OWN_KEY, True) is not False,
              core.LAB_ENV_ADD_OWN_KEY: bool(p.get(core.LAB_ENV_ADD_OWN_KEY))}
             for p in presets if not p.get("deleted")]
 
@@ -1486,7 +1494,8 @@ class Api(object):
                 "pg_admin": core.pg_admin_summary(core.pg_admin_from_store(self.store_extra)),
                 "services": core.services_summary(presets),
                 "scripts": core.scripts_summary(presets),
-                "env_vars": core.env_vars_summary(presets)}
+                "env_vars": core.env_vars_summary(presets),
+                "advanced": core.advanced_summary(presets, home)}
 
     @api_call
     def admin_summary(self, fields=None):
@@ -2567,21 +2576,59 @@ class Api(object):
         return {"ok": answer.get("ok", False), "message": answer.get("message", ""),
                 "presets": _lab_rows(presets), "summary": core.services_summary(presets),
                 "scripts_summary": core.scripts_summary(presets),
-                "env_vars_summary": core.env_vars_summary(presets)}
+                "env_vars_summary": core.env_vars_summary(presets),
+                "advanced_summary": core.advanced_summary(presets, core.read_lab_marker() or "")}
 
     @api_call
-    def add_lab_service(self, lab_id, name, url, include_by_default=False):
-        """Add a service to a lab (Settings -> Additional services)."""
+    def add_lab_service(self, lab_id, name, url, include_by_default=False, state=None):
+        """Add a website to a lab (Settings -> Advanced). ``state``: its For staff choice."""
         return self._lab_service_change(lambda presets: core.add_lab_service(
-            presets, lab_id, name, url, include_by_default=bool(include_by_default)))
+            presets, lab_id, name, url, include_by_default=bool(include_by_default),
+            state=state))
 
     @api_call
     def update_lab_service(self, lab_id, service_id, name=None, url=None,
-                           include_by_default=None):
+                           include_by_default=None, state=None):
         """Edit a lab service (its id stays, so configs keep their choice)."""
         return self._lab_service_change(lambda presets: core.update_lab_service(
             presets, lab_id, service_id, name=name, url=url,
-            include_by_default=include_by_default))
+            include_by_default=include_by_default, state=state))
+
+    @api_call
+    def set_lab_tool_state(self, lab_id, tool_id, state):
+        """The lab's For staff choice for a built-in value (Computers to start, Lab
+        session number)."""
+        return self._lab_service_change(lambda presets: core.set_lab_tool_state(
+            presets, lab_id, tool_id, state))
+
+    @api_call
+    def set_lab_add_own(self, lab_id, kind, on):
+        """May staff add their own scripts / websites / values on this lab?"""
+        return self._lab_service_change(lambda presets: core.set_lab_add_own(
+            presets, lab_id, kind, bool(on)))
+
+    @api_call
+    def tool_choice(self, fields, tool_id, on):
+        """What the config stores after a built-in value is switched on or off."""
+        cfg = fields_to_config(fields or {})
+        answer = core.tool_choice(cfg, core.lab_presets_from_store(self.store_extra), tool_id,
+                                  bool(on))
+        return dict(answer, ok=True)
+
+    @api_call
+    def env_var_choice(self, fields, name, on, value=None):
+        """What the config stores after a lab value is added, taken out or typed in."""
+        cfg = fields_to_config(fields or {})
+        answer = core.env_var_choice(cfg, core.lab_presets_from_store(self.store_extra), name,
+                                     bool(on), value)
+        return dict(answer, ok=True)
+
+    @api_call
+    def place_step(self, fields, item_id, position):
+        """The launch order with a new step where the Add form's When says."""
+        cfg = fields_to_config(fields or {})
+        presets = core.lab_presets_from_store(self.store_extra)
+        return {"ok": True, "order": core.place_new_step(cfg, presets, item_id, position)}
 
     @api_call
     def delete_lab_service(self, lab_id, service_id):
@@ -2659,21 +2706,21 @@ class Api(object):
     @api_call
     def add_lab_script(self, lab_id, name, script, include_by_default=False, hidden=False,
                        position=core.SCRIPT_POSITION_AFTER, wait=core.SCRIPT_WAIT_CARRY_ON,
-                       wait_port=""):
-        """Add a script to a lab (Settings -> Launch scripts)."""
+                       wait_port="", state=None):
+        """Add a script to a lab (Settings -> Advanced)."""
         return self._lab_service_change(lambda presets: core.add_lab_script(
             presets, lab_id, name, script, include_by_default=include_by_default, hidden=hidden,
-            position=position, wait=wait, wait_port=wait_port))
+            position=position, wait=wait, wait_port=wait_port, state=state))
 
     @api_call
     def update_lab_script(self, lab_id, script_id, name=None, script=None,
                           include_by_default=None, hidden=None, position=None, wait=None,
-                          wait_port=None):
+                          wait_port=None, state=None):
         """Edit a lab script (its id stays, so configs keep their choice)."""
         return self._lab_service_change(lambda presets: core.update_lab_script(
             presets, lab_id, script_id, name=name, script=script,
             include_by_default=include_by_default, hidden=hidden, position=position,
-            wait=wait, wait_port=wait_port))
+            wait=wait, wait_port=wait_port, state=state))
 
     @api_call
     def delete_lab_script(self, lab_id, script_id):
@@ -2682,19 +2729,20 @@ class Api(object):
             presets, lab_id, script_id))
 
     @api_call
-    def add_lab_env_var(self, lab_id, name, value="", hidden=True, description="", folder=False):
-        """Add a variable to a lab (Settings -> Environment variables)."""
+    def add_lab_env_var(self, lab_id, name, value="", hidden=True, description="", folder=False,
+                        state=None, label="", fixed=False):
+        """Add a value (an environment variable) to a lab (Settings -> Advanced)."""
         return self._lab_service_change(lambda presets: core.add_lab_env_var(
             presets, lab_id, name, value, hidden=bool(hidden), description=description,
-            folder=bool(folder)))
+            folder=bool(folder), state=state, label=label, fixed=bool(fixed)))
 
     @api_call
     def update_lab_env_var(self, lab_id, name, value=None, hidden=None, description=None,
-                           folder=None):
-        """Change a lab variable's default value, tick, description or folder mark."""
+                           folder=None, state=None, label=None, fixed=None):
+        """Change a lab value: its starting value, For staff choice, words or folder mark."""
         return self._lab_service_change(lambda presets: core.update_lab_env_var(
             presets, lab_id, name, value=value, hidden=hidden, description=description,
-            folder=folder))
+            folder=folder, state=state, label=label, fixed=fixed))
 
     @api_call
     def delete_lab_env_var(self, lab_id, name):
@@ -3283,7 +3331,7 @@ class Api(object):
                 problems.append(
                     "oTree only accepts letters, numbers and underscores in a "
                     "seat label. These would be rejected: %s" % ", ".join(bad[:6]))
-        problems.extend(core.env_var_problems(cfg))
+        problems.extend(core.env_var_problems(cfg, lab_presets))
         return problems
 
     def _project_needs_block(self, cfg):

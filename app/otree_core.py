@@ -82,7 +82,7 @@ APP_AUTHOR = "Julian Tait"
 # the once-a-day update check compares it against the latest GitHub RELEASE tag
 # (tag_name, e.g. "v1.2.0") with a small semver compare -- only a strictly greater
 # release tag counts as "newer". Bump this whenever a release is cut.
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.13.1"
 
 # ---------------------------------------------------------------------------
 # The data folder (schema_version 1, release 1.5.0). data/ is fully user-owned
@@ -564,6 +564,7 @@ def normalize_stored_lab(raw):
         entry[LAB_ENV_VARS_KEY] = env_vars
     if raw.get(LAB_ENV_ADD_OWN_KEY):
         entry[LAB_ENV_ADD_OWN_KEY] = True
+    _carry_lab_policy(raw, entry)
     # The same for the default port: only when it is not the usual one.
     port = _parse_launch_port(raw.get("default_port"))
     if port is not None and str(port) != DEFAULT_CONFIG["port"]:
@@ -940,6 +941,10 @@ DEFAULT_CONFIG = {
     # Tools (2026-11-05): the ids of the tools ticked in Advanced. Empty = every tool
     # off, not written when empty, and a config without the key means the same.
     "launch_tools": [],
+    # 2026-11-12: a lab can have a tool or a variable On by default. These two hold what a
+    # config took out again (tool ids, variable names). Not written when empty.
+    "launch_tools_off": [],
+    "env_vars_off": [],
     # Environment variables (2026-11-05): ``env_var_choices`` = the lab's variables this
     # config selected, {name: value}, an empty value is selected but not set.
     # ``extra_env_vars`` = the config's own [{name, value, enabled}]. Neither is written
@@ -1043,8 +1048,11 @@ def normalize_config(cfg):
         if key == LAUNCH_ORDER_KEY:
             out[key] = normalize_launch_order(value)
             continue
-        if key == LAUNCH_TOOLS_KEY:
+        if key in (LAUNCH_TOOLS_KEY, LAUNCH_TOOLS_OFF_KEY):
             out[key] = normalize_launch_tools(value)
+            continue
+        if key == ENV_VARS_OFF_KEY:
+            out[key] = normalize_env_vars_off(value)
             continue
         if key == ENV_VAR_CHOICES_KEY:
             out[key] = normalize_env_var_choices(value)
@@ -1984,6 +1992,137 @@ def _remove_own_file(path):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Backups of a study's files (one source of truth)
+# ---------------------------------------------------------------------------
+# Every file the launcher backs up inside a study (settings.py before the block goes
+# in or out, before an update or a branch switch, each file of a confirmed discard)
+# is copied into ONE folder in the study's root, never next to the file, so the
+# study folder stays tidy. The name is unchanged: ``settings.py.<timestamp>.bak``.
+# The folder carries its own ``.gitignore`` ("*"), so git never sees it and nothing
+# needs adding to the study's own .gitignore. Backups made before this lived next
+# to settings.py; the next backup moves them into the folder (_move_old_root_backups).
+STUDY_BACKUP_DIRNAME = "lablauncher_backups"
+STUDY_BACKUP_IGNORE_TEXT = ("# Backups made by the oTree Lab Launcher. Git ignores "
+                            "everything in this folder.\n*\n")
+
+
+def study_backup_dir(root):
+    """The backups folder of the study whose root is ``root``."""
+    return os.path.join(root, STUDY_BACKUP_DIRNAME)
+
+
+def _ensure_study_backup_dir(root):
+    """Make the backups folder (and its self-ignore file) when missing. Returns
+    ``(folder, created)``, ``created`` True when this call made the folder. Raises
+    OSError when it cannot be made, so the caller backs up nothing and changes nothing."""
+    folder = study_backup_dir(root)
+    created = not os.path.lexists(folder)
+    os.makedirs(folder, exist_ok=True)
+    ignore = os.path.join(folder, ".gitignore")
+    if not os.path.lexists(ignore):
+        with open(ignore, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(STUDY_BACKUP_IGNORE_TEXT)
+    return folder, created
+
+
+# Folders a backup call made, keyed by the backup's path, so undoing that backup
+# (_remove_own_backup) takes away exactly what it added and never a folder that was
+# already there.
+_BACKUP_MADE_DIRS = {}
+
+
+# The launcher's own old backup names next to settings.py: settings.py.<stamp>.bak,
+# stamp = digits and dashes (%Y%m%d-%H%M%S-%f). Nothing else is ever moved.
+_OLD_ROOT_BACKUP_NAME = re.compile(r"^settings\.py\.[0-9][0-9-]*\.bak$")
+
+
+def _move_old_root_backups(root, folder):
+    """Move the launcher's old ``settings.py.<stamp>.bak`` files from the study root
+    into the backups folder (they used to sit next to settings.py). Same name; a name
+    already taken there gets ``-2``, ``-3``, ... before ``.bak``, so no file is ever
+    overwritten. Cheap and idempotent (one listdir). Never raises: a file that cannot
+    be moved stays where it is, and the new backup goes ahead."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    moved = []
+    for name in sorted(names):
+        if not _OLD_ROOT_BACKUP_NAME.match(name):
+            continue
+        source = os.path.join(root, name)
+        try:
+            if os.path.islink(source) or not os.path.isfile(source):
+                continue
+            target = os.path.join(folder, name)
+            number = 2
+            while os.path.lexists(target):
+                target = os.path.join(folder, "%s-%d.bak" % (name[:-len(".bak")], number))
+                number += 1
+            os.rename(source, target)
+            moved.append(target)
+        except OSError:
+            continue
+    return moved
+
+
+def _timestamped_backup(path, root=None):
+    """Copy ``path`` to a UNIQUE ``<name>.<timestamp>.bak`` inside the study's
+    ``lablauncher_backups/`` folder and return the backup's path.
+
+    ``root`` is the study's root folder (default: the folder holding ``path``, which
+    is the study root for settings.py). A file deeper in the study keeps its place
+    under the backups folder (``app/pages.py`` -> ``lablauncher_backups/app/pages.py.
+    <timestamp>.bak``). The copy is made before anything else happens to ``path``;
+    any failure raises, so the caller never touches the file without a backup."""
+    root = root or os.path.dirname(path) or "."
+    rel = os.path.relpath(path, root)
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
+        raise ValueError("%s is not inside %s" % (path, root))
+    folder, created = _ensure_study_backup_dir(root)
+    made = [folder] if created else []
+    _move_old_root_backups(root, folder)
+    target_dir = folder
+    for part in [bit for bit in os.path.dirname(rel).split(os.sep) if bit]:
+        target_dir = os.path.join(target_dir, part)
+        if not os.path.lexists(target_dir):
+            os.mkdir(target_dir)
+            made.append(target_dir)
+    base = os.path.join(target_dir, os.path.basename(path))
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup = base + "." + stamp + ".bak"
+    while os.path.lexists(backup):
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = base + "." + stamp + ".bak"
+    if made:
+        _BACKUP_MADE_DIRS[backup] = made
+    try:
+        shutil.copy2(path, backup, follow_symlinks=False)
+    except BaseException:
+        _remove_own_backup(backup)          # a half-made copy and the folders made for it
+        raise
+    return backup
+
+
+def _remove_own_backup(backup):
+    """Remove a backup the launcher made, and the folders that same backup call made
+    when they are now empty (the backups folder counts as empty when only its
+    .gitignore is left), so an undone action leaves the study as before. A folder that
+    was already there stays. Never raises."""
+    _remove_own_file(backup)
+    for folder in reversed(_BACKUP_MADE_DIRS.pop(backup, [])):
+        try:
+            left = os.listdir(folder)
+            if os.path.basename(folder) == STUDY_BACKUP_DIRNAME and left == [".gitignore"]:
+                _remove_own_file(os.path.join(folder, ".gitignore"))
+                left = []
+            if not left:
+                os.rmdir(folder)
+        except OSError:
+            pass
+
+
 def append_block(project_path):
     """Atomically back up settings.py and append the lab support block.
 
@@ -2020,20 +2159,15 @@ def append_block(project_path):
         if BLOCK_MARKER in text:
             raise BlockAlreadyPresent(
                 "settings.py already has the oTree lab support block.")
-        # A microsecond-stamped backup name, bumped in the unlikely event of a
-        # same-microsecond collision, so the first backup is never clobbered.
-        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        backup = path + "." + stamp + ".bak"
-        while os.path.exists(backup):
-            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            backup = path + "." + stamp + ".bak"
-        shutil.copy2(path, backup)
+        # A microsecond-stamped backup in the study's lablauncher_backups/ folder,
+        # bumped on a same-microsecond collision so no backup is ever clobbered.
+        backup = _timestamped_backup(path)
         separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
         new_text = text + separator + LAB_BLOCK
         try:
             _write_settings_atomically(path, folder, new_text)
         except Exception:
-            _remove_own_file(backup)
+            _remove_own_backup(backup)
             raise
     return backup, path
 
@@ -2096,13 +2230,8 @@ def refresh_block(project_path):
                 start = index
             if BLOCK_END_MARKER in line:
                 end = index
-        # A microsecond-stamped, collision-proof backup name (as append_block).
-        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        backup = path + "." + stamp + ".bak"
-        while os.path.exists(backup):
-            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            backup = path + "." + stamp + ".bak"
-        shutil.copy2(path, backup)
+        # A microsecond-stamped, collision-proof backup (as append_block).
+        backup = _timestamped_backup(path)
         if start >= 0:
             # Remove the old region: banner..end-marker inclusive, or banner..EOF
             # when the end marker is missing (the block's documented removal span).
@@ -2116,7 +2245,7 @@ def refresh_block(project_path):
         try:
             _write_settings_atomically(path, folder, new_text)
         except Exception:
-            _remove_own_file(backup)
+            _remove_own_backup(backup)
             raise
     return backup, path
 
@@ -2197,7 +2326,7 @@ def remove_block(project_path):
         try:
             _write_settings_exact(path, folder, stripped)
         except Exception:
-            _remove_own_file(backup)
+            _remove_own_backup(backup)
             raise
     return backup, path
 
@@ -2301,7 +2430,7 @@ def carry_lab_block(project_path):
         elif state["needs_refresh"]:
             made = refresh_block(project_path)[0]
         if made:
-            _remove_own_file(made)
+            _remove_own_backup(made)
     except BlockAlreadyPresent:
         pass
     except SettingsFileRefused as error:
@@ -2856,6 +2985,8 @@ def default_preset():
     preset["extra_scripts"] = []
     preset["launch_order"] = []
     preset["launch_tools"] = []
+    preset["launch_tools_off"] = []
+    preset["env_vars_off"] = []
     preset["env_var_choices"] = {}
     preset["extra_env_vars"] = []
     preset["name"] = "Lab default"
@@ -2934,7 +3065,8 @@ def config_for_storage(preset):
     n = normalize_config(preset)
     out = {k: v for k, v in preset.items() if k not in CONFIG_DB_FIELDS}
     # Launch scripts and tools: stored only when there is something to store.
-    for key in SCRIPT_CONFIG_KEYS + (LAUNCH_TOOLS_KEY,) + ENV_VAR_CONFIG_KEYS:
+    for key in (SCRIPT_CONFIG_KEYS + (LAUNCH_TOOLS_KEY, LAUNCH_TOOLS_OFF_KEY, ENV_VARS_OFF_KEY)
+                + ENV_VAR_CONFIG_KEYS):
         if not out.get(key, True):
             del out[key]
     # What was typed for one launch never reaches the store.
@@ -3116,6 +3248,7 @@ def stored_labs_from_presets(lab_presets, info=None):
         entry[LAB_SCRIPTS_KEY] = p.get(LAB_SCRIPTS_KEY) or []
         entry[LAB_ENV_VARS_KEY] = p.get(LAB_ENV_VARS_KEY) or []
         entry[LAB_ENV_ADD_OWN_KEY] = bool(p.get(LAB_ENV_ADD_OWN_KEY))
+        _carry_lab_policy(p, entry)
         out.append(normalize_stored_lab(entry))
         seen.add(p["id"])
     for lab_id, entry in existing.items():
@@ -4904,18 +5037,6 @@ def settings_block_only_diff(folder):
         return None
 
 
-def _timestamped_backup(path):
-    """Copy ``path`` to a UNIQUE ``<path>.<timestamp>.bak`` (as append_block does)
-    and return the backup's path."""
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    backup = path + "." + stamp + ".bak"
-    while os.path.lexists(backup):
-        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        backup = path + "." + stamp + ".bak"
-    shutil.copy2(path, backup, follow_symlinks=False)
-    return backup
-
-
 def _same_bytes(first, second):
     try:
         if os.path.islink(first) or os.path.islink(second):
@@ -4940,7 +5061,7 @@ def _restore_backup(backup, path):
     except OSError:
         _remove_own_file(temp)
         return False
-    _remove_own_file(backup)
+    _remove_own_backup(backup)
     return True
 
 
@@ -5872,8 +5993,8 @@ def study_discard_confirm(files):
     """The confirmation for "Discard my edits to these files and update": it names
     every file, and says a copy of each is kept."""
     return ("Discard your edits to %s and update to the newer version? A copy of each "
-            "file is kept next to it, with a date and .bak at the end of its name. Other "
-            "files are not touched." % ", ".join(files))
+            "file is kept in the lablauncher_backups folder of the study, with a date and "
+            ".bak at the end of its name. Other files are not touched." % ", ".join(files))
 
 
 UPDATE_DIFF_MAX_CHARS = 200000
@@ -6024,7 +6145,7 @@ def git_discard_and_update(folder, files=(), confirmed=False, port=None):
 
     def put_back():
         lost = []
-        for backup, path in undo:
+        for backup, path in reversed(undo):     # last made first, so made folders go too
             if backup is None:
                 try:
                     os.remove(path)
@@ -6038,7 +6159,7 @@ def git_discard_and_update(folder, files=(), confirmed=False, port=None):
         for name in dict.fromkeys(names):
             path = os.path.join(top, *name.split("/"))
             if os.path.lexists(path):
-                undo.append((_timestamped_backup(path), path))
+                undo.append((_timestamped_backup(path, top), path))
             else:
                 undo.append((None, path))
             in_head = _git_bytes(top, "--literal-pathspecs", "ls-tree", "--name-only",
@@ -8173,6 +8294,9 @@ def default_lab_presets():
             LAB_SCRIPTS_KEY: raw.get(LAB_SCRIPTS_KEY) or [],
             LAB_ENV_VARS_KEY: raw.get(LAB_ENV_VARS_KEY) or [],
             LAB_ENV_ADD_OWN_KEY: bool(raw.get(LAB_ENV_ADD_OWN_KEY)),
+            LAB_TOOLS_KEY: raw.get(LAB_TOOLS_KEY) or [],
+            LAB_SCRIPTS_ADD_OWN_KEY: raw.get(LAB_SCRIPTS_ADD_OWN_KEY, True),
+            LAB_SERVICES_ADD_OWN_KEY: raw.get(LAB_SERVICES_ADD_OWN_KEY, True),
             "builtin": False,
         }))
     return presets
@@ -8297,6 +8421,7 @@ def normalize_lab_preset(preset):
         out[LAB_ENV_ADD_OWN_KEY] = True
     else:
         out.pop(LAB_ENV_ADD_OWN_KEY, None)
+    _carry_lab_policy(dict(out), out)
     return out
 
 
@@ -9848,6 +9973,181 @@ def open_dashboard_authenticated(host, port, room, username, password,
 # they were).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# What staff get (2026-11-12). ONE lab choice for every script, website and value a lab
+# provides, the two built-in values (the former tools) included:
+#
+#   Off            staff do not see it. A config that already chose it keeps it.
+#   Available      staff can add it to a launch.
+#   On by default  in every launch unless staff take it out.
+#   Always on      in every launch, staff cannot take it out.
+#
+# Stored with the keys the entries already had (``hidden``, ``include_by_default``) plus
+# ``locked``, each written only when true where it is new. A lab that never used a new
+# choice is stored, and behaves, as before.
+# ---------------------------------------------------------------------------
+STAFF_OFF = "off"
+STAFF_AVAILABLE = "available"
+STAFF_DEFAULT = "default"
+STAFF_LOCKED = "locked"
+STAFF_STATES = ((STAFF_OFF, "Off"), (STAFF_AVAILABLE, "Available"),
+                (STAFF_DEFAULT, "On by default"), (STAFF_LOCKED, "Always on"))
+STAFF_STATE_LABEL = "For staff"
+STAFF_STATE_LEGEND = (
+    (STAFF_OFF, "Staff do not see it. A config that already uses a script, website or variable keeps it. A built-in value is off in every config."),
+    (STAFF_AVAILABLE, "Listed under Ready to add in Advanced."),
+    (STAFF_DEFAULT, "In every launch unless staff take it out."),
+    (STAFF_LOCKED, "In every launch. Staff cannot take it out."),
+)
+STAFF_STATE_INVALID = "Choose Off, Available, On by default or Always on."
+LOCKED_TAG = "always on in this lab"
+LOCKED_TIP = "The lab keeps this on. Change it in Settings, under Advanced."
+SOURCE_LAB_TEXT = "From the lab"
+SOURCE_OWN_TEXT = "Yours"
+LAB_TOOLS_KEY = "tools"
+LAB_SCRIPTS_ADD_OWN_KEY = "scripts_add_own"
+LAB_SERVICES_ADD_OWN_KEY = "services_add_own"
+LAUNCH_TOOLS_OFF_KEY = "launch_tools_off"
+ENV_VARS_OFF_KEY = "env_vars_off"
+
+
+def staff_state(entry, hidden_default=False):
+    """Which of the four choices an entry's stored keys mean."""
+    entry = entry or {}
+    if entry.get("locked"):
+        return STAFF_LOCKED
+    if entry.get("hidden", hidden_default):
+        return STAFF_OFF
+    return STAFF_DEFAULT if entry.get("include_by_default") else STAFF_AVAILABLE
+
+
+def staff_state_flags(state):
+    """The stored keys of a choice, or None for a word that is not one of the four."""
+    if state not in (STAFF_OFF, STAFF_AVAILABLE, STAFF_DEFAULT, STAFF_LOCKED):
+        return None
+    return {"hidden": state == STAFF_OFF,
+            "include_by_default": state in (STAFF_DEFAULT, STAFF_LOCKED),
+            "locked": state == STAFF_LOCKED}
+
+
+def _policy_flags(raw, hidden_default=False):
+    """``(hidden, include_by_default, locked)`` of a stored entry. Always on can be neither
+    hidden nor off by default, whatever else the entry says."""
+    raw = raw if isinstance(raw, dict) else {}
+    if raw.get("locked"):
+        return False, True, True
+    return bool(raw.get("hidden", hidden_default)), bool(raw.get("include_by_default", False)), False
+
+
+def _with_staff_state(entry, state):
+    """``entry`` with a choice written on it (the optional keys only when true)."""
+    flags = staff_state_flags(state)
+    out = dict(entry)
+    out["include_by_default"] = flags["include_by_default"]
+    for key in ("hidden", "locked"):
+        if flags[key]:
+            out[key] = True
+        else:
+            out.pop(key, None)
+    return out
+
+
+def normalize_lab_tools(raw):
+    """A lab's choice for the two built-in values, as stored: one entry per tool that is
+    not simply Available, known ids only, in the fixed order."""
+    found = {}
+    for item in (raw if isinstance(raw, (list, tuple)) else []):
+        if isinstance(item, dict) and str(item.get("id")) in TOOL_IDS:
+            found.setdefault(str(item["id"]), item)
+    out = []
+    for tool in TOOL_IDS:
+        if tool not in found:
+            continue
+        hidden, include, locked = _policy_flags(found[tool])
+        entry = {"id": tool}
+        if hidden:
+            entry["hidden"] = True
+        if include:
+            entry["include_by_default"] = True
+        if locked:
+            entry["locked"] = True
+        if len(entry) > 1:
+            out.append(entry)
+    return out
+
+
+def _carry_lab_policy(raw, out):
+    """The lab-level keys of 2026-11-12 from ``raw`` onto ``out``, each only when it is not
+    the default: every path that copies a lab goes through here, so none drops them."""
+    tools = normalize_lab_tools(raw.get(LAB_TOOLS_KEY))
+    if tools:
+        out[LAB_TOOLS_KEY] = tools
+    else:
+        out.pop(LAB_TOOLS_KEY, None)
+    for key in (LAB_SCRIPTS_ADD_OWN_KEY, LAB_SERVICES_ADD_OWN_KEY):
+        if raw.get(key, True) is False:
+            out[key] = False
+        else:
+            out.pop(key, None)
+
+
+def lab_tool_states(preset):
+    """``{tool id: choice}`` for a lab (every tool Available with no lab or nothing stored)."""
+    stored = {item["id"]: item for item in normalize_lab_tools((preset or {}).get(LAB_TOOLS_KEY))}
+    return {tool: staff_state(stored.get(tool)) for tool in TOOL_IDS}
+
+
+def _cfg_lab_preset(cfg, lab_presets=None):
+    """The lab a config launches on, or None (localhost, another host, an unknown lab).
+    With no list given this is the lab as lab_info.json has it now."""
+    lab = str((cfg or {}).get("lab") or "")
+    if not lab or lab in (LAB_LOCAL, LAB_CUSTOM):
+        return None
+    preset = find_lab_preset(lab, _presets_or_default(lab_presets))
+    return None if preset is None or preset.get("deleted") else preset
+
+
+def set_lab_tool_state(lab_presets, lab_id, tool_id, state):
+    """The lab's choice for a built-in value. Returns ``(ok, message, presets)``."""
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None:
+        return False, "No lab with that id.", presets
+    if str(tool_id) not in TOOL_IDS or staff_state_flags(state) is None:
+        return False, STAFF_STATE_INVALID, presets
+    others = [item for item in normalize_lab_tools(target.get(LAB_TOOLS_KEY))
+              if item["id"] != str(tool_id)]
+    entry = _with_staff_state({"id": str(tool_id)}, state)
+    _carry_lab_policy(dict(target, **{LAB_TOOLS_KEY: others + [entry]}), target)
+    return True, "Saved.", presets
+
+
+OWN_KINDS = {"script": LAB_SCRIPTS_ADD_OWN_KEY, "website": LAB_SERVICES_ADD_OWN_KEY}
+
+
+def set_lab_add_own(lab_presets, lab_id, kind, on):
+    """May staff add their own scripts / websites / values on this lab? Returns ``(ok,
+    message, presets)``. Scripts and websites: allowed unless switched off. Values: the
+    older tick, off unless switched on."""
+    if kind == "value":
+        return set_lab_env_add_own(lab_presets, lab_id, on)
+    presets, target = _lab_target(lab_presets, lab_id)
+    if target is None or kind not in OWN_KINDS:
+        return False, "No lab with that id.", presets
+    _carry_lab_policy(dict(target, **{OWN_KINDS[kind]: bool(on)}), target)
+    return True, "Saved.", presets
+
+
+def own_add_allowed(cfg, lab_presets=None):
+    """``{"script", "website", "value"}``: what "Add your own" offers for this config.
+    Localhost and Other host have no lab to decide, so everything is offered there. Off
+    only hides the buttons: what a config already has stays."""
+    c = normalize_config(cfg or {})
+    preset = _cfg_lab_preset(c, lab_presets)
+    return {"script": preset is None or preset.get(LAB_SCRIPTS_ADD_OWN_KEY, True) is not False,
+            "website": preset is None or preset.get(LAB_SERVICES_ADD_OWN_KEY, True) is not False,
+            "value": env_var_add_allowed(c, lab_presets)}
+
+
 SERVICES_KEY = "services"
 SERVICE_CHOICES_KEY = "service_choices"
 EXTRA_SERVICES_KEY = "extra_services"
@@ -9947,8 +10247,15 @@ def normalize_lab_service(raw):
         return None
     service_id = str(raw.get("id", "") or "").strip() \
         or _derived_service_id(entry["name"], entry["url"])
-    return {"id": service_id, "name": entry["name"], "url": entry["url"],
-            "include_by_default": bool(raw.get("include_by_default", False))}
+    hidden, include, locked = _policy_flags(raw)
+    out = {"id": service_id, "name": entry["name"], "url": entry["url"],
+           "include_by_default": include}
+    # Written only when true: a lab that never used them is stored as it was.
+    if hidden:
+        out["hidden"] = True
+    if locked:
+        out["locked"] = True
+    return out
 
 
 def normalize_lab_services(raw_list):
@@ -10004,24 +10311,29 @@ def _lab_target(lab_presets, lab_id):
     return presets, None
 
 
-def add_lab_service(lab_presets, lab_id, name, url, include_by_default=False):
+def add_lab_service(lab_presets, lab_id, name, url, include_by_default=False, state=None):
     """Validate and add a service to a lab. Returns ``(ok, message, presets,
-    service)``; the presets are a new list, ready to be stored."""
+    service)``; the presets are a new list, ready to be stored. ``state`` = one of the four
+    For staff choices (it wins from ``include_by_default``)."""
     presets, target = _lab_target(lab_presets, lab_id)
     if target is None:
         return False, "No lab with that id.", presets, None
     ok, message, entry = validate_service(name, url)
     if not ok:
         return False, message, presets, None
+    if state is not None and staff_state_flags(state) is None:
+        return False, STAFF_STATE_INVALID, presets, None
     service = {"id": new_service_id(s["id"] for p in presets for s in p[SERVICES_KEY]),
                "name": entry["name"], "url": entry["url"],
                "include_by_default": bool(include_by_default)}
+    if state is not None:
+        service = _with_staff_state(service, state)
     target[SERVICES_KEY] = target[SERVICES_KEY] + [service]
     return True, "Added %s to %s." % (service["name"], target["name"]), presets, service
 
 
 def update_lab_service(lab_presets, lab_id, service_id, name=None, url=None,
-                       include_by_default=None):
+                       include_by_default=None, state=None):
     """Edit one service of a lab (its id never changes, so configs keep their
     choice). ``None`` leaves a field as it is. Returns ``(ok, message, presets,
     service)``."""
@@ -10039,6 +10351,11 @@ def update_lab_service(lab_presets, lab_id, service_id, name=None, url=None,
         updated = dict(service, name=entry["name"], url=entry["url"])
         if include_by_default is not None:
             updated["include_by_default"] = bool(include_by_default)
+        if state is not None:
+            if staff_state_flags(state) is None:
+                return False, STAFF_STATE_INVALID, presets, None
+            updated = _with_staff_state(updated, state)
+        updated = normalize_lab_service(updated)
         services = list(target[SERVICES_KEY])
         services[index] = updated
         target[SERVICES_KEY] = services
@@ -10073,11 +10390,27 @@ def config_service_rows(cfg, lab_presets=None):
     rows = []
     for service in lab_services(_presets_or_default(lab_presets), c["lab"]):
         explicit = service["id"] in choices
-        checked = choices[service["id"]] if explicit else service["include_by_default"]
-        rows.append({"id": service["id"], "name": service["name"], "url": service["url"],
-                     "default": service["include_by_default"], "checked": bool(checked),
-                     "explicit": explicit,
-                     "tag": SERVICE_OWN_CHOICE_TAG if explicit else SERVICE_LAB_DEFAULT_TAG})
+        locked, hidden = bool(service.get("locked")), bool(service.get("hidden"))
+        if locked:
+            checked = True
+        elif hidden:
+            # Off: not offered. A config that chose it keeps it.
+            checked = choices.get(service["id"]) is True
+            if not checked:
+                continue
+        else:
+            checked = choices[service["id"]] if explicit else service["include_by_default"]
+        row = {"id": service["id"], "name": service["name"], "url": service["url"],
+               "default": service["include_by_default"], "checked": bool(checked),
+               "explicit": explicit,
+               "tag": (LOCKED_TAG if locked else SCRIPT_HIDDEN_TAG if hidden else
+                       SERVICE_OWN_CHOICE_TAG if explicit else SERVICE_LAB_DEFAULT_TAG)}
+        # Only when true, so the rows of a lab without these are what they were.
+        if locked:
+            row["locked"] = True
+        if hidden:
+            row["hidden"] = True
+        rows.append(row)
     return rows
 
 
@@ -10471,11 +10804,15 @@ def normalize_lab_script(raw):
         script_id = _derived_script_id("scr-", entry["name"], entry["script"])
     position = raw.get("position")
     known = (SCRIPT_POSITION_BEFORE, SCRIPT_POSITION_AFTER)
-    return {"id": script_id, "name": entry["name"], "script": entry["script"],
-            "include_by_default": bool(raw.get("include_by_default", False)),
-            "hidden": bool(raw.get("hidden", False)),
-            "position": position if position in known else SCRIPT_POSITION_AFTER,
-            "wait": entry["wait"], "wait_port": entry["wait_port"]}
+    out = {"id": script_id, "name": entry["name"], "script": entry["script"],
+           "include_by_default": bool(raw.get("include_by_default", False)),
+           "hidden": bool(raw.get("hidden", False)),
+           "position": position if position in known else SCRIPT_POSITION_AFTER,
+           "wait": entry["wait"], "wait_port": entry["wait_port"]}
+    if raw.get("locked"):
+        # Always on: written only then, and it can be neither hidden nor off by default.
+        out.update(locked=True, hidden=False, include_by_default=True)
+    return out
 
 
 def normalize_lab_scripts(raw_list):
@@ -10532,7 +10869,8 @@ def lab_scripts(lab_presets, lab_id):
 
 
 def add_lab_script(lab_presets, lab_id, name, script, include_by_default=False, hidden=False,
-                   position=SCRIPT_POSITION_AFTER, wait=SCRIPT_WAIT_CARRY_ON, wait_port=""):
+                   position=SCRIPT_POSITION_AFTER, wait=SCRIPT_WAIT_CARRY_ON, wait_port="",
+                   state=None):
     """Validate and add a script to a lab. Returns ``(ok, message, presets, script)``."""
     presets, target = _lab_target(lab_presets, lab_id)
     if target is None:
@@ -10541,16 +10879,19 @@ def add_lab_script(lab_presets, lab_id, name, script, include_by_default=False, 
     if not ok:
         return False, message, presets, None
     taken = [s["id"] for p in presets for s in normalize_lab_scripts(p.get(LAB_SCRIPTS_KEY))]
-    new = normalize_lab_script(dict(
-        entry, id=new_script_id("scr-", taken), include_by_default=bool(include_by_default),
-        hidden=bool(hidden), position=position))
+    if state is not None and staff_state_flags(state) is None:
+        return False, STAFF_STATE_INVALID, presets, None
+    flags = staff_state_flags(state) or {"include_by_default": bool(include_by_default),
+                                         "hidden": bool(hidden), "locked": False}
+    new = normalize_lab_script(dict(entry, id=new_script_id("scr-", taken), position=position,
+                                    **flags))
     target[LAB_SCRIPTS_KEY] = normalize_lab_scripts(target.get(LAB_SCRIPTS_KEY)) + [new]
     return True, "Added %s to %s." % (new["name"], target["name"]), presets, new
 
 
 def update_lab_script(lab_presets, lab_id, script_id, name=None, script=None,
                       include_by_default=None, hidden=None, position=None, wait=None,
-                      wait_port=None):
+                      wait_port=None, state=None):
     """Edit one lab script; its id never changes, so configs keep their choice.
     ``None`` leaves a field as it is. Returns ``(ok, message, presets, script)``."""
     presets, target = _lab_target(lab_presets, lab_id)
@@ -10572,6 +10913,13 @@ def update_lab_script(lab_presets, lab_id, script_id, name=None, script=None,
             updated["include_by_default"] = bool(include_by_default)
         if hidden is not None:
             updated["hidden"] = bool(hidden)
+        if include_by_default is not None or hidden is not None:
+            # The older two ticks say Off / Available / On by default: never Always on.
+            updated.pop("locked", None)
+        if state is not None:
+            if staff_state_flags(state) is None:
+                return False, STAFF_STATE_INVALID, presets, None
+            updated.update(staff_state_flags(state))
         if position is not None:
             updated["position"] = position
         updated = normalize_lab_script(updated)
@@ -10621,6 +10969,8 @@ def script_wait_text(script):
 
 def _lab_script_selected(script, choices):
     """Does this lab script run for a config with these explicit choices?"""
+    if script.get("locked"):
+        return True
     if script["hidden"]:
         return choices.get(script["id"]) is True
     if script["id"] in choices:
@@ -10634,7 +10984,8 @@ def _script_row(script, source, selected, **more):
            "selected": bool(selected), "movable": True,
            "wait": script["wait"], "wait_port": script["wait_port"],
            "wait_text": script_wait_text(script), "can_remove": True, "explicit": False,
-           "can_reset": False, "can_delete": False, "can_edit": False, "tag": ""}
+           "can_reset": False, "can_delete": False, "can_edit": False, "tag": "",
+           "locked": False}
     row.update(more)
     return row
 
@@ -10649,11 +11000,13 @@ def _launch_script_rows(c, presets):
             continue
         seen.add(script["id"])
         explicit = script["id"] in choices
+        locked = bool(script.get("locked"))
         rows.append(_script_row(
             script, "lab", selected, explicit=explicit, default=script["include_by_default"],
             position=script["position"], hidden=script["hidden"],
-            can_reset=explicit and not script["hidden"],
-            tag=(SCRIPT_HIDDEN_TAG if script["hidden"] else
+            can_reset=explicit and not script["hidden"] and not locked,
+            locked=locked, can_remove=not locked,
+            tag=(LOCKED_TAG if locked else SCRIPT_HIDDEN_TAG if script["hidden"] else
                  SERVICE_OWN_CHOICE_TAG if explicit else SERVICE_LAB_DEFAULT_TAG)))
     for script in c[EXTRA_SCRIPTS_KEY]:
         if script["id"] in seen:
@@ -10738,15 +11091,19 @@ def _page_rows(c, presets):
                "label": launch_page_label(name), "detail": url, "address": url,
                "selected": bool(selected), "movable": True, "can_remove": True,
                "explicit": False, "can_reset": False, "can_delete": False, "tag": "",
-               "wait_text": "", "duplicate": False}
+               "wait_text": "", "duplicate": False, "locked": False}
         row.update(more)
         return row
     rows = [page(LAUNCH_ADMIN_ROW_ID, "admin", OPENS_GROUP_ADMIN, "", c["open_browser"],
                  address=admin_page_url(c))]
     for service in config_service_rows(c, presets):
+        locked = bool(service.get("locked"))
         rows.append(page("svc:" + service["id"], "lab", service["name"], service["url"],
                          service["checked"], service_id=service["id"],
-                         explicit=service["explicit"], can_reset=service["explicit"],
+                         explicit=service["explicit"], locked=locked, can_remove=not locked,
+                         default=service["default"], hidden=bool(service.get("hidden")),
+                         can_reset=(service["explicit"] and not locked
+                                    and not service.get("hidden")),
                          tag=service["tag"]))
     taken = set()
     for index, entry in enumerate(c[EXTRA_SERVICES_KEY]):
@@ -10818,12 +11175,282 @@ def launch_timeline(cfg, lab_presets=None):
     # Variables are not steps, so a selected one is not on the timeline: it has its own
     # short list with a value box. ``env_can_add``: the Add button for a config's own.
     env_can_add = env_var_add_allowed(c, presets, env_rows)
-    tools_on = launch_tools_on(c)
+    tool_rows = launch_tool_rows(c, presets)
+    tools_on = [row["id"] for row in tool_rows if row["on"]]
+    can_add = own_add_allowed(c, presets)
+    values = _value_rows(tool_rows, env_rows)
     return {"timeline": timeline, "available": available,
             "env_vars": [row for row in env_rows if row["selected"]],
             "env_can_add": env_can_add,
             "tools_on": [dict(row) for row in LAUNCH_TOOL_ROWS if row["id"] in tools_on],
-            "groups": timeline_available_groups(available, tools_on, env_can_add)}
+            # Kept for older callers; no face draws the groups any more.
+            "groups": timeline_available_groups(available, tools_on, env_can_add),
+            # 2026-11-12: what both faces draw. ``values``: the values in use (the built-in
+            # ones first). ``ready``: ONE flat list of what can be added. ``primer``: the
+            # collapsed card. ``can_add``: which "Add your own" the lab allows.
+            "tools": tool_rows, "values": values,
+            "ready": _ready_rows(available, tool_rows),
+            "can_add": can_add,
+            "primer": launch_primer(c, timeline, values, can_add)}
+
+
+ADVANCED_SHEET_NOTE = "What happens when you press Launch"
+TIMELINE_INTRO = "Runs top to bottom. Use the arrows to change the order."
+TIMELINE_OTREE_NOTE = "The launcher waits here until oTree answers"
+VALUES_TITLE = "Values for this launch"
+VALUES_INTRO = ("What oTree and the scripts are told, as environment variables. Some are asked "
+                "at each launch, the others are typed here and saved with the config.")
+VALUES_NONE = "None in use."
+VALUE_TYPE_HERE = "Typed here, saved with the config"
+ADD_OWN_TITLE = "Add your own"
+ADD_OWN_INTRO = "Saved with this config. Nothing in your study changes."
+ADD_OWN_SCRIPT_TILE = ("Script", "Run a command when you launch")
+ADD_OWN_WEBSITE_TILE = ("Website", "Open a page in your browser")
+ADD_OWN_VALUE_LINK = "Add your own value (an environment variable)"
+ADD_OWN_OFF_NOTE = "This lab does not let you add your own %s. What is in the config stays."
+READY_TITLE = "Ready to add"
+READY_INTRO = ("Set up by the lab, or taken out of this launch earlier. Add puts it in. The lab "
+               "manager decides what is offered: Settings, Advanced: scripts, websites and values.")
+READY_ADD_LABEL = "Add"
+READY_SETTINGS_NOTE = ("The lab manager decides what is on this list: Settings, Advanced: "
+                       "scripts, websites and values.")
+READY_LINE_SCRIPT = "Script"
+READY_LINE_SCRIPT_THEN = "%s, then %s"     # "Script, then wait until finished"
+READY_LINE_WEBSITE = "Website"
+READY_LINE_ADMIN = "Opens in your browser when oTree is ready"
+READY_LINE_VALUE = "A value you type here"
+READY_LINE_OWN = "yours"
+ROW_SHOW_LABEL = "Show"
+ROW_HIDE_LABEL = "Hide"
+ROW_REMOVE_TIP = "Take out of this launch"
+VALUE_REMOVE_TIP = "Stop using it"
+ADD_TO_TIMELINE_LABEL = "Add to timeline"
+SCRIPT_WHEN_LABEL = "When"
+SCRIPT_WHEN_OPTIONS = ((SCRIPT_POSITION_BEFORE, "Before oTree starts"),
+                       (SCRIPT_POSITION_AFTER, "After oTree starts"))
+SCRIPT_READS_LINK = "What a script can read"
+SCRIPT_EXPLAIN = {
+    "title": "Add your own script",
+    "lead": "A script is a command this computer runs each time you launch this config.",
+    "points": (
+        "It runs in its own window, at its place in the timeline.",
+        "If it fails, the launch stops there: later steps do not run. Windows and pages "
+        "that are already open stay open.",
+        "The launcher never closes it. Close its window yourself when you are done.",
+        "It is saved with this config only and changes nothing in your study.",
+    ),
+}
+WEBSITE_EXPLAIN = {
+    "title": "Add your own website",
+    "lead": "A website is a page the launcher sends to your browser on launch.",
+    "points": (
+        "It opens in a new tab once oTree is ready, after the other pages. Move it with "
+        "the arrows.",
+        "Good for a payment sheet, a survey or a lab tool next to the admin page.",
+        "The launcher hands the address to the browser. It does not check that the page "
+        "loads.",
+        "It is saved with this config only.",
+    ),
+}
+PRIMER_ON_LAUNCH = "On launch"
+PRIMER_ASKS = "Asks you for"
+PRIMER_SETS = "Sets"
+PRIMER_ASK_SCRIPT = "Want to run your own script?"
+PRIMER_ASK_WEBSITE = "Add a website"
+PRIMER_CHANGE = "Change"
+PRIMER_OPEN = "Open"
+PRIMER_OTREE_CHIP = "oTree server"
+PRIMER_PLAIN_ADMIN = "oTree starts and its admin page opens."
+PRIMER_PLAIN_NO_PAGE = "oTree starts. No page opens."
+PRIMER_NOTHING_EXTRA = "Nothing extra: "
+
+
+def _value_rows(tool_rows, env_rows):
+    """Values for this launch: the built-in ones that are on, then the selected variables.
+    Each ``{id, kind ("tool" | "env_var"), name (what staff read), vars (the variable
+    names), where (how it is filled in, "" = a box here), goes_to, locked, can_remove,
+    tag}``; a variable row keeps everything launch_env_var_rows gave it."""
+    rows = []
+    for tool in tool_rows:
+        if tool["on"]:
+            rows.append({"id": "tool:" + tool["id"], "kind": "tool", "tool_id": tool["id"],
+                         "name": tool["name"], "vars": tool["vars"], "where": tool["where"],
+                         "goes_to": tool["goes_to"], "locked": tool["locked"],
+                         "can_remove": not tool["locked"], "tip": tool["tip"],
+                         "tag": LOCKED_TAG if tool["locked"] else ""})
+    for row in env_rows:
+        if row["selected"]:
+            rows.append(dict(row, var_name=row["name"], name=row["label"] or row["name"],
+                             vars=row["name"], where="", goes_to=VALUE_GOES_BOTH))
+    return rows
+
+
+def _ready_rows(available, tool_rows):
+    """Ready to add: ONE flat list, in a fixed order (scripts, websites, the built-in
+    values, variables). Each row keeps its timeline fields and gets ``line``: one grey
+    line saying what it is."""
+    def own(row, text):
+        return "%s \u00b7 %s" % (text, READY_LINE_OWN) if row["source"] == "own" else text
+    # "(lab default)" / "(your choice)" say nothing in a list of things that are not in use.
+    plain = (SERVICE_LAB_DEFAULT_TAG, SERVICE_OWN_CHOICE_TAG)
+    available = [dict(row, tag="" if row.get("tag") in plain else row.get("tag", ""))
+                 for row in available]
+    rows = []
+    for row in available:
+        if row["kind"] == "script":
+            rows.append(dict(row, line=own(row, READY_LINE_SCRIPT_THEN % (
+                READY_LINE_SCRIPT, row["wait_text"].lower()) if row["wait_text"]
+                else READY_LINE_SCRIPT)))
+    for row in available:
+        if row["kind"] == "page":
+            rows.append(dict(row, line=READY_LINE_ADMIN if row["source"] == "admin"
+                             else own(row, READY_LINE_WEBSITE)))
+    for tool in tool_rows:
+        if tool["offered"] and not tool["on"]:
+            rows.append({"id": "tool:" + tool["id"], "kind": "tool", "tool_id": tool["id"],
+                         "source": "lab", "name": tool["name"], "label": tool["name"],
+                         "line": tool["ready_line"], "tip": tool["tip"], "can_delete": False})
+    for row in available:
+        if row["kind"] == "env_var":
+            rows.append(dict(row, var_name=row["name"], label=row["label"] or row["name"],
+                             line=own(row, READY_LINE_VALUE)))
+    return rows
+
+
+def launch_primer(cfg, timeline, values, can_add):
+    """The collapsed Advanced card: what is behind it, without opening it.
+
+    ``steps``: the launch as chips in run order (``[{kind, label}]``, reset and the server
+    are one chip), shown when ``extra_steps`` (there is a script or a website besides the
+    admin page). ``plain``: the one sentence for a launch with no extra step. ``asks``:
+    the values asked at each launch. ``sets``: the values saved in the config, masked like
+    everywhere else. ``ask_script`` / ``ask_website``: the two questions ("" when the lab
+    does not allow own ones)."""
+    steps, extra_steps, admin_on = [], False, False
+    for row in timeline:
+        if row["kind"] == "resetdb":
+            continue
+        if row["kind"] == "otree":
+            steps.append({"kind": "otree", "label": PRIMER_OTREE_CHIP})
+            continue
+        if row.get("source") == "admin":
+            admin_on = True
+        else:
+            extra_steps = True
+        steps.append({"kind": row["kind"], "label": row["name"]})
+    asks = [row["name"] for row in values if row["kind"] == "tool"]
+    sets = [{"name": row["name"],
+             "value": describe_env_value(row["var_name"], row["value"]) if row["value"] else ""}
+            for row in values if row["kind"] == "env_var"]
+    plain = PRIMER_PLAIN_ADMIN if admin_on else PRIMER_PLAIN_NO_PAGE
+    extra = extra_steps or bool(values)
+    return {"steps": steps, "extra_steps": extra_steps, "extra": extra,
+            "plain": plain if extra else PRIMER_NOTHING_EXTRA + plain,
+            "asks": asks, "sets": sets,
+            "on_launch_label": PRIMER_ON_LAUNCH, "asks_label": PRIMER_ASKS,
+            "sets_label": PRIMER_SETS,
+            "button": PRIMER_CHANGE if extra else PRIMER_OPEN,
+            "ask_script": PRIMER_ASK_SCRIPT if can_add["script"] else "",
+            "ask_website": PRIMER_ASK_WEBSITE if can_add["website"] else ""}
+
+
+def step_choice(row, on):
+    """What a config stores for a lab script or website after staff put it in or took it
+    out: ``True`` / ``False`` to store that, ``None`` to store nothing (it then follows the
+    lab). Stored only where it differs from the lab, like the values: taking a default out
+    and putting it back leaves the config as it was. An item the lab switched Off stays
+    only while the config says yes."""
+    on = bool(on)
+    if row.get("hidden"):
+        return True if on else None
+    return None if on == bool(row.get("default")) else on
+
+
+def place_new_step(cfg, lab_presets, item_id, position):
+    """The config's ``launch_order`` with step ``item_id`` put where the Add form's When
+    says: directly before the oTree row ("before") or where a new step goes anyway."""
+    c = normalize_config(cfg or {})
+    presets = _presets_or_default(lab_presets)
+    rows = _launch_script_rows(c, presets) + _page_rows(c, presets)
+    order = _ordered_script_ids(rows, c[LAUNCH_ORDER_KEY])
+    item_id = str(item_id)
+    if position == SCRIPT_POSITION_BEFORE and item_id in order:
+        order.remove(item_id)
+        order.insert(order.index(LAUNCH_OTREE_ROW_ID), item_id)
+    return _order_to_store(order, rows)
+
+
+ADVANCED_CARD_TITLE = "Advanced: scripts, websites and values"
+ADVANCED_CARD_INTRO = "Everything staff can add to a launch in Advanced."
+ADVANCED_CARD_ACTION = "Choose per item what staff get."
+ADVANCED_GROUP_SCRIPTS = ("Scripts", "Commands that run on launch")
+ADVANCED_GROUP_WEBSITES = ("Websites", "Pages that open in the browser")
+ADVANCED_GROUP_VALUES = ("Values", "What oTree and scripts are told (environment variables)")
+ADVANCED_ADD_WEBSITE = "Add website"
+ADVANCED_ADD_VALUE = "Add value"
+ADVANCED_OWN_LABEL = "Staff may add their own:"
+ADVANCED_OWN_KINDS = (("script", "scripts"), ("website", "websites"), ("value", "values"))
+ADVANCED_BUILTIN_TAG = "built in"
+ADVANCED_THIS_COMPUTER = "(this computer)"
+ADVANCED_NONE = "None yet."
+
+
+def advanced_summary(lab_presets, lab_id=None):
+    """The collapsed Settings card: what one lab offers staff, counted. ``lab_id`` = this
+    computer's lab; without it (or when it is not in the list) the first lab."""
+    labs = [p for p in (lab_presets or []) if not p.get("deleted")]
+    if not labs:
+        return "No lab yet"
+    lab = next((p for p in labs if str(p.get("id")) == str(lab_id)), labs[0])
+    scripts = sum(1 for x in normalize_lab_scripts(lab.get(LAB_SCRIPTS_KEY))
+                  if staff_state(x) != STAFF_OFF)
+    sites = sum(1 for x in normalize_lab_services(lab.get(SERVICES_KEY))
+                if staff_state(x) != STAFF_OFF)
+    values = sum(1 for x in lab_tool_rows(lab) + lab_env_var_rows(lab)
+                 if x["state"] != STAFF_OFF)
+
+    def count(n, word):
+        return "%d %s%s" % (n, word, "" if n == 1 else "s")
+    text = "%s, %s, %s on offer" % (count(scripts, "script"), count(sites, "website"),
+                                    count(values, "value"))
+    return "%s: %s" % (lab.get("name") or lab.get("id"), text) if len(labs) > 1 else text
+
+
+def advanced_ui_text():
+    """The words both faces need for the Advanced sheet, the primer and the Settings card."""
+    return {
+        "sheet_note": ADVANCED_SHEET_NOTE, "timeline_intro": TIMELINE_INTRO,
+        "otree_note": TIMELINE_OTREE_NOTE,
+        "values_title": VALUES_TITLE, "values_intro": VALUES_INTRO, "values_none": VALUES_NONE,
+        "add_own_title": ADD_OWN_TITLE, "add_own_intro": ADD_OWN_INTRO,
+        "script_tile": list(ADD_OWN_SCRIPT_TILE), "website_tile": list(ADD_OWN_WEBSITE_TILE),
+        "value_link": ADD_OWN_VALUE_LINK, "own_off_note": ADD_OWN_OFF_NOTE,
+        "ready_title": READY_TITLE, "ready_intro": READY_INTRO, "ready_add": READY_ADD_LABEL,
+        "ready_settings_note": READY_SETTINGS_NOTE,
+        "show": ROW_SHOW_LABEL, "hide": ROW_HIDE_LABEL, "remove_tip": ROW_REMOVE_TIP,
+        "value_remove_tip": VALUE_REMOVE_TIP, "locked_tag": LOCKED_TAG, "locked_tip": LOCKED_TIP,
+        "source_lab": SOURCE_LAB_TEXT, "source_own": SOURCE_OWN_TEXT,
+        "add_to_timeline": ADD_TO_TIMELINE_LABEL, "when_label": SCRIPT_WHEN_LABEL,
+        "when_options": [list(o) for o in SCRIPT_WHEN_OPTIONS], "reads_link": SCRIPT_READS_LINK,
+        "script_explain": {"title": SCRIPT_EXPLAIN["title"], "lead": SCRIPT_EXPLAIN["lead"],
+                           "points": list(SCRIPT_EXPLAIN["points"])},
+        "website_explain": {"title": WEBSITE_EXPLAIN["title"], "lead": WEBSITE_EXPLAIN["lead"],
+                            "points": list(WEBSITE_EXPLAIN["points"])},
+        "card_title": ADVANCED_CARD_TITLE, "card_intro": ADVANCED_CARD_INTRO,
+        "card_action": ADVANCED_CARD_ACTION,
+        "group_scripts": list(ADVANCED_GROUP_SCRIPTS),
+        "group_websites": list(ADVANCED_GROUP_WEBSITES),
+        "group_values": list(ADVANCED_GROUP_VALUES),
+        "add_website": ADVANCED_ADD_WEBSITE, "add_value": ADVANCED_ADD_VALUE,
+        "own_label": ADVANCED_OWN_LABEL, "own_kinds": [list(k) for k in ADVANCED_OWN_KINDS],
+        "builtin_tag": ADVANCED_BUILTIN_TAG, "this_computer": ADVANCED_THIS_COMPUTER,
+        "none": ADVANCED_NONE,
+        "state_label": STAFF_STATE_LABEL, "states": [list(x) for x in STAFF_STATES],
+        "legend": [list(x) for x in STAFF_STATE_LEGEND],
+        "fixed_label": ENV_VAR_FIXED_LABEL, "fixed_tip": ENV_VAR_FIXED_TIP,
+        "label_label": ENV_VAR_LABEL_LABEL,
+        "seat_not_offered": SEAT_PICK_NOT_OFFERED, "fixed_tag": ENV_VAR_FIXED_TAG,
+    }
 
 
 def move_launch_item(cfg, lab_presets, item_id, direction):
@@ -10938,10 +11565,10 @@ def launch_caption(cfg, lab_presets=None):
     presets = _presets_or_default(lab_presets)
     count = sum(1 for row in _launch_script_rows(c, presets) if row["selected"])
     pages = services_caption(c, presets)
-    tools = len(c[LAUNCH_TOOLS_KEY])
+    tools = len(launch_tools_on(c, presets))
     if tools:
         pages = "%s, %s" % (pages, "1 tool on" if tools == 1 else "%d tools on" % tools)
-    env_count = len(launch_env_vars(c))
+    env_count = len(launch_env_vars(c, presets))
     if env_count:
         pages = "%s, %s" % (pages, "1 variable set" if env_count == 1
                             else "%d variables set" % env_count)
@@ -11827,7 +12454,7 @@ _LAB_SESSION_RE = re.compile(r"^[A-Za-z0-9 ._-]*$")
 _SEAT_NUMBER_RE = re.compile(r"^[0-9]{1,6}$")
 
 TOOLS_TITLE = "Tools"
-TOOLS_LABEL_SEATS = "Seat selection"
+TOOLS_LABEL_SEATS = "Computers to start"
 TOOLS_LABEL_SESSION = "Lab session number"
 TOOL_SEATS_INPUT_LABEL = "Number of seats"
 TOOL_SESSION_INPUT_LABEL = "Lab session number"
@@ -11841,10 +12468,10 @@ SEAT_PICK_BUTTON = "Select seats"
 SEAT_PICK_CHANGE = "Change"
 SEAT_PICK_CHANGE_TIP = "Back to the Lab card to change the computers to start"
 SEAT_PICK_COUNT_CAPTION = "%d to start"
-SEAT_PICK_OFF_NOTE = ("Seat selection is off, so seats chosen here are not used for anything "
-                      "and scripts get nothing. For this to do something, turn on Seat "
-                      "selection under Tools in Advanced.")
-SEAT_PICK_OFF_LINK = "Open Tools in Advanced"
+SEAT_PICK_OFF_NOTE = ("Computers to start is off, so seats chosen here are not used for "
+                      "anything and scripts get nothing.")
+SEAT_PICK_OFF_LINK = "Turn it on"
+SEAT_PICK_NOT_OFFERED = "This lab does not offer Computers to start."
 SEAT_SWITCH_LABEL = "Clicks choose:"
 SEAT_CLICKS_SEATS = "seats"
 SEAT_CLICKS_LIST = "list"
@@ -11886,20 +12513,30 @@ TOOL_BOX_INTRO_SESSION = ("If you don't want to type this in, turn it off in Adv
                           "it blank is fine: no session number is set.")
 TOOL_BOX_NO_WINDOW = ("This config has %s on, so the shortcut has to ask for values, but it "
                       "could not open a window on this computer (%s). Nothing was started. Turn "
-                      "the tool off in Advanced, or launch from the launcher window.")
+                      "it off in Advanced, or launch from the launcher window.")
 HEADLESS_TOOLS_NO_BOX_EXIT = 14
 
 
 class ToolBoxUnavailable(Exception):
     """The one-click shortcut needs the Tools box and cannot show a window."""
 
+VALUE_GOES_SCRIPTS = "Scripts only"
+VALUE_GOES_BOTH = "oTree and scripts"
 LAUNCH_TOOL_ROWS = (
     {"id": TOOL_SEATS, "name": TOOLS_LABEL_SEATS,
+     "vars": "%s, %s" % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT),
+     "where": "Chosen on the Lab card at each launch", "goes_to": VALUE_GOES_SCRIPTS,
+     "line": "Staff choose seats on the Lab card at each launch. Scripts only.",
+     "ready_line": "You choose seats on the Lab card at each launch",
      "on_note": "Choose the seats on the Lab card.",
      "tip": "For scripts that start computers. Lets you choose seats on the Lab card, with "
             "a number box and the seat map. Scripts get %s and %s. The oTree room and its "
             "seat list do not change." % (TOOL_ENV_SEATS, TOOL_ENV_SEAT_COUNT)},
     {"id": TOOL_LAB_SESSION, "name": TOOLS_LABEL_SESSION,
+     "vars": TOOL_ENV_SESSION,
+     "where": "Typed when you press Launch", "goes_to": VALUE_GOES_BOTH,
+     "line": "Staff type it at each launch. Kept in History. oTree and scripts.",
+     "ready_line": "You type it when you press Launch",
      "on_note": "Asked for in Before you launch.",
      "tip": "Adds a box to Before you launch. The value goes to oTree and to scripts as %s "
             "and is kept in History." % TOOL_ENV_SESSION},
@@ -11962,9 +12599,62 @@ def normalize_launch_tools(raw):
     return [tool for tool in TOOL_IDS if tool in wanted]
 
 
-def launch_tools_on(cfg):
-    """The tools this config has on, from a raw or a normalized config."""
-    return normalize_launch_tools((cfg or {}).get(LAUNCH_TOOLS_KEY))
+def launch_tools_on(cfg, lab_presets=None):
+    """The tools (built-in values) that are on for this launch, from a raw or a normalized
+    config: Off in the lab wins, then Always on, then the config's own choice, then the
+    lab's default. Off wins over a config saved earlier with the value on (Julian,
+    2026-11-16): the stored flag stays on disk and counts again if the lab offers it again.
+    With a lab that left them Available this is the config's ``launch_tools``, as before."""
+    cfg = cfg or {}
+    on = normalize_launch_tools(cfg.get(LAUNCH_TOOLS_KEY))
+    off = normalize_launch_tools(cfg.get(LAUNCH_TOOLS_OFF_KEY))
+    states = lab_tool_states(_cfg_lab_preset(cfg, lab_presets))
+    return [tool for tool in TOOL_IDS if states[tool] != STAFF_OFF and (
+        states[tool] == STAFF_LOCKED or tool in on
+        or (states[tool] == STAFF_DEFAULT and tool not in off))]
+
+
+def launch_tool_rows(cfg, lab_presets=None):
+    """Both built-in values as this config sees them: ``[{id, name, on, offered, locked,
+    lab_default, state, vars, where, goes_to, tip}]``. ``offered``: staff can have it (the
+    lab did not switch it off). Off wins, also over a config that has it on."""
+    cfg = cfg or {}
+    on = launch_tools_on(cfg, lab_presets)
+    states = lab_tool_states(_cfg_lab_preset(cfg, lab_presets))
+    rows = []
+    for base in LAUNCH_TOOL_ROWS:
+        state = states[base["id"]]
+        rows.append(dict(base, on=base["id"] in on, state=state,
+                         offered=state != STAFF_OFF,
+                         locked=state == STAFF_LOCKED, lab_default=state == STAFF_DEFAULT))
+    return rows
+
+
+def tool_choice(cfg, lab_presets, tool_id, on):
+    """What a config stores after staff switch a built-in value on or off:
+    ``{"launch_tools": [...], "launch_tools_off": [...]}``. Stored only where it differs
+    from the lab: on where the lab has it Available, off where the lab has it On by
+    default. Switching back is following the lab again."""
+    cfg = cfg or {}
+    tool_id = str(tool_id)
+    chosen = [t for t in normalize_launch_tools(cfg.get(LAUNCH_TOOLS_KEY)) if t != tool_id]
+    taken_out = [t for t in normalize_launch_tools(cfg.get(LAUNCH_TOOLS_OFF_KEY)) if t != tool_id]
+    state = lab_tool_states(_cfg_lab_preset(cfg, lab_presets)).get(tool_id)
+    if tool_id in TOOL_IDS and state != STAFF_LOCKED:
+        if on and state != STAFF_DEFAULT:
+            chosen.append(tool_id)
+        if not on and state == STAFF_DEFAULT:
+            taken_out.append(tool_id)
+    return {LAUNCH_TOOLS_KEY: normalize_launch_tools(chosen),
+            LAUNCH_TOOLS_OFF_KEY: normalize_launch_tools(taken_out)}
+
+
+def lab_tool_rows(preset):
+    """The two built-in values as Settings lists them."""
+    states = lab_tool_states(preset)
+    return [{"id": row["id"], "name": row["name"], "vars": row["vars"], "line": row["line"],
+             "tip": row["tip"], "state": states[row["id"]], "builtin": True}
+            for row in LAUNCH_TOOL_ROWS]
 
 
 def validate_lab_session(text):
@@ -12076,7 +12766,9 @@ def seat_pick_state(cfg, lab_presets=None, values=None):
     seats.update(label=TOOL_SEATS_INPUT_LABEL, hint=TOOL_SEATS_BLANK_HINT,
                  pick_hint=TOOL_SEATS_PICK_HINT, box_title=TOOL_SEATS_BOX_TITLE,
                  excluded=seats_out_of_participant_list(cfg, lab_presets),
-                 tool_on=TOOL_SEATS in launch_tools_on(cfg),
+                 tool_on=TOOL_SEATS in launch_tools_on(cfg, lab_presets),
+                 offered=any(row["id"] == TOOL_SEATS and row["offered"]
+                             for row in launch_tool_rows(cfg, lab_presets)),
                  line="" if seats["error"] else _tool_seats_line(seats["selected"],
                                                                  seats["count"]))
     return seats
@@ -12129,7 +12821,7 @@ def launch_tools_state(cfg, lab_presets=None, values=None):
     Returns ``{"any", "ok", "error" (the first problem), "lines", "session": {...} or None,
     "seats": {...} or None, "run": what with_launch_run stores}``."""
     values = values or {}
-    tools = launch_tools_on(cfg)
+    tools = launch_tools_on(cfg, lab_presets)
     answer = {"any": bool(tools), "ok": True, "error": "", "lines": [], "session": None,
               "seats": None, "run": {}, "participant_line": ""}
     if TOOL_LAB_SESSION in tools:
@@ -12159,7 +12851,7 @@ def with_launch_run(cfg, lab_presets=None, values=None):
     no face can launch with a value that was refused on screen. A problem returns the cfg
     untouched. With every tool off the very same dict comes back. A problem with the
     config's environment variables stops it here too."""
-    env_problems = env_var_problems(cfg)
+    env_problems = env_var_problems(cfg, lab_presets)
     if env_problems:
         return env_problems[0], cfg
     state = launch_tools_state(cfg, lab_presets, values)
@@ -12424,6 +13116,13 @@ ENV_VAR_BROWSE_NONE = "No folder chosen. You can also type the path in the box."
 ENV_VAR_BROWSE_TITLE = "Choose the folder for %s"
 ENV_VAR_DESCRIPTION_LABEL = "Short description (optional)"
 ENV_VAR_DESCRIPTION_MAX = 200
+ENV_VAR_LABEL_MAX = 60
+ENV_VAR_LABEL_LABEL = "Name staff see (optional)"
+ENV_VAR_FIXED_LABEL = "Staff can change the value"
+ENV_VAR_FIXED_TIP = ("On: the value here is a starting value, staff type their own. Off: this "
+                     "value is always used and staff cannot change it.")
+ENV_VAR_FIXED_TAG = "set by the lab"
+ENV_VAR_FIXED_EMPTY = "Give %s a value: staff cannot type one."
 ENV_VAR_FOLDER_LABEL = "This is a folder"
 ENV_VAR_FOLDER_MISSING = "The folder for %s does not exist: %s"
 ENV_VAR_FOLDER_MISSING_HINT = ("The launch can still go ahead. Create the folder, or choose "
@@ -12453,6 +13152,7 @@ HEADLESS_ENV_VARS_EXIT = 15
 OTREE_DATA_FOLDER_NAME = "OTREE_DATA_FOLDER"
 BUILTIN_ENV_VARS = (
     {"name": OTREE_DATA_FOLDER_NAME,
+     "label": "Data folder",
      "folder": True,
      "tip": "Choose a folder for your data. The Download data button of the oTree template, "
             "if your study has one, saves your files there.",
@@ -12569,6 +13269,12 @@ def normalize_env_var_choices(raw):
     return out
 
 
+def normalize_env_vars_off(raw):
+    """The lab values a config took out again: names, each once, in a fixed order."""
+    names = {str(item).strip() for item in (raw if isinstance(raw, (list, tuple)) else [])}
+    return sorted(name for name in names if name)
+
+
 def normalize_extra_env_vars(raw):
     """A config's own variables as ``[{name, value, enabled}]``, in their own order."""
     out = []
@@ -12607,8 +13313,18 @@ def stored_lab_env_vars(raw):
             continue
         seen.add(_env_var_upper(entry["name"]))
         builtin = _builtin_env_var(entry["name"])
-        hidden = bool(item.get("hidden", True))
+        hidden, include, locked = _policy_flags(item, hidden_default=True)
         stored = {"name": entry["name"], "value": entry["value"], "hidden": hidden}
+        # The choices of 2026-11-12, each written only when true.
+        if include:
+            stored["include_by_default"] = True
+        if locked:
+            stored["locked"] = True
+        if item.get("fixed") and not hidden:
+            stored["fixed"] = True
+        label = " ".join(str(item.get("label") or "").split())[:ENV_VAR_LABEL_MAX]
+        if label and not builtin:
+            stored["label"] = label
         if builtin:
             # Its words and its folder mark come from the code, so only these two can differ.
             stored["name"] = builtin["name"]
@@ -12644,13 +13360,20 @@ def lab_env_var_rows(preset):
         rows.append({"name": builtin["name"], "value": item.get("value", ""),
                      "hidden": item.get("hidden", True), "builtin": True, "tip": builtin["tip"],
                      "guide": bool(builtin.get("guide")), "folder": bool(builtin.get("folder")),
-                     "description": ""})
+                     "description": "", "label": builtin.get("label", ""),
+                     "include_by_default": bool(item.get("include_by_default")),
+                     "locked": bool(item.get("locked")), "fixed": bool(item.get("fixed")),
+                     "state": staff_state(item, hidden_default=True)})
     for item in stored:
         if _env_var_upper(item["name"]) in by_name:
             rows.append({"name": item["name"], "value": item["value"], "hidden": item["hidden"],
                          "builtin": False, "tip": item.get("description", ""), "guide": False,
                          "folder": bool(item.get("folder")),
-                         "description": item.get("description", "")})
+                         "description": item.get("description", ""),
+                         "label": item.get("label", ""),
+                         "include_by_default": bool(item.get("include_by_default")),
+                         "locked": bool(item.get("locked")), "fixed": bool(item.get("fixed")),
+                         "state": staff_state(item, hidden_default=True)})
     return rows
 
 
@@ -12667,9 +13390,17 @@ def _store_lab_env_vars(target, rows):
     target[LAB_ENV_VARS_KEY] = stored_lab_env_vars(rows)
 
 
+def _env_policy_problem(row):
+    """A value staff cannot change needs a value."""
+    if row.get("fixed") and not row.get("hidden") and not str(row.get("value") or "").strip():
+        return ENV_VAR_FIXED_EMPTY % row["name"]
+    return ""
+
+
 def add_lab_env_var(lab_presets, lab_id, name, value="", hidden=True, description="",
-                    folder=False):
-    """Add a variable to a lab. Returns ``(ok, message, presets, variable)``."""
+                    folder=False, state=None, label="", fixed=False):
+    """Add a variable to a lab. Returns ``(ok, message, presets, variable)``. ``state`` =
+    one of the four For staff choices (it wins from ``hidden``)."""
     presets, target = _lab_target(lab_presets, lab_id)
     if target is None:
         return False, "No lab with that id.", presets, None
@@ -12679,12 +13410,19 @@ def add_lab_env_var(lab_presets, lab_id, name, value="", hidden=True, descriptio
     if not ok:
         return False, message, presets, None
     entry["hidden"] = bool(hidden)
+    if state is not None:
+        if staff_state_flags(state) is None:
+            return False, STAFF_STATE_INVALID, presets, None
+        entry.update(staff_state_flags(state))
+    entry.update(label=label, fixed=bool(fixed))
+    if _env_policy_problem(entry):
+        return False, _env_policy_problem(entry), presets, None
     _store_lab_env_vars(target, rows + [entry])
     return True, "Added %s to %s." % (entry["name"], target["name"]), presets, entry
 
 
 def update_lab_env_var(lab_presets, lab_id, name, value=None, hidden=None, description=None,
-                       folder=None):
+                       folder=None, state=None, label=None, fixed=None):
     """Change one variable's default value, tick, description or folder mark. The name is
     what configs keep, so it stays. A built-in's words and mark come from the code. ``None``
     leaves a field as it is. Returns ``(ok, message, presets, variable)``."""
@@ -12701,7 +13439,20 @@ def update_lab_env_var(lab_presets, lab_id, name, value=None, hidden=None, descr
                 return False, problem, presets, None
             row["value"] = str(value)
         if hidden is not None:
-            row["hidden"] = bool(hidden)
+            # The older tick says Off or Available.
+            row.update(hidden=bool(hidden), locked=False)
+            if hidden:
+                row["include_by_default"] = False
+        if state is not None:
+            if staff_state_flags(state) is None:
+                return False, STAFF_STATE_INVALID, presets, None
+            row.update(staff_state_flags(state))
+        if label is not None and not row["builtin"]:
+            row["label"] = label
+        if fixed is not None:
+            row["fixed"] = bool(fixed)
+        if _env_policy_problem(row):
+            return False, _env_policy_problem(row), presets, None
         if description is not None and not row["builtin"]:
             row["description"] = _clean_env_description(description)
         if folder is not None and not row["builtin"]:
@@ -12744,9 +13495,71 @@ def _env_var_row(name, source, selected, value="", **more):
            "detail": "", "tip": "", "selected": bool(selected), "movable": False,
            "can_remove": True, "explicit": False, "can_reset": False, "can_delete": False,
            "can_edit": False, "tag": "", "wait_text": "", "value": value, "default": "",
-           "secret": env_var_is_secret(name), "problem": "", "guide": False, "folder": False}
+           "secret": env_var_is_secret(name), "problem": "", "guide": False, "folder": False,
+           "label": "", "locked": False, "fixed": False, "lab_default": False}
     row.update(more)
     return row
+
+
+def _env_lab_state(c, lab_presets=None):
+    """How this config stands to each variable of its lab: ``[(var, chosen name or None,
+    selected, value)]`` in the lab's order. Selected: Always on, or the config chose it, or
+    the lab has it On by default and the config neither took it out nor has its own
+    variable of that name. Value: the lab's when staff cannot change it or never typed one,
+    else what the config holds."""
+    preset = _cfg_lab_preset(c, lab_presets)
+    choices = {_env_var_upper(name): name for name in c[ENV_VAR_CHOICES_KEY]}
+    taken_out = {_env_var_upper(name) for name in c[ENV_VARS_OFF_KEY]}
+    own = {_env_var_upper(item["name"]) for item in c[EXTRA_ENV_VARS_KEY]}
+    out = []
+    for var in (lab_env_var_rows(preset) if preset else []):
+        upper = _env_var_upper(var["name"])
+        chosen = choices.get(upper)
+        follows = (var["include_by_default"] and not var["hidden"] and upper not in taken_out
+                   and upper not in own)
+        selected = var["locked"] or chosen is not None or follows
+        fixed = var["fixed"] and not var["hidden"]
+        value = var["value"] if fixed or chosen is None else c[ENV_VAR_CHOICES_KEY][chosen]
+        out.append((var, chosen, selected, value))
+    return out
+
+
+def _env_entries(c, lab_presets=None):
+    """``[(name, value)]`` of everything selected, in a fixed order: the config's choices
+    (as they always were), then what it has only because of its lab, then its own."""
+    state = {_env_var_upper(var["name"]): (var, chosen, selected, value)
+             for var, chosen, selected, value in _env_lab_state(c, lab_presets)}
+    entries = []
+    for name, value in c[ENV_VAR_CHOICES_KEY].items():
+        lab = state.get(_env_var_upper(name))
+        entries.append((name, lab[3] if lab else value))
+    entries += [(var["name"], value) for var, chosen, selected, value in state.values()
+                if selected and chosen is None]
+    entries += [(item["name"], item["value"]) for item in c[EXTRA_ENV_VARS_KEY]
+                if item["enabled"]]
+    return entries
+
+
+def env_var_choice(cfg, lab_presets, name, on, value=None):
+    """What a config stores after staff add a lab value, take it out or type in it:
+    ``{"env_var_choices": {...}, "env_vars_off": [...]}``. A value that is on because of
+    the lab and still holds the lab's value is not stored: it follows the lab."""
+    c = normalize_config(cfg or {})
+    upper = _env_var_upper(name)
+    choices = {k: v for k, v in c[ENV_VAR_CHOICES_KEY].items() if _env_var_upper(k) != upper}
+    taken_out = [n for n in c[ENV_VARS_OFF_KEY] if _env_var_upper(n) != upper]
+    var = next((v for v, _c, _s, _v in _env_lab_state(c, lab_presets)
+                if _env_var_upper(v["name"]) == upper), None)
+    default_on = bool(var and var["include_by_default"] and not var["hidden"])
+    locked = bool(var and var["locked"])
+    if on:
+        typed = (var["value"] if var else "") if value is None else str(value)
+        if not ((default_on or locked) and var and typed == var["value"]):
+            choices[str(name)] = typed
+    elif default_on and not locked:
+        taken_out.append(str(name))
+    return {ENV_VAR_CHOICES_KEY: normalize_env_var_choices(choices),
+            ENV_VARS_OFF_KEY: normalize_env_vars_off(taken_out)}
 
 
 def launch_env_var_rows(cfg, lab_presets=None):
@@ -12758,23 +13571,27 @@ def launch_env_var_rows(cfg, lab_presets=None):
     own = c[EXTRA_ENV_VARS_KEY]
     own_names = {_env_var_upper(item["name"]) for item in own}
     rows, offered = [], set()
-    for var in lab_env_vars(_presets_or_default(lab_presets), c["lab"]):
+    for var, name, selected, value in _env_lab_state(c, lab_presets):
         upper = _env_var_upper(var["name"])
         offered.add(upper)
-        name = choices.get(upper)
-        if name is None and (upper in own_names or var["hidden"]):
+        if not selected and (upper in own_names or var["hidden"]):
             continue
+        fixed = var["fixed"] and not var["hidden"]
         rows.append(_env_var_row(
-            name or var["name"], "lab", name is not None,
-            c[ENV_VAR_CHOICES_KEY].get(name, ""), default=var["value"], tip=var["tip"],
-            guide=var["guide"], folder=var["folder"],
-            tag=ENV_VAR_TAG_HIDDEN if var["hidden"] else ""))
+            name or var["name"], "lab", selected, value if selected else "",
+            default=var["value"], tip=var["tip"],
+            guide=var["guide"], folder=var["folder"], label=var["label"],
+            locked=var["locked"], fixed=fixed, can_remove=not var["locked"],
+            lab_default=var["include_by_default"] and not var["hidden"],
+            tag=(LOCKED_TAG if var["locked"] else ENV_VAR_FIXED_TAG if fixed else
+                 ENV_VAR_TAG_HIDDEN if var["hidden"] else "")))
     for upper, name in choices.items():
         if upper not in offered:
             # A lab no longer offers it, but a built-in still has its own words.
             builtin = _builtin_env_var(name) or {}
             rows.append(_env_var_row(name, "lab", True, c[ENV_VAR_CHOICES_KEY][name],
                                      tag=ENV_VAR_TAG_NOT_IN_LAB, tip=builtin.get("tip", ""),
+                                     label=builtin.get("label", ""),
                                      guide=bool(builtin.get("guide")),
                                      folder=bool(builtin.get("folder"))))
     for item in own:
@@ -12783,7 +13600,7 @@ def launch_env_var_rows(cfg, lab_presets=None):
                                  can_delete=True, tip=item["description"] or builtin.get("tip", ""),
                                  guide=bool(builtin.get("guide")),
                                  folder=item["folder"] or bool(builtin.get("folder"))))
-    problems = dict(_env_var_row_problems(c))
+    problems = dict(_env_var_row_problems(c, lab_presets))
     for row in rows:
         if row["selected"]:
             row["problem"] = problems.get(_env_var_upper(row["name"]), "")
@@ -12819,13 +13636,10 @@ def set_lab_env_add_own(lab_presets, lab_id, on):
     return True, "Saved.", presets
 
 
-def _env_var_row_problems(c):
+def _env_var_row_problems(c, lab_presets=None):
     """``[(upper name, problem)]`` for what is selected, the first problem of each name."""
     found, seen = [], set()
-    entries = [(name, value) for name, value in c[ENV_VAR_CHOICES_KEY].items()]
-    entries += [(item["name"], item["value"]) for item in c[EXTRA_ENV_VARS_KEY]
-                if item["enabled"]]
-    for name, value in entries:
+    for name, value in _env_entries(c, lab_presets):
         upper = _env_var_upper(name)
         problem = env_var_name_problem(name) or env_var_value_problem(name, value)
         if not problem and upper in seen:
@@ -12836,21 +13650,22 @@ def _env_var_row_problems(c):
     return found
 
 
-def env_var_problems(cfg):
-    """Why this config's variables block a launch, in plain words (``[]`` = no problem). An
-    empty value is not a problem. Reads the config alone."""
-    return [problem for _upper, problem in _env_var_row_problems(normalize_config(cfg or {}))]
+def env_var_problems(cfg, lab_presets=None):
+    """Why this launch's variables block it, in plain words (``[]`` = no problem). An
+    empty value is not a problem. Reads the config, and its lab for what the lab has On by
+    default or Always on (with no list given: the lab as lab_info.json has it now)."""
+    return [problem for _upper, problem
+            in _env_var_row_problems(normalize_config(cfg or {}), lab_presets)]
 
 
-def launch_env_vars(cfg):
+def launch_env_vars(cfg, lab_presets=None):
     """What this launch sets: ``{name: value}``, selected with a value, reserved or broken
-    names and values left out, each name once. Whitespace alone counts as empty."""
+    names and values left out, each name once. Whitespace alone counts as empty. What the
+    config selected, plus what its lab has On by default or Always on (see _env_lab_state);
+    with a lab that uses neither this is the config alone, as before."""
     c = normalize_config(cfg or {})
-    entries = [(name, value) for name, value in c[ENV_VAR_CHOICES_KEY].items()]
-    entries += [(item["name"], item["value"]) for item in c[EXTRA_ENV_VARS_KEY]
-                if item["enabled"]]
     out, seen = {}, set()
-    for name, value in entries:
+    for name, value in _env_entries(c, lab_presets):
         upper = _env_var_upper(name)
         if (upper in seen or not value.strip() or env_var_name_problem(name)
                 or env_var_value_problem(name, value)):
@@ -12873,7 +13688,7 @@ def env_var_folder_warnings(cfg, lab_presets=None):
     """Before you launch: a selected folder variable whose folder is not there, as
     ``[{"title", "hint"}]``. Only a warning: what reads the variable reports its own error.
     A folder that cannot be checked in time (a dead network share) is not reported."""
-    set_now = launch_env_vars(cfg)
+    set_now = launch_env_vars(cfg, lab_presets)
     found = []
     for row in launch_env_var_rows(cfg, lab_presets):
         value = set_now.get(row["name"])
@@ -16353,6 +17168,11 @@ ROOM_HELP = ("If the lab PCs already have shortcuts that open a room, put that r
 UI_TIPS = {
     "env_vars": "Variables a study or script can read. Tick one to show it in Advanced, not "
                 "selected. Nothing is set until a config selects it and gives it a value.",
+    "advanced": "What this lab offers staff in Advanced: scripts that run on launch, websites "
+                "that open, and values oTree and scripts are told (environment variables). "
+                "Saved per lab in lab_info.json. Each item has a For staff choice: Off, "
+                "Available, On by default, or Always on. Off does not take it away from a "
+                "config that already uses it.",
     "launch_tools": "Optional helpers, off by default. A tool that is off changes nothing. A "
                     "tool that is on asks for a value, on the Lab card or in Before you launch, "
                     "and gives it to scripts as an environment variable.",

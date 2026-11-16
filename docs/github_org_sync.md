@@ -416,7 +416,7 @@ no merge, no change to a file that was edited on this computer. The one thing th
 launcher handles itself is its own lab block: when `settings.py` also changed
 online and the block is the only local difference, the block is taken out, the
 pull runs, the current block goes back in (**Updated, lab support kept.**), with a
-`.bak` first; a failed pull puts the file back exactly. The result appears in the
+`.bak` first (in the study's `lablauncher_backups` folder); a failed pull puts the file back exactly. The result appears in the
 project status box:
 
 - **Nothing new: already up to date.**
@@ -439,7 +439,7 @@ cannot be moved forward. **The launcher never commits, pushes or merges in a stu
 folder, and it discards only on your confirmed click.** It names the files and
 offers: **Show what's different**; **Get a fresh copy** (recommended); **Keep this
 version and launch**; **Discard my edits to these files and update** (asks first,
-keeps a `.bak` per file, refused while a session of this study runs). When someone
+keeps a `.bak` per file in `lablauncher_backups/`, refused while a session of this study runs). When someone
 committed on the lab PC, only **Get a fresh copy** is offered: *This folder has its
 own commits, so sort it out with Git or get a fresh copy.*
 
@@ -467,7 +467,7 @@ The oTree project section then shows **Branch** and **Check branches**: a `git
 fetch` (changes no file), then one row per branch, local and on GitHub together, the
 current one marked. **Switch** asks first, then:
 
-1. takes the lab block out, after a `.bak` of `settings.py` (only when the block is
+1. takes the lab block out, after a `.bak` of `settings.py` in `lablauncher_backups/` (only when the block is
    the one local change in it),
 2. `git switch <branch>` (a branch only on GitHub gets a local branch that follows
    it),
@@ -513,8 +513,10 @@ its label only, never the token.
   when it does, the lab PC needs a fresh copy. The clean setup is to **add the
   block once on your own computer and commit it** to the study repo. It is inert
   off the lab (it does nothing unless the launcher's environment variables are
-  set), so it is safe everywhere. Also add `*.bak` to the repo's `.gitignore` so
-  the backup the button makes is never committed.
+  set), so it is safe everywhere. The backup the button makes goes into a
+  `lablauncher_backups` folder in the study, which git ignores by itself (it holds
+  its own `.gitignore`), so it is never committed and the repo's `.gitignore`
+  needs nothing extra.
 - **Tag the version that ran a session**, so you can always tell exactly what
   code produced a dataset:
 

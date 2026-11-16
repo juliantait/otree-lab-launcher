@@ -24,8 +24,10 @@ env/
 # update_check.json, logs and save leftovers. Ignore the whole folder.
 /data/
 
-# settings.py backups the launcher writes (those land in the user's own project)
+# settings.py backups the launcher writes. They go into a lablauncher_backups/
+# folder in the study (which also ignores itself); older ones sat next to settings.py.
 *.bak
+lablauncher_backups/
 
 # local/ -- a SCRATCH folder at the repo root for anything you try out with the
 # launcher inside this checkout: test studies, repos cloned with GitHub

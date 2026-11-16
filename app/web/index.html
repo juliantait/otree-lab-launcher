@@ -795,7 +795,6 @@ input::placeholder{color:var(--faint)}
 /* Advanced: the launch timeline (2026-11-04). Top = what will happen, in run order;
    bottom = what is not in use. */
 .tl-head{justify-content:flex-start}
-.tl-head .tl-reorder{margin-left:auto}
 .tl-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:5px 0;border-bottom:1px solid var(--line-soft)}
 .tl-row:last-child{border-bottom:0}
 .tl-mark{display:inline-block;width:16px;text-align:center;color:var(--ok);font-weight:700}
@@ -805,32 +804,17 @@ input::placeholder{color:var(--faint)}
 .tl-arrows .btn{min-width:24px;padding:0 4px}
 .tl-arrow-off{display:inline-flex}
 .tl-arrow-off .btn{pointer-events:none}
-/* The oTree block. At rest it adds nothing to the page. In Reorder it slides out to the right
-   as one, with the one pair of arrows beside its rows. */
-.tl-block{display:flex;align-items:stretch;gap:0;margin-left:0;border:1px solid transparent;border-radius:var(--r-sm);
-  transition:margin-left .18s ease,background-color .18s ease,border-color .18s ease,padding .18s ease}
-.tl-block-rows{flex:1;min-width:0}
-.tl-block-rows .tl-row:last-child{border-bottom:0}
-.tl-block.out{margin:3px 0 3px 22px;padding:2px 8px 2px 6px;gap:8px;background:var(--accent-soft);border-color:var(--accent)}
-.tl-arrows--block{align-self:stretch}
-.tl-arrows--block .btn,.tl-arrows--block .tl-arrow-off{height:auto;align-self:stretch}
-.tl-block:not(.out):not(.closing) .tl-arrows--block{opacity:.0}
+/* The oTree block: Reset database and Launch oTree server as one, with one pair of arrows
+   (the rules are with the Advanced sheet, below). */
+.tl-arrows--block .btn,.tl-arrows--block .tl-arrow-off{height:auto}
 @media (prefers-reduced-motion: reduce){.tl-block{transition:none}.tl-moved{animation:none!important}}
 @keyframes tlMoved{from{background-color:var(--accent-soft)}to{background-color:transparent}}
 .tl-row.tl-moved{animation:tlMoved .6s ease-out}
-.tl-block.out.tl-moved{animation:none}
+.tl-block.tl-moved{animation:tlMoved .6s ease-out}
 .tl-wait{font-size:11.5px;color:var(--muted)}
 .tl-wait-sel{font-size:11.5px;padding:1px 4px;max-width:190px}
 .tl-del{margin-left:auto}
 .tl-acts{margin-left:auto;display:inline-flex;gap:4px;align-items:center;align-self:center}
-/* Available tools: a heading and three collapsed groups, one line each. */
-.tl-avail{margin-top:12px;padding-top:9px;border-top:1px solid var(--line-soft)}
-.tl-group{margin-top:4px}
-.tl-group[hidden]{display:none}
-.tl-group-toggle{display:flex;width:100%;padding:3px 0}
-.tl-group-body{margin:2px 0 8px 0;padding-left:17px}
-.tl-group-body[hidden]{display:none}
-.tl-group-body .tl-add-buttons{margin-top:6px}
 .tl-add-buttons{display:flex;gap:6px;flex-wrap:wrap}
 .tl-add-form{margin-top:8px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:var(--r-sm)}
 .tl-add-form textarea{width:100%;box-sizing:border-box;min-height:62px;margin:6px 0 0;font-family:var(--mono,monospace);font-size:12px}
@@ -868,13 +852,133 @@ pre.tl-detail{flex-basis:calc(100% - 23px);min-width:0;background:var(--bg-deep)
 .ls-env-val{flex:1 1 auto;min-width:0;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bl-env{margin:8px 0}
 .bl-env-line{margin:0 0 2px;font-size:12.5px;color:var(--text);overflow-wrap:anywhere}
-.tl-tools{margin-top:12px;padding-top:9px;border-top:1px solid var(--line-soft)}
-.tl-tool-row{display:flex;align-items:center;gap:4px;padding:4px 0}
-.tl-tool-row label{margin:0}
-.tl-tool-note{font-size:11.5px;color:var(--muted);margin-left:6px}
-.tl-tool-row.tl-moved{animation:tlMoved 1.4s ease-out}
 .tool-help-btn{margin-left:2px}
 .tl-vars{margin-left:auto}
+/* ---- Advanced (2026-11-12): the primer on the page, the sheet over it ---- */
+.primer-head{display:flex;align-items:center;gap:8px}
+.primer-head .adv-cap{flex:1;min-width:0;font-size:12px}
+.primer-row{display:grid;grid-template-columns:82px minmax(0,1fr);gap:8px;align-items:start;padding:4px 0}
+.primer-row .k{color:var(--muted);font-size:12px;padding-top:3px}
+.primer-chain{display:flex;flex-wrap:wrap;gap:5px 4px;align-items:center}
+.primer-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);font-size:12px;color:var(--text-strong)}
+.primer-chip .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:15em}
+.primer-chip.otree{background:var(--accent-soft);border-color:rgba(var(--accent-rgb),.35);color:var(--accent);font-weight:700}
+.primer-chip svg{width:12px;height:12px;flex:none}
+.primer-chip .v{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:12em}
+.primer-arrow{color:var(--faint);font-size:10px}
+.primer-ask{display:flex;gap:6px 18px;flex-wrap:wrap;margin-top:8px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.primer-ask button{background:none;border:0;padding:0;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--accent);cursor:pointer}
+.primer-ask button:hover{text-decoration:underline}
+#primerBody:empty{display:none}
+#primerBody{margin-top:8px}
+.adv-scrim{position:fixed;inset:0;z-index:70;background:var(--overlay);display:flex;align-items:flex-start;justify-content:center;padding:34px 16px;overflow:auto}
+.adv-sheet{width:min(960px,100%);background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r-xl);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;max-height:calc(100vh - 68px)}
+.adv-sheet-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line-soft)}
+.adv-sheet-head h3{margin:0;font-size:16px;color:var(--text-strong)}
+.adv-sheet-note{flex:1;min-width:0;font-size:12.5px;color:var(--muted)}
+.adv-sheet .adv-body{margin:0;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);min-height:0;overflow:auto}
+.adv-pane{padding:16px 22px 22px;min-width:0}
+.adv-right{border-left:1px solid var(--line-soft);background:var(--bg);border-radius:0 0 var(--r-xl) 0}
+.adv-sub{margin:0 0 10px;font-size:12px;color:var(--muted)}
+.adv-pane .svc-head .env-see-more{margin-left:auto;font-size:11.5px}
+.adv-values{margin-top:16px;padding-top:13px;border-top:1px solid var(--line-soft)}
+.adv-ready{margin-top:18px}
+.adv-settings-note{margin-top:14px}
+.adv-tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.adv-tile{display:block;text-align:left;padding:12px 13px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;box-shadow:var(--shadow-sm);font-family:inherit}
+.adv-tile:hover,.adv-tile:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.adv-tile[hidden]{display:none}
+.adv-tile-ico{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);margin-bottom:8px}
+.adv-tile-ico svg{width:15px;height:15px}
+.adv-tile b{display:block;color:var(--text-strong);font-size:13.5px}
+.adv-tile span{font-size:12px;color:var(--muted)}
+.adv-own-off{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.adv-value-link{margin:10px 0 0;font-size:12px}
+.adv-value-link a,.adv-reads a{color:var(--accent);font-weight:600}
+.adv-explain{background:var(--panel);border:1px solid var(--line-soft);border-left:3px solid var(--accent);border-radius:var(--r-sm);padding:9px 12px;font-size:12.5px;margin:0 0 10px}
+.adv-explain b{color:var(--text-strong)}
+.adv-explain ul{margin:6px 0 0;padding-left:18px}
+.adv-explain li{margin:2px 0}
+.adv-right .tl-add-form{margin-top:0;padding:0;border:0}
+.adv-right .tl-add-form input[type=text],.adv-right .tl-add-form select{width:100%;box-sizing:border-box}
+.adv-flabel{display:block;font-size:12px;color:var(--muted);margin:9px 0 4px}
+.adv-frow{display:flex;gap:10px;flex-wrap:wrap}
+.adv-frow>div{flex:1 1 130px;min-width:0}
+.adv-frow .tl-wait-sel{max-width:none}
+.adv-fchk{margin-top:9px}
+.adv-reads{margin:10px 0 0;font-size:12px}
+.adv-right .tl-add-acts{justify-content:flex-end;margin-top:12px}
+/* the timeline rail */
+#tlRows{position:relative}
+#tlRows::before{content:"";position:absolute;left:11px;top:16px;bottom:16px;width:2px;background:var(--line)}
+.tl-step{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:6px 4px 6px 0;border-bottom:0;border-radius:var(--r-sm)}
+.tl-step:hover{background:var(--panel-2)}
+.tl-dot{position:relative;z-index:1;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--panel);border:2px solid var(--line-strong);color:var(--muted)}
+.tl-dot svg,.tl-ico svg{width:12px;height:12px}
+.tl-main{min-width:0}
+.tl-main .tl-name{overflow-wrap:anywhere}
+.tl-meta{font-size:11.5px;color:var(--muted)}
+.tl-step .tl-acts{margin-left:0;gap:3px}
+.tl-step .tl-acts .btn{padding:4px 7px;min-width:26px}
+.tl-step .tl-arrows .btn{min-width:26px;padding:4px 7px}
+.tl-lock{display:inline-grid;place-items:center;width:26px;height:26px;color:var(--warn)}
+.tl-lock svg{width:13px;height:13px}
+.tl-locktag{display:inline-block;margin-left:6px;font-size:10.5px;font-weight:500;padding:0 7px;border-radius:999px;border:1px solid var(--warn);color:var(--warn);white-space:nowrap}
+.tl-more{grid-column:2/-1;min-width:0}
+.tl-more pre.tl-detail{margin:2px 0 4px;flex-basis:auto}
+.tl-more .tl-more-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 4px}
+.tl-more .addr{font-family:var(--mono);font-size:11.5px;color:var(--text);overflow-wrap:anywhere;margin:2px 0 4px}
+.tl-step .tl-edit-form{grid-column:2/-1}
+.tl-block{position:relative;display:block;margin:4px 0;padding:2px 4px 2px 0;background:var(--accent-soft);border:1px solid transparent;border-radius:var(--r-sm)}
+.tl-block .tl-step:hover{background:transparent}
+.tl-block .tl-dot{border-color:var(--accent);background:var(--accent);color:#fff}
+.tl-block .tl-name{color:var(--accent)}
+.tl-block .tl-dot.sub{width:10px;height:10px;margin-left:7px;border-width:0}
+.tl-block-rows{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.tl-block-rows .tl-block-list{min-width:0}
+.tl-block .tl-arrows--block{align-self:center;padding-right:4px;gap:3px}
+.tl-block .tl-arrows--block .btn{min-width:26px;padding:4px 7px}
+.tl-ready-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center;padding:7px 0;border-top:1px solid var(--line-soft)}
+.tl-ready-row .tl-ico{display:grid;color:var(--muted)}
+.tl-ready-row .tl-name{font-weight:500}
+.tl-ready-row .tl-acts{margin-left:0}
+.tl-ready-row .tl-edit-form{grid-column:1/-1}
+.tl-val{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:6px 0;border-bottom:0}
+.tl-val .tl-name{font-family:inherit;font-size:inherit}
+.tl-val .env-see-more{margin-left:4px;font-size:11.5px}
+.primer-link{display:inline-flex;align-items:center;gap:4px;max-width:100%}
+.tl-val .tl-var{font-family:var(--mono);font-size:11px;color:var(--faint);overflow-wrap:anywhere}
+.tl-val .tl-where{font-size:12px;color:var(--muted)}
+.tl-val .tl-where a{color:var(--accent);font-weight:600}
+.tl-val .tl-goes{display:block;font-size:11px;color:var(--faint)}
+.tl-val .tl-env-val{order:0;flex:none;padding-left:0;display:flex;gap:6px;align-items:center;min-width:0}
+.tl-val .tl-env-err{grid-column:2/-1;padding-left:0}
+.tl-val .tl-acts{margin-left:0}
+.tl-val .tl-fixed{font-family:var(--mono);font-size:12px;color:var(--text);overflow-wrap:anywhere}
+@media (max-width:760px){
+  .adv-sheet .adv-body{grid-template-columns:1fr}
+  .adv-right{border-left:0;border-top:1px solid var(--line-soft);border-radius:0 0 var(--r-xl) var(--r-xl)}
+  .adv-scrim{padding:12px 8px}
+  .adv-sheet{max-height:calc(100vh - 24px)}
+  .tl-val{grid-template-columns:minmax(0,1fr) auto}
+  .tl-val .tl-mid{grid-column:1/-1;grid-row:2}
+}
+/* Settings: the one Advanced card */
+.adv-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px}
+.adv-tab{padding:5px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-family:inherit;font-size:12.5px;color:var(--text)}
+.adv-tab[aria-pressed="true"]{background:var(--accent-soft);border-color:rgba(var(--accent-rgb),.4);color:var(--accent);font-weight:700}
+.adv-grp{display:flex;align-items:baseline;gap:10px;margin:16px 0 2px}
+.adv-grp b{font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.adv-grp span{flex:1;font-size:12px;color:var(--muted)}
+.adv-state{flex:none;width:150px;padding:5px 8px;font-size:12px}
+.adv-state.s-off{color:var(--faint)}
+.adv-state.s-locked{border-color:var(--warn);color:var(--warn)}
+.adv-builtin{font-size:10.5px;font-weight:500;margin-left:6px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.adv-own{display:flex;gap:6px 18px;flex-wrap:wrap;align-items:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.adv-legend{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;color:var(--muted);margin:10px 0 0}
+.adv-legend b{color:var(--text-strong)}
+.svc-set-row .svc-line{display:block;font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+
 /* Select seats on the Lab card. */
 .map-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 #seatSelectBtn[hidden]{display:none}
@@ -1254,6 +1358,8 @@ pre.bl-script{margin:3px 0 0 20px;max-width:calc(100% - 20px);font-family:var(--
    sit flush at the top. The generic title + absolute X are hidden here (the
    sticky header carries its own). */
 .modal-card.settings-modal{padding:0;display:flex;flex-direction:column;overflow:hidden}
+/* Wider since 2026-11-12: the Advanced card has a name, a For staff box and buttons per row. */
+.modal-card.wide.settings-modal{max-width:800px}
 .modal-card.settings-modal>.modal-x,.modal-card.settings-modal>#modalTitle{display:none}
 /* #modalBody is the intermediate wrapper openModal fills; the sticky head + scroll
    region live INSIDE it, so it must itself be the flex column that fills the card
@@ -1933,91 +2039,16 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
           </div>
         </section>
 
-        <!-- Advanced (2026-10-30): collapsed to one caption line. -->
+        <!-- Advanced (2026-11-12): the card is a primer, it never grows. It names what
+             this launch does besides oTree (core.launch_primer) and asks the two questions.
+             Everything else is in the sheet #advScrim. -->
         <section class="card card--adv" id="advCard">
-          <button type="button" class="db-details-toggle" id="advToggle" aria-expanded="false" onclick="toggleAdvanced()"><span class="arw" id="advArw">&#9656;</span><span id="advLabel">Advanced</span><span class="adv-cap" id="advCaption"></span></button>
-          <div class="adv-body" id="advBody" hidden>
-            <!-- The launch timeline (Julian, 2026-11-04): everything selected in run
-                 order. Under it what is in use and has a value or a tick (Environment
-                 variables, Tools), each only when there is one; then Available tools,
-                 everything not in use, in three collapsed groups. Selecting moves a row
-                 up, removing moves it back. Core decides the rows; the page keeps only the
-                 choices. -->
-            <div class="svc-head tl-head"><b id="svcTitle">Launch timeline</b><span id="svcTip"></span>
-              <button type="button" class="btn tiny tl-reorder" id="tlReorder" aria-pressed="false" onclick="toggleReorder()">Reorder</button></div>
-            <div id="tlRows"></div>
-            <!-- The state of the "oTree admin page" row: the config's open_browser field. -->
-            <input type="checkbox" id="open_browser" checked hidden>
-            <!-- Environment variables (2026-11-05): only what this config selected. -->
-            <div class="tl-env" id="envCard" hidden>
-              <div class="svc-head"><b id="envTitle">Environment variables</b><button type="button" class="info-i tool-help-btn" id="envHelpBtn" aria-label="How to read one in oTree" title="How to read one in oTree" onclick="openToolHelp('env')">i</button></div>
-              <div id="envRows"></div>
-            </div>
-            <!-- Tools (2026-11-05): only the ones that are on; the others are under
-                 Available tools. A tool that is off changes nothing. -->
-            <div class="tl-tools" id="toolsCard" hidden>
-              <div class="svc-head"><b id="toolsTitle">Tools</b><span id="toolsTip"></span></div>
-              <div id="toolRows"></div>
-            </div>
-            <!-- Available tools: each group collapsed on every start, nothing about it is
-                 remembered. core.timeline_available_groups decides what is in each. -->
-            <div class="tl-avail" id="tlAvailCard">
-              <div class="svc-head"><b id="tlAvailTitle">Available tools</b><span id="tlAvailTip"></span></div>
-              <div class="tl-group" id="tlGroup_tools" hidden>
-                <button type="button" class="db-details-toggle tl-group-toggle" id="tlGroupToggle_tools" aria-expanded="false" onclick="toggleAvailGroup('tools')"><span class="arw">&#9656;</span><span class="tl-group-cap"></span></button>
-                <div class="tl-group-body" id="tlGroupBody_tools" hidden><div id="toolRowsOff"></div></div>
-              </div>
-              <div class="tl-group" id="tlGroup_env" hidden>
-                <button type="button" class="db-details-toggle tl-group-toggle" id="tlGroupToggle_env" aria-expanded="false" onclick="toggleAvailGroup('env')"><span class="arw">&#9656;</span><span class="tl-group-cap"></span></button>
-                <div class="tl-group-body" id="tlGroupBody_env" hidden>
-                  <div id="tlAvailEnv"></div>
-                  <div class="tl-add-buttons"><button type="button" class="btn tiny" id="envAddOpen" onclick="addFormOpen('env')" hidden>Add your own variable</button></div>
-                  <div class="tl-add-form" id="envAddForm" hidden>
-                    <div class="tl-add-row">
-                      <input type="text" id="envNewName" placeholder="Name" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
-                      <input type="text" id="envNewValue" placeholder="Value" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
-                    </div>
-                    <div class="env-add-opts">
-                      <input type="text" id="envNewDesc" placeholder="Short description (optional)" maxlength="200" style="flex:1 1 220px;min-width:0">
-                      <label class="chk"><input type="checkbox" id="envNewFolder"> This is a folder</label>
-                    </div>
-                    <div class="tl-add-acts"><button type="button" class="btn tiny accent" id="envAddBtn" onclick="addOwnEnvVar()">Add variable</button>
-                    <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
-                  </div>
-                </div>
-              </div>
-              <div class="tl-group" id="tlGroup_steps">
-                <button type="button" class="db-details-toggle tl-group-toggle" id="tlGroupToggle_steps" aria-expanded="false" onclick="toggleAvailGroup('steps')"><span class="arw">&#9656;</span><span class="tl-group-cap"></span></button>
-                <div class="tl-group-body" id="tlGroupBody_steps" hidden>
-                  <div id="tlAvail"></div>
-                  <div class="tl-add-buttons">
-                    <button type="button" class="btn tiny" id="scrAddOpen" onclick="addFormOpen('script')">Add your own script</button>
-                    <button type="button" class="btn tiny" id="svcAddOpen" onclick="addFormOpen('website')">Add your own website</button>
-                    <button type="button" class="btn tiny tl-vars" id="scrVarsOpen" onclick="openToolHelp('variables')">Variables for scripts</button>
-                  </div>
-                  <div class="tl-add-form" id="scrAddForm" hidden>
-                    <div class="tl-add-row">
-                      <input type="text" id="scrNewName" placeholder="Script name">
-                      <select id="scrNewWait" class="tl-wait-sel" onchange="scrNewWaitChanged()"></select>
-                      <input type="text" class="tl-port" id="scrNewPort" placeholder="Port" hidden>
-                    </div>
-                    <textarea id="scrNewText" spellcheck="false" placeholder="cd some/folder&#10;python server.py"></textarea>
-                    <div class="tl-add-acts"><button type="button" class="btn tiny accent" onclick="addOwnScript()" id="scrAddBtn">Add script</button>
-                    <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
-                  </div>
-                  <div class="tl-add-form" id="svcAddForm" hidden>
-                    <div class="tl-add-row">
-                      <input type="text" class="svc-in-name" id="svcNewName" placeholder="Name" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
-                      <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
-                    </div>
-                    <div class="tl-add-acts"><button type="button" class="btn tiny accent" id="svcAddBtn" onclick="addOwnService()">Add website</button>
-                    <button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="svc-msg" id="svcMsg" hidden></div>
+          <div class="primer-head">
+            <button type="button" class="db-details-toggle" id="advToggle" aria-expanded="false" aria-haspopup="dialog" onclick="toggleAdvanced()"><span class="arw" id="advArw">&#9656;</span><span id="advLabel">Advanced</span></button>
+            <span class="adv-cap" id="advCaption"></span>
+            <button type="button" class="btn tiny" id="advOpenBtn" onclick="toggleAdvanced()">Open</button>
           </div>
+          <div id="primerBody"></div>
         </section>
 
       </div>
@@ -2151,6 +2182,88 @@ select.bl-roomsel{width:auto;min-width:130px;background-color:var(--panel-2);col
     <button class="modal-x" onclick="closeModal()" aria-label="Close">&times;</button>
     <h3 class="modal-title" id="modalTitle"></h3>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- Advanced, open (2026-11-12): a sheet over the page. Left the launch timeline and the
+     values in use, right "Add your own" and ONE list of what is ready to add. Core decides
+     every row (core.launch_timeline); the page keeps only the choices. -->
+<div class="adv-scrim" id="advScrim" hidden onclick="if(event.target===this)closeAdvanced()">
+  <div class="adv-sheet" id="advSheet" role="dialog" aria-modal="true" aria-labelledby="advSheetTitle">
+    <div class="adv-sheet-head">
+      <h3 id="advSheetTitle">Advanced</h3><span class="adv-sheet-note" id="advSheetNote"></span>
+      <button type="button" class="btn tiny accent" id="advDone" onclick="closeAdvanced()"><b>Done</b></button>
+    </div>
+    <div class="adv-body" id="advBody">
+      <div class="adv-pane adv-left">
+        <div class="svc-head tl-head"><b id="svcTitle">Launch timeline</b><span id="svcTip"></span></div>
+        <div id="tlRows"></div>
+        <!-- The state of the "oTree admin page" row: the config's open_browser field. -->
+        <input type="checkbox" id="open_browser" checked hidden>
+        <div class="adv-values" id="envCard">
+          <div class="svc-head"><b id="envTitle">Values for this launch</b><span id="valTip"></span><a href="#" class="env-see-more" id="envHelpBtn" onclick="openToolHelp('env');return false;">How to read one in oTree</a></div>
+          <div id="envRows"></div>
+        </div>
+        <div class="svc-msg" id="svcMsg" hidden></div>
+      </div>
+      <div class="adv-pane adv-right">
+        <div id="addHome">
+          <div class="svc-head"><b id="addOwnTitle">Add your own</b><span id="addOwnTip"></span></div>
+          <div class="adv-tiles">
+            <button type="button" class="adv-tile" id="scrAddOpen" onclick="addFormOpen('script')"><span class="adv-tile-ico" id="scrTileIco"></span><b id="scrTileName">Script</b><span id="scrTileLine"></span></button>
+            <button type="button" class="adv-tile" id="svcAddOpen" onclick="addFormOpen('website')"><span class="adv-tile-ico" id="svcTileIco"></span><b id="svcTileName">Website</b><span id="svcTileLine"></span></button>
+          </div>
+          <p class="adv-own-off" id="addOwnOff" hidden></p>
+          <p class="adv-value-link"><a href="#" id="envAddOpen" hidden onclick="addFormOpen('env');return false;">Add your own value</a></p>
+          <div class="adv-ready" id="tlAvailCard">
+            <div class="svc-head"><b id="tlAvailTitle">Ready to add</b><span id="readyTip"></span></div>
+            <div id="tlAvail"></div>
+          </div>
+        </div>
+        <div class="tl-add-form" id="scrAddForm" hidden>
+          <div class="svc-head"><b id="scrFormTitle">Add your own script</b></div>
+          <div class="adv-explain" id="scrExplain"></div>
+          <label class="adv-flabel" for="scrNewName">Name</label>
+          <input type="text" id="scrNewName" placeholder="Start eye tracker" autocomplete="off">
+          <label class="adv-flabel" for="scrNewText">What to run</label>
+          <textarea id="scrNewText" spellcheck="false" placeholder="cd some/folder&#10;python server.py"></textarea>
+          <div class="adv-frow">
+            <div><label class="adv-flabel" for="scrNewWhen" id="scrNewWhenLabel">When</label><select id="scrNewWhen"></select></div>
+            <div><label class="adv-flabel" for="scrNewWait" id="scrNewWaitLabel">Then</label><select id="scrNewWait" class="tl-wait-sel" onchange="scrNewWaitChanged()"></select></div>
+            <div id="scrNewPortBox" hidden><label class="adv-flabel" for="scrNewPort">Port</label><input type="text" class="tl-port" id="scrNewPort" placeholder="Port" inputmode="numeric"></div>
+          </div>
+          <p class="adv-reads"><a href="#" id="scrVarsOpen" onclick="openToolHelp('variables');return false;">What a script can read</a></p>
+          <div class="svc-msg" id="scrAddMsg" hidden></div>
+          <div class="tl-add-acts"><button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button>
+          <button type="button" class="btn tiny accent" onclick="addOwnScript()" id="scrAddBtn"><b>Add to timeline</b></button></div>
+        </div>
+        <div class="tl-add-form" id="svcAddForm" hidden>
+          <div class="svc-head"><b id="svcFormTitle">Add your own website</b></div>
+          <div class="adv-explain" id="svcExplain"></div>
+          <label class="adv-flabel" for="svcNewName">Name</label>
+          <input type="text" class="svc-in-name" id="svcNewName" placeholder="Payment sheet" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+          <label class="adv-flabel" for="svcNewUrl">Address</label>
+          <input type="text" class="svc-in-url" id="svcNewUrl" placeholder="https://..." spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnService();}">
+          <div class="svc-msg" id="svcAddMsg" hidden></div>
+          <div class="tl-add-acts"><button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button>
+          <button type="button" class="btn tiny accent" id="svcAddBtn" onclick="addOwnService()"><b>Add to timeline</b></button></div>
+        </div>
+        <div class="tl-add-form" id="envAddForm" hidden>
+          <div class="svc-head"><b id="envFormTitle">Add your own value</b></div>
+          <div class="adv-explain" id="envExplain"></div>
+          <label class="adv-flabel" for="envNewName">Name</label>
+          <input type="text" id="envNewName" placeholder="MY_FOLDER" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
+          <label class="adv-flabel" for="envNewValue">Value</label>
+          <input type="text" id="envNewValue" spellcheck="false" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addOwnEnvVar();}">
+          <label class="adv-flabel" for="envNewDesc">Short description (optional)</label>
+          <input type="text" id="envNewDesc" maxlength="200">
+          <label class="chk adv-fchk"><input type="checkbox" id="envNewFolder"> This is a folder</label>
+          <div class="svc-msg" id="envAddMsg" hidden></div>
+          <div class="tl-add-acts"><button type="button" class="btn tiny" onclick="addFormClose()">Cancel</button>
+          <button type="button" class="btn tiny accent" id="envAddBtn" onclick="addOwnEnvVar()"><b>Add value</b></button></div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2470,7 +2583,8 @@ var UI_TEXT={
   services_card:"Additional services",
   timeline_title:"Launch timeline",timeline_reorder:"Reorder",timeline_reorder_done:"Done",
   timeline_available:"Available tools",timeline_available_none:"Nothing else to add.",
-  seat_pick:{"label":"Computers to start","button":"Select seats","change":"Change","change_tip":"Back to the Lab card to change the computers to start","count_caption":"%d to start","off_note":"Seat selection is off, so seats chosen here are not used for anything and scripts get nothing. For this to do something, turn on Seat selection under Tools in Advanced.","off_link":"Open Tools in Advanced","switch_label":"Clicks choose:","switch_seats":"Computers to start","switch_list":"Participant list","blank_hint":"Blank = 0 seats.","hint_seats":"Click a seat to swap it. This does not change the participant list.","hint_list":"Click a seat to take it out of the participant list or put it back. This does not change the computers to start.","tool_tip":"For scripts that start computers. Lets you choose seats on the Lab card, with a number box and the seat map. Scripts get LAB_SEATS and LAB_SEAT_COUNT. The oTree room and its seat list do not change.","values_title":"Values for this launch","where_title":"Where","env_show":"Show values"},
+  seat_pick:{"label":"Computers to start","button":"Select seats","change":"Change","change_tip":"Back to the Lab card to change the computers to start","count_caption":"%d to start","off_note":"Computers to start is off, so seats chosen here are not used for anything and scripts get nothing.","off_link":"Turn it on","switch_label":"Clicks choose:","switch_seats":"Computers to start","switch_list":"Participant list","blank_hint":"Blank = 0 seats.","hint_seats":"Click a seat to swap it. This does not change the participant list.","hint_list":"Click a seat to take it out of the participant list or put it back. This does not change the computers to start.","tool_tip":"For scripts that start computers. Lets you choose seats on the Lab card, with a number box and the seat map. Scripts get LAB_SEATS and LAB_SEAT_COUNT. The oTree room and its seat list do not change.","values_title":"Values for this launch","where_title":"Where","env_show":"Show values"},
+  advanced:{"sheet_note":"What happens when you press Launch","timeline_intro":"Runs top to bottom. Use the arrows to change the order.","otree_note":"The launcher waits here until oTree answers","values_title":"Values for this launch","values_intro":"What oTree and the scripts are told, as environment variables. Some are asked at each launch, the others are typed here and saved with the config.","values_none":"None in use.","add_own_title":"Add your own","add_own_intro":"Saved with this config. Nothing in your study changes.","script_tile":["Script","Run a command when you launch"],"website_tile":["Website","Open a page in your browser"],"value_link":"Add your own value (an environment variable)","own_off_note":"This lab does not let you add your own %s. What is in the config stays.","ready_title":"Ready to add","ready_intro":"Set up by the lab, or taken out of this launch earlier. Add puts it in. The lab manager decides what is offered: Settings, Advanced: scripts, websites and values.","ready_add":"Add","ready_settings_note":"The lab manager decides what is on this list: Settings, Advanced: scripts, websites and values.","show":"Show","hide":"Hide","remove_tip":"Take out of this launch","value_remove_tip":"Stop using it","locked_tag":"always on in this lab","locked_tip":"The lab keeps this on. Change it in Settings, under Advanced.","source_lab":"From the lab","source_own":"Yours","add_to_timeline":"Add to timeline","when_label":"When","when_options":[["before","Before oTree starts"],["after","After oTree starts"]],"reads_link":"What a script can read","script_explain":{"title":"Add your own script","lead":"A script is a command this computer runs each time you launch this config.","points":["It runs in its own window, at its place in the timeline.","If it fails, the launch stops there: later steps do not run. Windows and pages that are already open stay open.","The launcher never closes it. Close its window yourself when you are done.","It is saved with this config only and changes nothing in your study."]},"website_explain":{"title":"Add your own website","lead":"A website is a page the launcher sends to your browser on launch.","points":["It opens in a new tab once oTree is ready, after the other pages. Move it with the arrows.","Good for a payment sheet, a survey or a lab tool next to the admin page.","The launcher hands the address to the browser. It does not check that the page loads.","It is saved with this config only."]},"card_title":"Advanced: scripts, websites and values","card_intro":"Everything staff can add to a launch in Advanced.","card_action":"Choose per item what staff get.","group_scripts":["Scripts","Commands that run on launch"],"group_websites":["Websites","Pages that open in the browser"],"group_values":["Values","What oTree and scripts are told (environment variables)"],"add_website":"Add website","add_value":"Add value","own_label":"Staff may add their own:","own_kinds":[["script","scripts"],["website","websites"],["value","values"]],"builtin_tag":"built in","this_computer":"(this computer)","none":"None yet.","state_label":"For staff","states":[["off","Off"],["available","Available"],["default","On by default"],["locked","Always on"]],"legend":[["off","Staff do not see it. A config that already uses a script, website or variable keeps it. A built-in value is off in every config."],["available","Listed under Ready to add in Advanced."],["default","In every launch unless staff take it out."],["locked","In every launch. Staff cannot take it out."]],"fixed_label":"Staff can change the value","fixed_tip":"On: the value here is a starting value, staff type their own. Off: this value is always used and staff cannot change it.","label_label":"Name staff see (optional)","seat_not_offered":"This lab does not offer Computers to start.","fixed_tag":"set by the lab"},
   scripts_card:"Launch scripts",script_add:"Add script",script_add_own:"Add your own script",
   script_add:"Add script",website_add:"Add website",script_show:"Show script",script_hide:"Hide script",timeline_copy_link:"Copy link",
   website_add_own:"Add your own website",script_include:"Include by default",script_hidden:"Hidden",
@@ -2598,15 +2712,12 @@ function fillStaticTips(){
   var w=el("blockWarnBtn");if(w)w.textContent=UI_TEXT.get_ready_label;
   var vb=el("viewBlockLink");if(vb)vb.textContent=UI_TEXT.view_block_link;
   var st=el("svcTip");if(st)st.innerHTML=tipBadge("timeline");
-  var att=el("tlAvailTitle");if(att)att.textContent=UI_TEXT.timeline_available;
-  var atp=el("tlAvailTip");if(atp)atp.innerHTML=tipBadge("available_tools");
   fillSeatWords();
   var sl=el("advLabel");if(sl)sl.textContent=UI_TEXT.services_advanced;
-  renderToolRows();
+  fillAdvancedWords();
   var phn=el("portHint");if(phn)phn.textContent=UI_TEXT.port_hint;
   var prs=el("portReset");if(prs)prs.textContent=UI_TEXT.port_reset;
   var stt=el("svcTitle");if(stt)stt.textContent=UI_TEXT.timeline_title;
-  [["scrAddOpen","script_add_own"],["svcAddOpen","website_add_own"],["scrAddBtn","script_add"],["svcAddBtn","website_add"]].forEach(function(p){var e=el(p[0]);if(e&&UI_TEXT[p[1]])e.textContent=UI_TEXT[p[1]];});
   var nw=el("scrNewWait");if(nw)nw.innerHTML=waitOptionsHtml("carry_on");
 }
 /* A TRAILING "See the activity log." in a message. Mirror of
@@ -3554,7 +3665,7 @@ function onSeatMode(){
   var mode=el("seat_mode").value;
   el("seatFile").hidden=(mode!=="file");
   if(mode==="file")refreshSeatFiles();
-  var showMap=seatRowShown();
+  var showMap=seatMapShown();
   /* In "Edit for this run" the map IS the control, so it opens by itself. In
      "Lab default" its default follows the lab (see applyMapDefault). */
   if(showMap&&mode==="edit"&&!seatPseudoHost()&&!mapExpanded)setMapExpanded(true);
@@ -3596,11 +3707,11 @@ function updateSeats(){
 }
 function setMapExpanded(on){
   mapExpanded=!!on;el("mapArw").innerHTML=mapExpanded?"&#9662;":"&#9656;";
-  el("seatMap").hidden=!mapExpanded||seatPseudoHost();
+  el("seatMap").hidden=!mapExpanded||seatPseudoHost()||!seatMapShown();
   if(mapExpanded)refitSeatMap();
 }
 function toggleMap(){mapExpanded=!mapExpanded;el("mapArw").innerHTML=mapExpanded?"&#9662;":"&#9656;";
-  el("seatMap").hidden=!mapExpanded||seatPseudoHost();
+  el("seatMap").hidden=!mapExpanded||seatPseudoHost()||!seatMapShown();
   renderSeatPanel();
   /* Sizing needs the element visible (a hidden element has no width/position), so
      re-fit when it is (re)shown. */
@@ -3742,14 +3853,37 @@ function fillSeatWords(){
   var sw=el("seatSwitch");if(sw)sw.setAttribute("aria-label",w.switch_label||"");
   ["seatNumberLabel","seatSelectBtn"].forEach(function(id){var e=el(id);if(e&&w.tool_tip)e.setAttribute("data-tip",w.tool_tip);});
 }
-function seatToolOn(){return currentLaunchTools.indexOf(toolsText().seats_id||"seat_selection")>=0;}
+function seatToolId(){return toolsText().seats_id||"seat_selection";}
+function seatToolOn(){return toolIsOn(seatToolId());}
+/* Offered: the lab did not switch it off. Off wins, also over a config saved with it on: core
+   says so in the row. Hidden until core has answered, so it cannot flash under Off (the static
+   preview has no core and shows it). Locked: Always on. */
+function seatToolOffered(){var r=toolRow(seatToolId());return r?!!r.offered:!NATIVE;}
+function seatToolLocked(){var r=toolRow(seatToolId());return !!(r&&r.locked);}
+/* After core answered: the panel is open exactly when Computers to start is on. */
+function seatSyncFromTools(){
+  var on=seatToolOn();
+  if(SEAT_PICK.open!==on){SEAT_PICK.open=on;if(on&&!seatPseudoHost()&&!mapExpanded)setMapExpanded(true);onSeatMode();}
+  else renderSeatPanel();
+}
+/* From Advanced to the Lab card: the sheet closes, the number box is ready. */
+function goSeatCard(){
+  closeAdvanced();
+  var row=el("mapRow"),box=el("seatNumber");
+  if(row){row.scrollIntoView({block:"center"});row.classList.remove("seat-flash");void row.offsetWidth;row.classList.add("seat-flash");}
+  if(box&&!box.closest("[hidden]"))box.focus();
+}
 function seatPseudoHost(){return selectedLabId==="custom"||selectedLabId==="local";}
-/* The row shows for a lab in Lab default / Edit, and whenever the tool is on: the tool reads
-   the lab's seat list whatever the participant list is. Off a real lab it is the number only. */
-function seatRowShown(){
+/* The map shows for a lab in Lab default / Edit, and whenever the tool is on: the tool reads
+   the lab's seat list whatever the participant list is. */
+function seatMapShown(){
   var m=el("seat_mode").value;
   return seatToolOn()||((m==="lab_default"||m==="edit")&&!seatPseudoHost());
 }
+/* The row also shows whenever the lab offers Select seats, whatever the participant list
+   (2026-11-16): then the button stands alone until it is pressed. Off a real lab it is the
+   number only, shown when the tool is on. */
+function seatRowShown(){return seatMapShown()||(!seatPseudoHost()&&seatToolOffered());}
 function seatPanelShown(){return seatPseudoHost()?seatToolOn():SEAT_PICK.open;}
 /* Mirror of core.seat_click_target (tests/test_launcher_layout.py holds them equal). */
 function seatClickTarget(){
@@ -3768,28 +3902,32 @@ function setSeatClicks(which){
   SEAT_PICK.clicks=(which==="list")?"list":"seats";
   renderSeatPanel();
 }
+/* Select seats = Computers to start on or off for this config, in one click (2026-11-12).
+   On: the box and the map are ready. Always on in the lab: the button stays pressed. */
 function toggleSeatPanel(){
-  SEAT_PICK.open=!SEAT_PICK.open;
-  if(SEAT_PICK.open&&!mapExpanded)setMapExpanded(true);
-  updateSeats();seatRowRefresh();
-  if(SEAT_PICK.open&&seatToolOn()){var b=el("seatNumber");if(b)b.focus();}
+  if(seatToolOn()&&seatToolLocked()){var b0=el("seatNumber");if(b0)b0.focus();return;}
+  var on=!seatToolOn();
+  if(on)window._seatFocus=true;
+  setTool(seatToolId(),on);
 }
 /* What the card shows, from what is known now; the answer from core fills in the rest. */
 function renderSeatPanel(){
   var row=el("mapRow");if(!row)return;
   var pseudo=seatPseudoHost(),open=seatPanelShown(),st=SEAT_PICK.state,target=seatClickTarget(),w=seatWords();
   row.hidden=!seatRowShown();
-  el("mapCap").hidden=pseudo;
-  var btn=el("seatSelectBtn");btn.hidden=pseudo;
+  var mapOn=seatMapShown();
+  el("mapCap").hidden=pseudo||!mapOn;
+  var btn=el("seatSelectBtn");btn.hidden=pseudo||(!seatToolOn()&&!seatToolOffered());
   btn.setAttribute("aria-pressed",open?"true":"false");btn.classList.toggle("active",open);
   el("seatPanel").hidden=!open;
-  el("seatOffNote").hidden=!(open&&!seatToolOn());
+  el("seatOffNote").hidden=true;   /* the panel is open only when the value is on */
+  if(window._seatFocus&&open){window._seatFocus=false;var nb=el("seatNumber");if(nb&&!nb.closest("[hidden]"))nb.focus();}
   /* Core: the switch exists only when a click could mean either. */
   var both=open&&el("seat_mode").value==="edit"&&!pseudo;
   el("seatSwitch").hidden=!both;
   el("seatSwitchSeats").setAttribute("aria-pressed",SEAT_PICK.clicks==="list"?"false":"true");
   el("seatSwitchList").setAttribute("aria-pressed",SEAT_PICK.clicks==="list"?"true":"false");
-  el("seatMap").hidden=!mapExpanded||pseudo;
+  el("seatMap").hidden=!mapExpanded||pseudo||!mapOn;
   var map=el("seatMap");
   map.classList.toggle("clicks-seats",target==="seats");map.classList.toggle("clicks-list",target==="list");
   var hint=el("seatHint");
@@ -3840,16 +3978,9 @@ function seatPick(label){
 }
 /* A click that changed the participant list: the strike-through marks follow. */
 function seatRefreshOut(){seatRowRefresh();}
-/* The note's link: the place to turn the tool on. */
-function openToolsSection(){
-  if(!advOpen)toggleAdvanced();
-  AVAIL_OPEN.tools=true;renderAvailGroups();
-  var row=document.querySelector('#toolRowsOff [data-tool-row="'+(toolsText().seats_id||"seat_selection")+'"]');
-  if(!row)return;
-  row.scrollIntoView({block:"center"});
-  row.classList.remove("tl-moved");void row.offsetWidth;row.classList.add("tl-moved");
-  var cb=row.querySelector("input");if(cb)cb.focus();
-}
+/* The note's link (kept for an older page state): turns the value on. */
+function openToolsSection(){setTool(seatToolId(),true);}
+
 /* Before you launch's Change: back to the card, the box ready. What was typed as lab session
    number is kept for the popup that opens next. */
 function blChangeSeats(){
@@ -3918,7 +4049,10 @@ function applyFields(f){
   currentScriptChoices=Object.assign({},f.script_choices||{});
   currentExtraScripts=(f.extra_scripts||[]).map(copyOwnScript);
   currentLaunchOrder=(f.launch_order||[]).slice();
-  currentLaunchTools=(f.launch_tools||[]).slice();renderToolRows();
+  currentLaunchTools=(f.launch_tools||[]).slice();currentLaunchToolsOff=(f.launch_tools_off||[]).slice();
+  currentEnvOff=(f.env_vars_off||[]).slice();
+  /* What is on comes from core with the timeline; until it answers, the config's own. */
+  if(TL_DATA)TL_DATA.tools=null;
   /* Environment variables: selected lab ones {name: value} + the config's own. */
   currentEnvChoices=Object.assign({},f.env_var_choices||{});
   currentExtraEnvVars=(f.extra_env_vars||[]).map(copyOwnEnvVar);
@@ -3951,7 +4085,7 @@ function applyFields(f){
   /* Loading a config starts a new selection: empty, and open when the tool is on. */
   seatPickClear();SEAT_PICK.lab=selectedLabId;SEAT_PICK.open=seatToolOn();
   if(SEAT_PICK.open&&!seatPseudoHost()&&!mapExpanded)setMapExpanded(true);
-  if(seatRowShown())updateSeats();
+  if(seatMapShown())updateSeats();
   seatRowRefresh();
   refreshServices();
 }
@@ -3982,6 +4116,8 @@ function gatherFields(){
     extra_scripts:currentExtraScripts.map(copyOwnScript),
     launch_order:currentLaunchOrder.slice(),
     launch_tools:currentLaunchTools.slice(),
+    launch_tools_off:currentLaunchToolsOff.slice(),
+    env_vars_off:currentEnvOff.slice().sort(),
     env_var_choices:sortedEnvChoices(),
     extra_env_vars:currentExtraEnvVars.map(copyOwnEnvVar),
     open_browser:el("open_browser").checked,
@@ -4003,13 +4139,80 @@ function sortedServiceChoices(){
   var out={};Object.keys(currentServiceChoices).sort().forEach(function(k){out[k]=!!currentServiceChoices[k];});
   return out;
 }
-function toggleAdvanced(){
-  advOpen=!advOpen;
-  el("advBody").hidden=!advOpen;
-  el("advArw").innerHTML=advOpen?"&#9662;":"&#9656;";
-  el("advToggle").setAttribute("aria-expanded",advOpen?"true":"false");
+/* Advanced is a sheet over the page (2026-11-12). The card itself is the primer and never
+   grows. An unfinished Add form stays as typed until Cancel or Add: closing the sheet
+   loses nothing. */
+var ADV_RETURN=null;
+function advText(){return UI_TEXT.advanced||{};}
+function toggleAdvanced(){if(advOpen)closeAdvanced();else openAdvanced();}
+function openAdvanced(form){
+  if(!advOpen){ADV_RETURN=document.activeElement;advOpen=true;}
+  el("advScrim").hidden=false;
+  el("advToggle").setAttribute("aria-expanded","true");
+  if(form)addFormOpen(form);
+  else if(el("addHome")&&!el("addHome").hidden){var d=el("advDone");if(d)d.focus();}
 }
-var currentScriptChoices={}, currentExtraScripts=[], currentLaunchOrder=[], reorderMode=false, TL_DATA={timeline:[],available:[]};
+function closeAdvanced(){
+  advOpen=false;
+  el("advScrim").hidden=true;
+  el("advToggle").setAttribute("aria-expanded","false");
+  hoverTipHide();
+  var back=ADV_RETURN;ADV_RETURN=null;
+  if(back&&back.focus&&document.body.contains(back)&&!back.closest("[hidden]"))back.focus();
+  else el("advToggle").focus();
+}
+var KIND_SVG={
+  script:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5l3.5 3.5L3 11.5"/><path d="M8.5 12h4.5"/></svg>',
+  page:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2.6 4 2.6 6S10 12 8 14c-2-2-2.6-4-2.6-6S6 4 8 2z"/></svg>',
+  value:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 5h10M3 8h6M3 11h8"/></svg>',
+  otree:'<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg>',
+  lock:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg>',
+  x:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" style="width:11px;height:11px"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+};
+function kindSvg(kind){return KIND_SVG[kind==="tool"||kind==="env_var"?"value":kind==="resetdb"?"otree":kind]||KIND_SVG.value;}
+function fillAdvancedWords(){
+  var t=advText(),set=function(id,x){var e=el(id);if(e)e.textContent=x||"";};
+  set("advSheetNote",t.sheet_note);set("envTitle",t.values_title);set("addOwnTitle",t.add_own_title);
+  /* What explains is behind an info tip (PRINCIPLES 13); what asks to act stays in view. */
+  var tip=function(id,text){var e=el(id);if(e)e.innerHTML=text?infoBadge(text):"";};
+  tip("valTip",t.values_intro);tip("addOwnTip",t.add_own_intro);tip("readyTip",t.ready_intro);
+  set("envHelpBtn",(UI_TEXT.env_vars||{}).help_link);
+  set("scrTileName",(t.script_tile||[])[0]);set("scrTileLine",(t.script_tile||[])[1]);
+  set("svcTileName",(t.website_tile||[])[0]);set("svcTileLine",(t.website_tile||[])[1]);
+  set("envAddOpen",t.value_link);set("tlAvailTitle",t.ready_title);
+  set("scrNewWhenLabel",t.when_label);set("scrVarsOpen",t.reads_link);
+  set("scrNewWaitLabel",UI_TEXT.script_wait);
+  if(el("scrTileIco"))el("scrTileIco").innerHTML=KIND_SVG.script;
+  if(el("svcTileIco"))el("svcTileIco").innerHTML=KIND_SVG.page;
+  var explain=function(id,titleId,x){
+    if(!x||!el(id))return;set(titleId,x.title);
+    el(id).innerHTML='<b>'+escapeHtml(x.lead)+'</b><ul>'+(x.points||[]).map(function(q){return '<li>'+escapeHtml(q)+'</li>';}).join("")+'</ul>';};
+  explain("scrExplain","scrFormTitle",t.script_explain);explain("svcExplain","svcFormTitle",t.website_explain);
+  if(el("envExplain"))el("envExplain").innerHTML='<b>'+escapeHtml(t.values_intro||"")+'</b><ul>'+(((toolsText().env_help||{}).blocks||[]).filter(function(b){return b[0]==="p";}).slice(0,1).map(function(b){return '<li>'+escapeHtml(b[1])+'</li>';}).join(""))+'</ul>';
+  set("envFormTitle",(UI_TEXT.env_vars||{}).add_own);
+  ["scrAddBtn","svcAddBtn"].forEach(function(id){var e=el(id);if(e&&t.add_to_timeline)e.innerHTML='<b>'+escapeHtml(t.add_to_timeline)+'</b>';});
+  var w=el("scrNewWhen");if(w)w.innerHTML=(t.when_options||[]).map(function(o){return '<option value="'+escapeHtml(o[0])+'">'+escapeHtml(o[1])+'</option>';}).join("");
+}
+/* The collapsed card (core.launch_primer). The static preview has no answer from core:
+   then only the two questions show. */
+function renderPrimer(p){
+  var box=el("primerBody"),cap=el("advCaption"),btn=el("advOpenBtn"),t=advText();if(!box)return;
+  p=p||{steps:[],asks:[],sets:[],extra:false,extra_steps:false,plain:"Nothing extra: oTree starts and its admin page opens.",button:"Open",ask_script:"Want to run your own script?",ask_website:"Add a website"};
+  var chip=function(kind,label,extra){return '<span class="primer-chip'+(kind==="otree"?" otree":"")+'" data-tip="'+escapeHtml(label)+'">'+kindSvg(kind)+'<span class="t">'+escapeHtml(label)+'</span>'+(extra||"")+'</span>';};
+  var row=function(k,html,id){return '<div class="primer-row" id="'+id+'"><span class="k">'+escapeHtml(k)+'</span><div class="primer-chain">'+html+'</div></div>';};
+  var html="";
+  /* The arrow travels with the chip after it, so a wrapped line never starts with an arrow alone. */
+  if(p.extra_steps)html+=row(p.on_launch_label,p.steps.map(function(x,i){return '<span class="primer-link">'+(i?'<span class="primer-arrow" aria-hidden="true">&#9656;</span>':'')+chip(x.kind,x.label)+'</span>';}).join(""),"primerSteps");
+  if(p.asks.length)html+=row(p.asks_label,p.asks.map(function(x){return chip("value",x);}).join(""),"primerAsks");
+  if(p.sets.length)html+=row(p.sets_label,p.sets.map(function(x){return chip("value",x.name,x.value?'<span class="v">'+escapeHtml(x.value)+'</span>':'');}).join(""),"primerSets");
+  if(p.ask_script||p.ask_website)html+='<div class="primer-ask">'+
+    (p.ask_script?'<button type="button" id="primerAskScript" onclick="openAdvanced(\'script\')">'+escapeHtml(p.ask_script)+'</button>':'')+
+    (p.ask_website?'<button type="button" id="primerAskWebsite" onclick="openAdvanced(\'website\')">'+escapeHtml(p.ask_website)+'</button>':'')+'</div>';
+  box.innerHTML=html;
+  if(cap)cap.textContent=p.extra_steps?"":p.plain;
+  if(btn)btn.textContent=p.button;
+}
+var currentScriptChoices={}, currentExtraScripts=[], currentLaunchOrder=[], TL_DATA={timeline:[],available:[]};
 /* ---- a row's address: the copy icon, the eye that writes it out, and the name's hover ---- */
 var COPY_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/></svg>';
 var CHECK_SVG='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
@@ -4077,7 +4280,7 @@ function copyOwnScript(x){return {id:x.id,name:x.name,script:x.script,enabled:x.
 function refreshServices(){
   if(!NATIVE||!API||!API.launch_timeline){renderTimeline(TL_DATA,previewServiceCaption());return;}
   API.launch_timeline(gatherFields()).then(function(r){
-    if(r&&r.ok){TL_DATA=r;renderTimeline(r,r.caption||"");}
+    if(r&&r.ok){TL_DATA=r;renderTimeline(r,r.caption||"");seatSyncFromTools();}
   });
 }
 /* Static preview only: the count of what would open. */
@@ -4103,79 +4306,104 @@ function tlArrowHtml(r,dir,can,why){
 function tlArrowsHtml(r,extra){
   return '<span class="tl-arrows'+(extra||"")+'">'+tlArrowHtml(r,"up",r.can_up,r.up_tip)+tlArrowHtml(r,"down",r.can_down,r.down_tip)+'</span>';
 }
+/* One step of the timeline. No tick box: in the timeline = on. The arrows are always there,
+   Show opens the row in place (script text or address, and what can be done with it),
+   Remove takes it out of this launch: an own step goes to Ready to add, it is not deleted. */
+function tlSourceWord(r){var t=advText();return r.source==="lab"?(t.source_lab||"From the lab"):r.source==="own"?(t.source_own||"Yours"):"";}
 function tlRowHtml(r,selected){
-  var id=jsQuote(r.id),fixed=(r.kind==="otree"||r.kind==="resetdb");
-  var arrows=(selected&&reorderMode&&r.movable&&!r.block)?tlArrowsHtml(r):'';
-  var mark=fixed?'<span class="tl-mark" aria-hidden="true">&#10003;</span>':
-    '<input type="checkbox" data-tl="'+escapeHtml(r.id)+'"'+(selected?" checked":"")+' onchange="tlToggle(this)">';
-  /* Own scripts change their wait rule through Edit: one place, saved at once. */
-  var waitHtml=(r.kind==="script")?'<span class="tl-wait">'+escapeHtml(r.wait_text||"")+'</span>':'';
-  var editing=(OWN_EDIT&&OWN_EDIT.id===r.id);
-  /* Short by default: a script's text and a website's address are one hover (title) or one
-     click away. Show script because a hover is no use on a keyboard or for a long script. */
+  var id=jsQuote(r.id),t=advText(),fixed=(r.kind==="otree"||r.kind==="resetdb"),name=r.label||r.name;
+  if(fixed)return '<div class="tl-row tl-step tl-row--fixed" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+
+    '<span class="tl-dot'+(r.kind==="resetdb"?" sub":"")+'">'+(r.kind==="otree"?KIND_SVG.otree:"")+'</span><div class="tl-main"><span class="tl-name">'+escapeHtml(name)+'</span></div><span></span></div>';
   var isScript=(r.kind==="script"),isSite=(r.kind==="page"&&!!r.address);
-  var tip=isScript?' data-tip="'+escapeHtml(r.tip||"")+'"':isSite?' data-tip="'+escapeHtml(r.address)+'"':'';
-  var shown=isScript&&!!SCRIPT_SHOWN[r.id];
-  var acts=(isScript&&!editing?'<button type="button" class="btn tiny tl-show" aria-expanded="'+shown+'" onclick="toggleScriptText('+id+')">'+escapeHtml(shown?UI_TEXT.script_hide:UI_TEXT.script_show)+'</button>':'')+
-    ((isSite&&r.detail)?openSiteBtn(r.detail):'')+
-    (isSite?addrButtons(r.address):'')+
-    (r.can_edit?'<button type="button" class="btn tiny" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
-    (r.can_delete?'<button type="button" class="btn tiny" onclick="tlDelete('+id+')">Delete</button>':'');
-  return '<div class="tl-row'+(fixed?' tl-row--fixed':'')+'" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+arrows+
-    (fixed?mark+'<span class="tl-name">'+escapeHtml(r.label||r.name)+'</span>':'<label class="chk"'+tip+'>'+mark+' <span class="tl-name">'+escapeHtml(r.label||r.name)+'</span></label>')+
-    (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
-    (r.kind==="env_var"?envTipHtml(r):'')+
-    (r.can_reset?'<button type="button" class="svc-reset" onclick="tlReset('+id+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
-    waitHtml+
-    (acts?'<span class="tl-acts">'+acts+'</span>':'')+
-    (editing?ownEditHtml():shown?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':'')+
-    (isSite?addrLine(r.address):'')+
-    '</div>';
+  var editing=(OWN_EDIT&&OWN_EDIT.id===r.id),shown=!!SCRIPT_SHOWN[r.id]||editing;
+  var meta=[tlSourceWord(r),isScript?(r.wait_text||""):""].filter(Boolean).join(" · ");
+  var showWord=shown?(t.hide||"Hide"):(t.show||"Show");
+  var acts=(r.movable?tlArrowsHtml(r):'')+
+    ((isScript||isSite)?'<button type="button" class="btn tiny tl-show" aria-expanded="'+shown+'" aria-label="'+escapeHtml(showWord+": "+name)+'" onclick="toggleScriptText('+id+')">'+escapeHtml(showWord)+'</button>':'')+
+    (r.locked?'<span class="tl-lock" tabindex="0" role="img" data-tip="'+escapeHtml(t.locked_tip||"")+'" aria-label="'+escapeHtml((t.locked_tag||"")+": "+name)+'">'+KIND_SVG.lock+'</span>':
+      (r.can_remove===false?'':'<button type="button" class="btn tiny icon-btn tl-remove" data-tip="'+escapeHtml(t.remove_tip||"")+'" aria-label="'+escapeHtml((t.remove_tip||"Remove")+": "+name)+'" onclick="tlSet('+id+',false)">'+KIND_SVG.x+'</button>'));
+  var more="";
+  if(editing)more=ownEditHtml();
+  else if(shown){
+    var buttons=(r.can_edit?'<button type="button" class="btn tiny" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
+      ((isSite&&r.detail)?openSiteBtn(r.detail):'')+
+      (isSite?'<button type="button" class="btn tiny addr-copy" data-url="'+escapeHtml(r.address)+'" onclick="blCopyOpensLink(this)">'+escapeHtml(UI_TEXT.timeline_copy_link||"Copy link")+'</button>':'')+
+      (r.can_reset?'<button type="button" class="svc-reset" onclick="tlReset('+id+')">'+escapeHtml(UI_TEXT.service_reset)+'</button>':'')+
+      (isScript?'<a href="#" class="svc-reset" onclick="openToolHelp(\'variables\');return false;">'+escapeHtml(t.reads_link||"")+'</a>':'');
+    more='<div class="tl-more">'+(isScript?'<pre class="tl-detail">'+escapeHtml(r.detail||"")+'</pre>':'<div class="addr">'+escapeHtml(r.address||"")+'</div>')+
+      (r.tag&&!r.locked?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span> ':'')+
+      (buttons?'<div class="tl-more-acts">'+buttons+'</div>':'')+'</div>';
+  }
+  return '<div class="tl-row tl-step" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'">'+
+    '<span class="tl-dot">'+kindSvg(r.kind)+'</span>'+
+    '<div class="tl-main"><span class="tl-name"'+(isScript?' data-tip="'+escapeHtml(r.tip||"")+'"':isSite?' data-tip="'+escapeHtml(r.address)+'"':'')+'>'+escapeHtml(name)+'</span>'+
+      (r.locked?'<span class="tl-locktag">'+escapeHtml(t.locked_tag||"")+'</span>':'')+
+      (r.duplicate?'<span class="svc-tag"> '+escapeHtml(UI_TEXT.page_duplicate||"")+'</span>':'')+
+      (meta?'<div class="tl-meta">'+escapeHtml(meta)+'</div>':'')+'</div>'+
+    '<span class="tl-acts">'+acts+'</span>'+more+'</div>';
 }
-/* Reset database and Launch oTree server are one block: in Reorder they slide out together,
-   with ONE pair of arrows beside both (only Launch oTree server when reset is off). */
-var TL_SLIDE=false;   /* the block is about to slide; set for one render only */
+/* Reset database and Launch oTree server are one block: they move together, with ONE pair
+   of arrows beside both (only Launch oTree server when reset is off). */
 function tlListHtml(rows){
   var html="",i=0;
   while(i<rows.length){
     if(!rows[i].block){html+=tlRowHtml(rows[i],true);i++;continue;}
     var inner="",owner=null;
     while(i<rows.length&&rows[i].block){if(rows[i].movable)owner=rows[i];inner+=tlRowHtml(rows[i],true);i++;}
-    var open=reorderMode&&owner;
-    html+='<div class="tl-block'+((open&&!TL_SLIDE)?' out':'')+'" id="tlBlock" data-block="otree">'+
-      (open?tlArrowsHtml(owner," tl-arrows--block"):'')+'<div class="tl-block-rows">'+inner+'</div></div>';
+    html+='<div class="tl-block" id="tlBlock" data-block="otree"><div class="tl-block-rows"><div class="tl-block-list">'+inner+'</div>'+
+      (owner?tlArrowsHtml(owner," tl-arrows--block"):'')+'</div></div>';
   }
   return html;
 }
 var SCRIPT_SHOWN={};   /* rows with their text open; nothing is remembered between starts */
 function toggleScriptText(id){SCRIPT_SHOWN[id]=!SCRIPT_SHOWN[id];renderTimeline(TL_DATA,null);}
-/* Available tools (core.timeline_available_groups). Each group collapsed on every start;
-   nothing about it is remembered. The static preview has no groups from core. */
-var AVAIL_OPEN={};
-function toggleAvailGroup(id){AVAIL_OPEN[id]=!AVAIL_OPEN[id];renderAvailGroups();}
-function renderAvailGroups(){
-  var groups=TL_DATA.groups||[{id:"steps",caption:"Scripts and websites ("+(TL_DATA.available||[]).length+")"}];
-  ["tools","env","steps"].forEach(function(id){
-    var g=groups.filter(function(x){return x.id===id;})[0],box=el("tlGroup_"+id);if(!box)return;
-    box.hidden=!g;if(!g)return;
-    var open=!!AVAIL_OPEN[id],t=el("tlGroupToggle_"+id);
-    t.setAttribute("aria-expanded",open?"true":"false");
-    t.querySelector(".arw").innerHTML=open?"&#9662;":"&#9656;";
-    t.querySelector(".tl-group-cap").textContent=g.caption;
-    el("tlGroupBody_"+id).hidden=!open;
-  });
-}
-/* ---- the two Add forms: one open at a time; Cancel and a successful add clear them ---- */
+/* ---- Add your own: the two tiles, or ONE form in their place. Cancel and a successful add
+   clear the form; closing the sheet leaves it as typed. ---- */
+var ADD_FORMS={script:["scrAddForm","scrNewName","scrAddMsg"],website:["svcAddForm","svcNewName","svcAddMsg"],env:["envAddForm","envNewName","envAddMsg"]};
+function addFormKind(){var k=null;Object.keys(ADD_FORMS).forEach(function(x){if(!el(ADD_FORMS[x][0]).hidden)k=x;});return k;}
 function addFormClear(){
   ["scrNewName","scrNewText","scrNewPort","svcNewName","svcNewUrl","envNewName","envNewValue","envNewDesc"].forEach(function(i){el(i).value="";});
   el("envNewFolder").checked=false;
-  el("scrNewWait").value="carry_on";scrNewWaitChanged();serviceMessage("");
+  el("scrNewWait").value="carry_on";if(el("scrNewWhen").options.length)el("scrNewWhen").selectedIndex=0;
+  scrNewWaitChanged();serviceMessage("");
 }
-function addFormClose(){el("scrAddForm").hidden=true;el("svcAddForm").hidden=true;el("envAddForm").hidden=true;addFormClear();}
+function addFormClose(){
+  var was=addFormKind();
+  addFormClear();
+  Object.keys(ADD_FORMS).forEach(function(x){el(ADD_FORMS[x][0]).hidden=true;});
+  el("addHome").hidden=false;
+  if(was&&advOpen){var b=el(was==="script"?"scrAddOpen":was==="website"?"svcAddOpen":"envAddOpen");if(b&&!b.hidden)b.focus();else el("advDone").focus();}
+}
 function addFormOpen(kind){
-  addFormClose();
-  el(kind==="script"?"scrAddForm":kind==="env"?"envAddForm":"svcAddForm").hidden=false;
-  var f=el(kind==="script"?"scrNewName":kind==="env"?"envNewName":"svcNewName");if(f)f.focus();
+  if(!advOpen){openAdvanced(kind);return;}
+  if(addFormKind()!==kind){
+    Object.keys(ADD_FORMS).forEach(function(x){el(ADD_FORMS[x][0]).hidden=(x!==kind);});
+    serviceMessage("");
+  }
+  el("addHome").hidden=true;
+  var f=el(ADD_FORMS[kind][1]);if(f)f.focus();
+}
+/* Ready to add (core's ``ready``): one flat list, no groups. */
+function renderReady(data){
+  var t=advText(),box=el("tlAvail"),card=el("tlAvailCard");if(!box)return;
+  var rows=data.ready||(data.available||[]).map(function(r){return Object.assign({line:""},r);});
+  card.hidden=!rows.length;
+  box.innerHTML=rows.map(function(r){
+    var id=jsQuote(r.id),name=r.label||r.name;
+    return '<div class="tl-ready-row" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'"><span class="tl-ico">'+kindSvg(r.kind)+'</span>'+
+      /* On hover: a script's first lines, a value's tip, a website's address. */
+      '<div class="tl-main"><span class="tl-name"'+((r.tip||r.address)?' data-tip="'+escapeHtml(r.tip||r.address)+'"':'')+'>'+escapeHtml(name)+'</span>'+
+      (r.tag?' <span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+'<div class="tl-meta">'+escapeHtml(r.line||"")+'</div></div>'+
+      '<span class="tl-acts">'+(r.can_delete?'<button type="button" class="btn tiny" aria-label="'+escapeHtml("Delete: "+name)+'" onclick="tlDelete('+id+')">Delete</button>':'')+
+      /* An own script can be changed without putting it in the launch first. */
+      (r.can_edit?'<button type="button" class="btn tiny" aria-label="'+escapeHtml("Edit: "+name)+'" onclick="ownEditOpen('+id+')">'+escapeHtml(UI_TEXT.own_script_edit.split(" ")[0])+'</button>':'')+
+      '<button type="button" class="btn tiny tl-add" aria-label="'+escapeHtml((t.ready_add||"Add")+": "+name)+'" onclick="tlSet('+id+',true)">'+escapeHtml(t.ready_add||"Add")+'</button></span>'+
+      ((OWN_EDIT&&OWN_EDIT.id===r.id)?ownEditHtml():'')+'</div>';
+  }).join("");
+  var can=data.can_add||{script:true,website:true,value:!!data.env_can_add};
+  el("scrAddOpen").hidden=!can.script;el("svcAddOpen").hidden=!can.website;el("envAddOpen").hidden=!can.value;
+  var off=[];if(!can.script)off.push("scripts");if(!can.website)off.push("websites");
+  var note=el("addOwnOff");note.hidden=!off.length;note.textContent=off.length?(t.own_off_note||"").replace("%s",off.join(" or ")):"";
 }
 /* ---- Edit an own script: on a saved config it is written straight into that config,
    only this script (core.save_own_script_edit). Other unsaved edits stay unsaved. ---- */
@@ -4237,15 +4465,11 @@ function ownEditSave(){
 }
 function renderTimeline(data,caption){
   ownEditKeepTyping();
-  var cap=el("advCaption");if(cap&&caption!==null)cap.textContent=caption?(" · "+caption):"";
+  renderPrimer(data.primer);
   var top=el("tlRows");if(!top)return;
   top.innerHTML=tlListHtml(data.timeline||[]);
-  var avail=data.available||[];
-  el("tlAvail").innerHTML=avail.filter(function(r){return r.kind!=="env_var";}).map(function(r){return tlRowHtml(r,false);}).join("");
-  el("tlAvailEnv").innerHTML=avail.filter(function(r){return r.kind==="env_var";}).map(function(r){return tlRowHtml(r,false);}).join("");
-  renderAvailGroups();
+  renderReady(data);
   renderEnvRows(data);
-  var rb=el("tlReorder");if(rb){rb.textContent=reorderMode?UI_TEXT.timeline_reorder_done:UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed",reorderMode?"true":"false");}
   hoverTipHide();
   tlAfterMove();
 }
@@ -4253,22 +4477,26 @@ function renderTimeline(data,caption){
    same row, and the row flashes so the eye can follow it. */
 var TL_MOVED=null;
 function tlAfterMove(){
-  var m=TL_MOVED;if(!m)return;TL_MOVED=null;
+  var m=TL_MOVED;if(!m)return;
+  /* A website just added is known by its name: its row id comes from core. */
+  if(!m.id&&m.name){var found=(TL_DATA.timeline||[]).filter(function(r){return r.kind==="page"&&r.source==="own"&&r.name===m.name;}).pop();if(!found)return;m={id:found.id,dir:""};}
   var host=m.id==="otree"?el("tlBlock"):document.querySelector('#tlRows .tl-row[data-row="'+m.id.replace(/["\\]/g,"\\$&")+'"]');
   if(!host)return;
+  TL_MOVED=null;
   host.classList.add("tl-moved");
   var b=(m.id==="otree"?host:host).querySelector('button[data-dir="'+m.dir+'"]:not([disabled])');
   if(b)b.focus();else{var other=host.querySelector('button[data-dir]:not([disabled])');if(other)other.focus();}
 }
 function tlFind(id){
-  return (TL_DATA.timeline||[]).concat(TL_DATA.available||[],TL_DATA.env_vars||[]).filter(function(r){return r.id===id;})[0];
+  /* The rows with their own names first; ``values`` and ``ready`` only add the built-in values. */
+  return (TL_DATA.timeline||[]).concat(TL_DATA.available||[],TL_DATA.env_vars||[],TL_DATA.values||[],TL_DATA.ready||[]).filter(function(r){return r.id===id;})[0];
 }
 function timelineChanged(){updateDirtyState();refreshServices();}
 /* ---- Environment variables in Advanced (core.launch_timeline decides the rows; the page
    keeps only what is selected and the values). Typing must not rebuild the box it is typing
    in, so the rows are rebuilt only when what they show changes; values and problems are set
    in place. ENV_TYPED: a value cleared by unticking comes back if it is ticked again. ---- */
-var currentEnvChoices={},currentExtraEnvVars=[],ENV_TYPED={},ENV_SIGNATURE=null,_envTypedTimer=null;
+var currentEnvChoices={},currentEnvOff=[],currentExtraEnvVars=[],ENV_TYPED={},ENV_SIGNATURE=null,_envTypedTimer=null;
 function copyOwnEnvVar(x){return {name:x.name,value:x.value||"",enabled:x.enabled!==false,description:x.description||"",folder:!!x.folder};}
 /* The info tip + See more of one variable, the same in Advanced and in Settings. */
 function envTipHtml(v){
@@ -4296,25 +4524,40 @@ function sortedEnvChoices(){
   var out={};Object.keys(currentEnvChoices).sort().forEach(function(k){out[k]=currentEnvChoices[k];});
   return out;
 }
-function envRowHtml(r){
-  var id=jsQuote(r.id),box="envVal_"+r.id.replace(/[^A-Za-z0-9_]/g,"_"),t=UI_TEXT.env_vars||{};
-  var browse=r.folder?'<button type="button" class="btn tiny" data-env-browse="'+escapeHtml(r.id)+'" onclick="envBrowse('+id+','+jsQuote(box)+')">'+escapeHtml(t.browse||"Browse...")+'</button>':'';
-  return '<div class="tl-row tl-env-row" data-kind="env_var" data-row="'+escapeHtml(r.id)+'">'+
-    '<label class="chk"><input type="checkbox" data-tl="'+escapeHtml(r.id)+'" checked onchange="tlToggle(this)"> <span class="tl-name">'+escapeHtml(r.name)+'</span></label>'+
-    (r.tag?'<span class="svc-tag">'+escapeHtml(r.tag)+'</span>':'')+
-    envTipHtml(r)+
-    '<span class="tl-env-val'+(r.secret?' pwrap':'')+'"><input type="'+(r.secret?'password':'text')+'" id="'+box+'" data-env="'+escapeHtml(r.id)+'" aria-label="'+escapeHtml((t.value||"Value")+": "+r.name)+'" placeholder="'+escapeHtml(t.placeholder||"")+'" spellcheck="false" autocomplete="off" oninput="envValueTyped(this)">'+
-    (r.secret?'<button type="button" class="pw-toggle" data-target="'+box+'" onclick="togglePw(this)">Show</button>':'')+browse+'</span>'+
-    (r.can_delete?'<span class="tl-acts"><button type="button" class="btn tiny" onclick="tlDelete('+id+')">Delete</button></span>':'')+
-    '<p class="tl-env-err" data-env-err="'+escapeHtml(r.id)+'" hidden></p></div>';
+/* Values for this launch (core's ``values``): the built-in ones that are on, then the
+   selected variables. A built-in one says where it is asked; a variable has its box. */
+function valueRowHtml(r){
+  var id=jsQuote(r.id),t=advText(),e=UI_TEXT.env_vars||{},isTool=(r.kind==="tool"),raw=r.var_name||r.name;
+  var box="envVal_"+r.id.replace(/[^A-Za-z0-9_]/g,"_"),mid;
+  if(isTool){
+    var seat=(r.tool_id===(toolsText().seats_id||"seat_selection"));
+    mid='<span class="tl-where">'+(seat&&!seatPseudoHost()?'<a href="#" id="valSeatsLink" onclick="goSeatCard();return false;">'+escapeHtml(r.where)+'</a>':escapeHtml(r.where))+
+      (r.tool_id===toolsText().session_id?' <button type="button" class="info-i tool-help-btn" id="toolHelpSession" aria-label="'+escapeHtml(toolsText().help_link||"")+'" data-tip="'+escapeHtml(toolsText().help_link||"")+'" onclick="openToolHelp(\'session\')">i</button>':'')+
+      '<span class="tl-goes">'+escapeHtml(r.goes_to||"")+'</span></span>';
+  }else if(r.fixed){
+    mid='<span class="tl-where"><span class="tl-fixed">'+escapeHtml(r.secret?"••••••••":(r.value||""))+'</span><span class="tl-goes">'+escapeHtml(t.fixed_tag||"set by the lab")+'</span></span>';
+  }else{
+    var browse=r.folder?'<button type="button" class="btn tiny" data-env-browse="'+escapeHtml(r.id)+'" onclick="envBrowse('+id+','+jsQuote(box)+')">'+escapeHtml(e.browse||"Browse...")+'</button>':'';
+    mid='<span class="tl-env-val'+(r.secret?' pwrap':'')+'"><input type="'+(r.secret?'password':'text')+'" id="'+box+'" data-env="'+escapeHtml(r.id)+'" aria-label="'+escapeHtml((e.value||"Value")+": "+r.name)+'" placeholder="'+escapeHtml(e.placeholder||"")+'" spellcheck="false" autocomplete="off" oninput="envValueTyped(this)">'+
+      (r.secret?'<button type="button" class="pw-toggle" data-target="'+box+'" onclick="togglePw(this)">Show</button>':'')+browse+'</span>';
+  }
+  var end=r.locked?'<span class="tl-lock" tabindex="0" role="img" data-tip="'+escapeHtml(t.locked_tip||"")+'" aria-label="'+escapeHtml((t.locked_tag||"")+": "+r.name)+'">'+KIND_SVG.lock+'</span>':
+    '<button type="button" class="btn tiny icon-btn tl-remove" data-tip="'+escapeHtml(t.value_remove_tip||"")+'" aria-label="'+escapeHtml((t.value_remove_tip||"Remove")+": "+r.name)+'" onclick="tlSet('+id+',false)">'+KIND_SVG.x+'</button>';
+  return '<div class="tl-row tl-val'+(isTool?'':' tl-env-row')+'" data-kind="'+escapeHtml(r.kind)+'" data-row="'+escapeHtml(r.id)+'"'+(isTool?' data-tool-row="'+escapeHtml(r.tool_id)+'"':'')+'>'+
+    '<div class="tl-main"><span class="tl-name"'+(isTool&&r.tip?' data-tip="'+escapeHtml(r.tip)+'"':'')+'>'+escapeHtml(r.name)+'</span>'+
+      (r.locked?'<span class="tl-locktag">'+escapeHtml(t.locked_tag||"")+'</span>':(!isTool&&r.tag&&!r.fixed?' <span class="svc-tag">'+escapeHtml(r.tag)+'</span>':''))+
+      (isTool?'':envTipHtml(Object.assign({},r,{name:raw})))+
+      '<div class="tl-var">'+escapeHtml(r.vars||raw)+'</div></div>'+
+    '<div class="tl-mid">'+mid+'</div><span class="tl-acts">'+end+'</span>'+
+    (isTool?'':'<p class="tl-env-err" data-env-err="'+escapeHtml(r.id)+'" hidden></p>')+'</div>';
 }
+function envRowHtml(r){return valueRowHtml(r);}
 function renderEnvRows(data){
-  var card=el("envCard"),box=el("envRows"),add=el("envAddOpen");if(!card||!box)return;
-  var rows=data.env_vars||[];
-  if(add)add.hidden=!data.env_can_add;
-  card.hidden=!rows.length;
-  var sign=JSON.stringify(rows.map(function(r){return [r.id,r.tag,r.secret,r.can_delete,r.tip,r.guide,r.folder];}));
-  if(sign!==ENV_SIGNATURE){ENV_SIGNATURE=sign;box.innerHTML=rows.map(envRowHtml).join("");}
+  var card=el("envCard"),box=el("envRows");if(!card||!box)return;
+  var rows=data.values||(data.env_vars||[]);
+  var sign=JSON.stringify(rows.map(function(r){return [r.id,r.tag,r.secret,r.locked,r.fixed,r.fixed?r.value:"",r.tip,r.guide,r.folder,r.name,r.where];}));
+  if(sign!==ENV_SIGNATURE){ENV_SIGNATURE=sign;
+    box.innerHTML=rows.length?rows.map(valueRowHtml).join(""):'<p class="adv-sub" id="valNone">'+escapeHtml(advText().values_none||"")+'</p>';}
   rows.forEach(function(r){
     box.querySelectorAll('input[data-env]').forEach(function(i){
       if(i.getAttribute("data-env")===r.id&&document.activeElement!==i&&i.value!==(r.value||""))i.value=r.value||"";});
@@ -4327,15 +4570,28 @@ function renderEnvRows(data){
 function envValueTyped(input){
   var r=tlFind(input.getAttribute("data-env"));if(!r)return;
   if(r.source==="own")currentExtraEnvVars.forEach(function(x){if(x.name===r.name)x.value=input.value;});
-  else currentEnvChoices[r.name]=input.value;
+  else{
+    /* A value that was on only because of the lab now holds what staff typed. */
+    Object.keys(currentEnvChoices).forEach(function(k){if(k.toUpperCase()===r.name.toUpperCase()&&k!==r.name)delete currentEnvChoices[k];});
+    currentEnvChoices[r.name]=input.value;
+  }
   updateDirtyState();
   clearTimeout(_envTypedTimer);_envTypedTimer=setTimeout(refreshServices,250);
 }
+/* A lab value in or out: core says what the config stores (core.env_var_choice), so one
+   that the lab has On by default is stored only when staff took it out or typed in it. */
 function tlEnvToggle(r,on){
-  if(r.source==="own"){currentExtraEnvVars.forEach(function(x){if(x.name===r.name)x.enabled=on;});}
-  else if(on){currentEnvChoices[r.name]=(ENV_TYPED[r.name]!==undefined)?ENV_TYPED[r.name]:(r.default||"");}
-  else{ENV_TYPED[r.name]=currentEnvChoices[r.name];delete currentEnvChoices[r.name];}
-  if(on){ENV_FOCUS=r.id;}
+  if(r.source==="own"){currentExtraEnvVars.forEach(function(x){if(x.name===r.name)x.enabled=on;});if(on)ENV_FOCUS=r.id;timelineChanged();return;}
+  var typed=(on&&ENV_TYPED[r.name]!==undefined)?ENV_TYPED[r.name]:null;
+  if(!on&&currentEnvChoices[r.name]!==undefined)ENV_TYPED[r.name]=currentEnvChoices[r.name];
+  if(on)ENV_FOCUS=r.id;
+  if(NATIVE&&API&&API.env_var_choice){
+    API.env_var_choice(gatherFields(),r.name,on,typed).then(function(a){
+      if(!(a&&a.ok))return;
+      currentEnvChoices=a.env_var_choices||{};currentEnvOff=a.env_vars_off||[];timelineChanged();});
+    return;
+  }
+  if(on)currentEnvChoices[r.name]=(typed!==null)?typed:(r.default||"");else delete currentEnvChoices[r.name];
   timelineChanged();
 }
 var ENV_FOCUS=null;
@@ -4349,37 +4605,30 @@ function addOwnEnvVar(){
     timelineChanged();
   });
 }
-/* ---- Tools in Advanced (core.launch_tools_ui_text): the page keeps only the ticks.
-   A fixed order (the order of the rows), so the same ticks are the same JSON. ---- */
-var currentLaunchTools=[];
+/* ---- The built-in values (the former tools). The page keeps only what the config stores
+   (core.tool_choice decides that); whether one is on comes from core with the timeline,
+   because a lab can have it On by default or Always on. ---- */
+var currentLaunchTools=[],currentLaunchToolsOff=[];
 function toolsText(){return (UI_TEXT&&UI_TEXT.tools)||{title:"Tools",tip:"",rows:[]};}
-function toolRowHtml(r,t,on){
-  var help=(r.id===t.session_id)?'<button type="button" class="info-i tool-help-btn" '+(on?'id="toolHelpSession" ':'')+'aria-label="'+escapeHtml(t.help_link||"")+'" title="'+escapeHtml(t.help_link||"")+'" onclick="openToolHelp(\'session\')">i</button>':infoBadge(r.tip);
-  return '<div class="tl-tool-row" data-tool-row="'+escapeHtml(r.id)+'"><label class="chk" title="'+escapeHtml(r.tip)+'"><input type="checkbox" data-tool="'+escapeHtml(r.id)+'"'+(on?" checked":"")+' onchange="toolToggle(this)"> <span class="tl-name">'+escapeHtml(r.name)+'</span></label>'+help+
-    (on&&r.on_note?'<span class="tl-tool-note">'+escapeHtml(r.on_note)+'</span>':'')+'</div>';
-}
-function renderToolRows(){
-  var box=el("toolRows"),off=el("toolRowsOff"),t=toolsText();if(!box)return;
-  var rows=t.rows||[],isOn=function(r){return currentLaunchTools.indexOf(r.id)>=0;};
-  var on=rows.filter(isOn);
-  if(el("toolsCard"))el("toolsCard").hidden=!on.length;
-  if(el("toolsTitle"))el("toolsTitle").textContent=t.title;
-  if(el("toolsTip"))el("toolsTip").innerHTML=t.tip?infoBadge(t.tip):"";
-  box.innerHTML=on.map(function(r){return toolRowHtml(r,t,true);}).join("");
-  if(off)off.innerHTML=rows.filter(function(r){return !isOn(r);}).map(function(r){return toolRowHtml(r,t,false);}).join("");
-}
-function toolToggle(cb){
-  var id=cb.getAttribute("data-tool"),on=!!cb.checked,all=(toolsText().rows||[]).map(function(r){return r.id;});
+function toolRow(id){return ((TL_DATA&&TL_DATA.tools)||[]).filter(function(r){return r.id===id;})[0];}
+/* Before core answers, the stored flag alone says nothing (the lab may have it Off): not on. */
+function toolIsOn(id){var r=toolRow(id);return r?!!r.on:(!NATIVE&&currentLaunchTools.indexOf(id)>=0);}
+function renderToolRows(){}
+function setTool(id,on){
+  var done=function(a){
+    currentLaunchTools=(a.launch_tools||[]).slice();currentLaunchToolsOff=(a.launch_tools_off||[]).slice();
+    var row=toolRow(id);if(row&&!row.locked)row.on=on;
+    /* Computers to start on: its box and map are ready on the Lab card. Off: they go. */
+    if(id===(toolsText().seats_id||"seat_selection")){
+      SEAT_PICK.open=toolIsOn(id);
+      if(SEAT_PICK.open&&!seatPseudoHost()&&!mapExpanded)setMapExpanded(true);
+      onSeatMode();
+    }
+    timelineChanged();
+  };
+  if(NATIVE&&API&&API.tool_choice){API.tool_choice(gatherFields(),id,on).then(function(a){if(a&&a.ok)done(a);});return;}
   var now=currentLaunchTools.filter(function(x){return x!==id;});if(on)now.push(id);
-  currentLaunchTools=all.filter(function(x){return now.indexOf(x)>=0;});
-  renderToolRows();
-  /* Seat selection on: its box and map are ready on the Lab card. Off: they go. */
-  if(id===(toolsText().seats_id||"seat_selection")){
-    SEAT_PICK.open=on;
-    if(on&&!seatPseudoHost()&&!mapExpanded)setMapExpanded(true);
-    onSeatMode();
-  }
-  timelineChanged();
+  done({launch_tools:now,launch_tools_off:[]});
 }
 /* The help popups: their own overlay, so they open above Settings or Before you launch. */
 function toolHelpHtml(kind){
@@ -4398,18 +4647,30 @@ function openToolHelp(kind){
   el("toolHelpModal").hidden=false;
 }
 function closeToolHelp(){el("toolHelpModal").hidden=true;el("toolHelpClose").hidden=false;}
-function tlToggle(cb){
-  var r=tlFind(cb.getAttribute("data-tl"));if(!r)return;
-  var on=!!cb.checked;
+function tlSet(id,on){
+  var r=tlFind(id);if(!r)return;
+  on=!!on;
+  if(r.kind==="tool"){setTool(r.tool_id,on);return;}
   if(r.kind==="env_var"){tlEnvToggle(r,on);return;}
+  if(r.locked&&!on)return;
+  if(on){TL_MOVED={id:id,dir:""};}else{delete SCRIPT_SHOWN[id];if(OWN_EDIT&&OWN_EDIT.id===id)OWN_EDIT=null;}
   if(r.kind==="script"){
-    if(r.source==="lab")currentScriptChoices[r.id]=on;
+    if(r.source==="lab")stepChoiceStore(currentScriptChoices,r.id,stepChoice(r,on));
     else currentExtraScripts.forEach(function(x){if(x.id===r.id)x.enabled=on;});
   }else if(r.source==="admin"){el("open_browser").checked=on;}
-  else if(r.source==="lab"){currentServiceChoices[r.service_id]=on;}
+  else if(r.source==="lab"){stepChoiceStore(currentServiceChoices,r.service_id,stepChoice(r,on));}
   else if(currentExtraServices[r.index]){currentExtraServices[r.index].enabled=on;}
   timelineChanged();
 }
+/* Mirror of core.step_choice (tests/test_advanced_redesign.py holds them equal): a lab script
+   or website is stored only where the config differs from the lab. */
+function stepChoice(r,on){
+  on=!!on;
+  if(r.hidden)return on?true:null;
+  return (on===!!r["default"])?null:on;
+}
+function stepChoiceStore(choices,id,value){if(value===null)delete choices[id];else choices[id]=value;}
+function tlToggle(cb){tlSet(cb.getAttribute("data-tl"),!!cb.checked);}
 function tlReset(id){
   var r=tlFind(id);if(!r)return;
   if(r.kind==="script")delete currentScriptChoices[r.id];else delete currentServiceChoices[r.service_id];
@@ -4422,40 +4683,35 @@ function tlDelete(id){
   else currentExtraServices.splice(r.index,1);
   timelineChanged();
 }
-/* The slide: the rows are drawn at rest first, then the class moves them, so it animates.
-   Done slides back before the arrows go. The rows stay where they are in the DOM for both. */
-function toggleReorder(){
-  var block=el("tlBlock");
-  if(reorderMode&&block&&block.classList.contains("out")){
-    block.classList.remove("out");
-    reorderMode=false;
-    var rb=el("tlReorder");if(rb){rb.textContent=UI_TEXT.timeline_reorder;rb.setAttribute("aria-pressed","false");}
-    block.classList.add("closing");
-    setTimeout(function(){renderTimeline(TL_DATA,null);},reduceMotion()?0:200);
-    return;
-  }
-  reorderMode=!reorderMode;
-  TL_SLIDE=reorderMode;
-  renderTimeline(TL_DATA,null);
-  TL_SLIDE=false;
-  var now=el("tlBlock");
-  if(now&&reorderMode){void now.offsetWidth;now.classList.add("out");}
-}
 function reduceMotion(){return !!(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches);}
 function moveLaunchItem(id,direction){
-  if(!NATIVE||!API||!API.move_launch_item)return;
+  if(!NATIVE||!API||!API.move_launch_item){serviceMessage("Moving works in the app, not the static preview.");return;}
   API.move_launch_item(gatherFields(),id,direction).then(function(r){
     if(r&&r.ok){currentLaunchOrder=r.order||[];TL_MOVED={id:id,dir:direction};timelineChanged();}
   });
 }
-function scrNewWaitChanged(){el("scrNewPort").hidden=(val("scrNewWait")!=="port");}
-function serviceMessage(text,good){var m=el("svcMsg");if(!m)return;m.textContent=text||"";m.hidden=!text;m.classList.toggle("ok",!!good);}
+function scrNewWaitChanged(){el("scrNewPortBox").hidden=(val("scrNewWait")!=="port");}
+/* One message: under the open Add form, else under the timeline. */
+function serviceMessage(text,good){
+  var kind=addFormKind(),target=kind?ADD_FORMS[kind][2]:"svcMsg";
+  ["svcMsg","scrAddMsg","svcAddMsg","envAddMsg"].forEach(function(id){
+    var m=el(id);if(!m)return;var on=(id===target)&&!!text;
+    m.textContent=on?text:"";m.hidden=!on;m.classList.toggle("ok",on&&!!good);});
+}
 function addOwnScript(){
   if(!NATIVE||!API||!API.validate_script){serviceMessage("Adding works in the app, not the static preview.");return;}
+  var when=val("scrNewWhen");
   API.validate_script(val("scrNewName"),el("scrNewText").value,val("scrNewWait"),val("scrNewPort")).then(function(r){
     if(!(r&&r.ok&&r.script)){serviceMessage((r&&r.message)||"Could not add the script.");return;}
     currentExtraScripts.push(copyOwnScript(r.script));
     addFormClose();
+    TL_MOVED={id:r.script.id,dir:""};
+    /* When says where it goes: core gives the order (core.place_new_step). */
+    if(when==="before"&&API.place_step){
+      API.place_step(gatherFields(),r.script.id,when).then(function(a){
+        if(a&&a.ok)currentLaunchOrder=a.order||[];timelineChanged();});
+      return;
+    }
     timelineChanged();
   });
 }
@@ -4464,6 +4720,7 @@ function addOwnService(){
   var take=function(service){
     currentExtraServices.push({name:service.name,url:service.url,enabled:true});
     addFormClose();
+    TL_MOVED={name:service.name,dir:""};
     timelineChanged();
   };
   if(!NATIVE||!API||!API.validate_service){
@@ -4477,32 +4734,86 @@ function addOwnService(){
 }
 /* ---- Settings > Additional services: per lab, add / edit / delete ---- */
 var SVC_EDIT=null;   /* {lab, id ("" = new)} while the form is open */
-function lsServicesHtml(){
+/* ---- Settings > Advanced: one lab at a time (LS_ADV_LAB), three lists, each row with its
+   For staff choice. Core decides what a choice means (core.staff_state). ---- */
+var LS_ADV_LAB=null;
+function lsAdvLab(){
   var labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
-  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
-  return labs.map(function(p){
-    var services=p.services||[];
-    var rows=services.map(function(s){
-      if(SVC_EDIT&&SVC_EDIT.lab===p.id&&SVC_EDIT.id===s.id)return svcFormHtml(p.id,s);
-      return '<div class="svc-set-row"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
-        (s.include_by_default?'<span class="svc-def">'+escapeHtml(UI_TEXT.service_default_tag)+'</span>':'')+
-        '<span class="svc-url">'+escapeHtml(s.url)+'</span></div>'+
-        openSiteBtn(s.url)+
-        '<button class="btn tiny" onclick="svcEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
-        deleteBtn("svc",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
-    }).join("");
-    var adding=(SVC_EDIT&&SVC_EDIT.lab===p.id&&!SVC_EDIT.id);
-    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
-      (adding?svcFormHtml(p.id,null):'<button class="btn tiny" style="margin-top:6px" onclick="svcEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.service_add)+'</button>')+'</div>';
+  return labs.filter(function(p){return p.id===LS_ADV_LAB;})[0]||labs.filter(function(p){return p.id===labMarker;})[0]||labs[0]||null;
+}
+function lsAdvPickLab(id){LS_ADV_LAB=id;SVC_EDIT=null;SCR_EDIT=null;ENV_EDIT=null;lsRenderAdvanced();}
+function staffSelectHtml(id,state,onchange,label){
+  var t=UI_TEXT.advanced||{};
+  return '<select class="adv-state s-'+escapeHtml(state)+'"'+(id?' id="'+id+'"':'')+' aria-label="'+escapeHtml((t.state_label||"For staff")+(label?": "+label:""))+'"'+(onchange?' onchange="'+onchange+'"':'')+'>'+
+    (t.states||[]).map(function(o){return '<option value="'+escapeHtml(o[0])+'"'+(o[0]===state?" selected":"")+'>'+escapeHtml(o[1])+'</option>';}).join("")+'</select>';
+}
+function staffFieldHtml(id,state){
+  return '<div class="mfield"><label for="'+id+'">'+escapeHtml((UI_TEXT.advanced||{}).state_label||"For staff")+'</label>'+staffSelectHtml(id,state,"")+'</div>';
+}
+function lsAdvStatus(text,warn){var st=el("lsAdvStatus");if(st){st.className="ls-status"+(warn?" warn":"");st.textContent=text||"";}}
+function lsGroupHead(words,addHtml){
+  return '<div class="adv-grp"><b>'+escapeHtml((words||[])[0]||"")+'</b><span>'+escapeHtml((words||[])[1]||"")+'</span>'+addHtml+'</div>';
+}
+function lsAdvancedHtml(){
+  var t=UI_TEXT.advanced||{},labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;}),lab=lsAdvLab();
+  if(!lab)return '<p class="svc-none">No labs yet.</p>';
+  var tabs=labs.length>1?'<div class="adv-tabs" role="group" aria-label="Lab">'+labs.map(function(p){
+    return '<button type="button" class="adv-tab" aria-pressed="'+(p.id===lab.id)+'" onclick="lsAdvPickLab('+jsQuote(p.id)+')">'+escapeHtml(p.name)+(p.id===labMarker?" "+escapeHtml(t.this_computer||""):"")+'</button>';}).join("")+'</div>':'';
+  var own=(t.own_kinds||[]).map(function(k){
+    var on=k[0]==="script"?lab.scripts_add_own!==false:k[0]==="website"?lab.services_add_own!==false:!!lab.env_add_own;
+    return '<label class="chk"><input type="checkbox" data-own-kind="'+escapeHtml(k[0])+'"'+(on?" checked":"")+' onchange="lsOwnTick('+jsQuote(lab.id)+','+jsQuote(k[0])+',this.checked)"> '+escapeHtml(k[1])+'</label>';}).join("");
+  return '<p class="ls-env-intro">'+escapeHtml(t.card_intro||"")+' <b>'+escapeHtml(t.card_action||"")+'</b></p>'+tabs+
+    '<div id="lsScrList">'+lsScriptsHtml()+'</div>'+
+    '<div id="lsSvcList">'+lsServicesHtml()+'</div>'+
+    '<div id="lsEnvList">'+lsEnvVarsHtml()+'</div>'+
+    '<div class="adv-own"><b>'+escapeHtml(t.own_label||"")+'</b>'+own+'</div>'+
+    '<div class="adv-legend">'+(t.legend||[]).map(function(x){
+      var word=((t.states||[]).filter(function(o){return o[0]===x[0];})[0]||[])[1]||x[0];
+      return '<b>'+escapeHtml(word)+'</b><span>'+escapeHtml(x[1])+'</span>';}).join("")+'</div>'+
+    '<div class="ls-status" id="lsAdvStatus"></div><div class="ls-status" id="lsSvcStatus"></div><div class="ls-status" id="lsScrStatus"></div><div class="ls-status" id="lsEnvStatus"></div>';
+}
+function lsRenderAdvanced(){var b=el("lsAdvBody");if(b)b.innerHTML=lsAdvancedHtml();}
+function lsOwnTick(labId,kind,on){
+  if(!NATIVE||!API||!API.set_lab_add_own)return;
+  API.set_lab_add_own(labId,kind,on).then(function(r){
+    if(r&&r.ok){svcApply(r,true);lsAdvStatus(r.message||"");}else{lsRenderAdvanced();lsAdvStatus((r&&r.message)||"Could not save.",true);}
+  });
+}
+/* The For staff box of a row saves at once. */
+function lsStateChange(kind,labId,id,state){
+  if(!NATIVE||!API||!API.update_lab_service){lsAdvStatus("Saving works in the app, not the static preview.",true);lsRenderAdvanced();return;}
+  var call=kind==="svc"?API.update_lab_service(labId,id,null,null,null,state):
+    kind==="scr"?API.update_lab_script(labId,id,null,null,null,null,null,null,null,state):
+    kind==="tool"?API.set_lab_tool_state(labId,id,state):
+    API.update_lab_env_var(labId,id,null,null,null,null,state);
+  call.then(function(r){
+    if(r&&r.ok){svcApply(r,true);lsAdvStatus(r.message||"");}
+    else{if(r&&r.presets)LAB_PRESETS=r.presets;lsRenderAdvanced();lsAdvStatus((r&&r.message)||"Could not save.",true);
+      window.pywStatus("warn",(r&&r.message)||"Could not save.");}
+  });
+}
+function lsServicesHtml(){
+  var t=UI_TEXT.advanced||{},p=lsAdvLab();if(!p)return "";
+  var rows=(p.services||[]).map(function(s){
+    if(SVC_EDIT&&SVC_EDIT.lab===p.id&&SVC_EDIT.id===s.id)return svcFormHtml(p.id,s);
+    return '<div class="svc-set-row" data-svc="'+escapeHtml(s.id)+'"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
+      '<span class="svc-url">'+escapeHtml(s.url)+'</span></div>'+
+      staffSelectHtml("",s.state||"available","lsStateChange('svc',"+jsQuote(p.id)+","+jsQuote(s.id)+",this.value)",s.name)+
+      openSiteBtn(s.url)+
+      '<button class="btn tiny" onclick="svcEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
+      deleteBtn("svc",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
   }).join("");
+  var adding=(SVC_EDIT&&SVC_EDIT.lab===p.id&&!SVC_EDIT.id);
+  return lsGroupHead(t.group_websites,adding?'':'<button class="btn tiny" id="lsSvcAdd" onclick="svcEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(t.add_website||"Add website")+'</button>')+
+    (rows||(adding?'':'<p class="svc-none">'+escapeHtml(t.none||"")+'</p>'))+(adding?svcFormHtml(p.id,null):'');
 }
 function svcFormHtml(labId,s){
-  s=s||{name:"",url:"",include_by_default:false};
+  s=s||{name:"",url:"",state:"available"};
   var enter=' onkeydown="if(event.key===\'Enter\'){event.preventDefault();svcSave();}"';
   return '<div class="svc-form" id="svcForm">'+
     '<div class="mfield"><label for="svcName">Name</label><input id="svcName" type="text" value="'+escapeHtml(s.name)+'"'+enter+'></div>'+
     '<div class="mfield"><label for="svcUrl">Web address</label><input id="svcUrl" type="text" spellcheck="false" placeholder="https://..." value="'+escapeHtml(s.url)+'"'+enter+'></div>'+
-    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="svcDefault"'+(s.include_by_default?" checked":"")+'> '+escapeHtml(UI_TEXT.service_include)+'</label>'+
+    staffFieldHtml("svcState",s.state||"available")+
     '<div class="svc-msg" id="svcFormMsg" hidden></div>'+
     '<div class="cta"><button class="btn" onclick="svcCancel()">Cancel</button>'+
     '<button class="btn accent" id="svcSaveBtn" onclick="svcSave()"><b>Save</b></button></div></div>';
@@ -4517,18 +4828,17 @@ function svcApply(r,stay){
   if(r&&r.presets)LAB_PRESETS=r.presets;
   if(r&&r.ok){SVC_EDIT=stay?SVC_EDIT:null;
     var st=el("lsSvcStatus");if(st){st.textContent=r.message||"";}
-    var sum=el("lsSum_services");if(sum&&r.summary!==undefined){sum.textContent=r.summary;sum.title=r.summary;}
-    var ss=el("lsSum_scripts");if(ss&&r.scripts_summary!==undefined){ss.textContent=r.scripts_summary;ss.title=r.scripts_summary;}
-    var se=el("lsSum_env_vars");if(se&&r.env_vars_summary!==undefined){se.textContent=r.env_vars_summary;se.title=r.env_vars_summary;}}
-  lsRenderServices();lsRenderScripts();lsRenderEnvVars();refreshServices();
+    var sum=el("lsSum_advanced");if(sum&&r.advanced_summary!==undefined){sum.textContent=r.advanced_summary;sum.title=r.advanced_summary;}}
+  lsRenderAdvanced();refreshServices();
+  if(r&&r.ok){var st2=el("lsSvcStatus");if(st2)st2.textContent=r.message||"";}
 }
 function svcSave(){
   if(!SVC_EDIT)return;
-  var name=val("svcName"),url=val("svcUrl"),def=!!(el("svcDefault")&&el("svcDefault").checked);
+  var name=val("svcName"),url=val("svcUrl"),state=val("svcState")||"available";
   var fail=function(m){var e=el("svcFormMsg");if(e){e.textContent=m;e.hidden=false;}};
   if(!NATIVE||!API||!API.add_lab_service){fail("Saving services works in the app, not the static preview.");return;}
-  var call=SVC_EDIT.id?API.update_lab_service(SVC_EDIT.lab,SVC_EDIT.id,name,url,def)
-                      :API.add_lab_service(SVC_EDIT.lab,name,url,def);
+  var call=SVC_EDIT.id?API.update_lab_service(SVC_EDIT.lab,SVC_EDIT.id,name,url,null,state)
+                      :API.add_lab_service(SVC_EDIT.lab,name,url,false,state);
   call.then(function(r){if(r&&r.ok)svcApply(r);else fail((r&&r.message)||"Could not save the service.");});
 }
 DELETE_ACTIONS.svc=function(key){
@@ -4546,25 +4856,21 @@ DELETE_BACK.svc=function(){openLabSettings("services");};
 /* ---- Settings > Launch scripts: per lab, add / edit / delete ---- */
 var SCR_EDIT=null;   /* {lab, id ("" = new)} while the form is open */
 function lsScriptsHtml(){
-  var labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
-  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
-  return labs.map(function(p){
-    var rows=(p.scripts||[]).map(function(s){
-      if(SCR_EDIT&&SCR_EDIT.lab===p.id&&SCR_EDIT.id===s.id)return scrFormHtml(p.id,s);
-      var pos=(UI_TEXT.script_positions||[]).filter(function(o){return o[0]===s.position;})[0];
-      return '<div class="svc-set-row"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
-        (s.include_by_default?'<span class="svc-def">'+escapeHtml(UI_TEXT.service_default_tag)+'</span>':'')+
-        (s.hidden?'<span class="svc-def">'+escapeHtml(UI_TEXT.script_hidden_short)+'</span>':'')+
-        '<span class="svc-def">'+escapeHtml(pos?pos[1]:"")+'</span>'+
-        '<pre class="tl-detail" style="margin-left:0">'+escapeHtml(s.script)+'</pre></div>'+
-        '<button class="btn tiny scr-try" onclick="scrTry('+jsQuote(p.id)+','+jsQuote(s.id)+')">'+escapeHtml(UI_TEXT.try_script||"Try it")+'</button>'+
-        '<button class="btn tiny" onclick="scrEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
-        deleteBtn("scr",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
-    }).join("");
-    var adding=(SCR_EDIT&&SCR_EDIT.lab===p.id&&!SCR_EDIT.id);
-    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
-      (adding?scrFormHtml(p.id,null):'<button class="btn tiny" style="margin-top:6px" onclick="scrEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.script_add)+'</button>')+'</div>';
+  var t=UI_TEXT.advanced||{},p=lsAdvLab();if(!p)return "";
+  var rows=(p.scripts||[]).map(function(s){
+    if(SCR_EDIT&&SCR_EDIT.lab===p.id&&SCR_EDIT.id===s.id)return scrFormHtml(p.id,s);
+    var pos=(UI_TEXT.script_positions||[]).filter(function(o){return o[0]===s.position;})[0];
+    return '<div class="svc-set-row" data-scr="'+escapeHtml(s.id)+'"><div class="svc-main"><b>'+escapeHtml(s.name)+'</b>'+
+      '<span class="svc-def">'+escapeHtml(pos?pos[1]:"")+'</span>'+
+      '<pre class="tl-detail" style="margin-left:0">'+escapeHtml(s.script)+'</pre></div>'+
+      staffSelectHtml("",s.state||"available","lsStateChange('scr',"+jsQuote(p.id)+","+jsQuote(s.id)+",this.value)",s.name)+
+      '<button class="btn tiny scr-try" onclick="scrTry('+jsQuote(p.id)+','+jsQuote(s.id)+')">'+escapeHtml(UI_TEXT.try_script||"Try it")+'</button>'+
+      '<button class="btn tiny" onclick="scrEdit('+jsQuote(p.id)+','+jsQuote(s.id)+')">Edit</button>'+
+      deleteBtn("scr",p.id+"|"+s.id,s.name,{tiny:true})+'</div>';
   }).join("");
+  var adding=(SCR_EDIT&&SCR_EDIT.lab===p.id&&!SCR_EDIT.id);
+  return lsGroupHead(t.group_scripts,adding?'':'<button class="btn tiny" id="lsScrAdd" onclick="scrEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(UI_TEXT.script_add)+'</button>')+
+    (rows||(adding?'':'<p class="svc-none">'+escapeHtml(t.none||"")+'</p>'))+(adding?scrFormHtml(p.id,null):'');
 }
 /* Try it: runs the saved text, for real, after this confirm. Starts only: nothing here can
    stop it (PRINCIPLES 15). Its own overlay, above Settings. */
@@ -4593,7 +4899,7 @@ window.pywOnTryScript=function(r){
   else window.pywStatus((r&&r.ok)?"ok":"warn",text);
 };
 function scrFormHtml(labId,s){
-  s=s||{name:"",script:"",include_by_default:false,hidden:false,position:"after",wait:"carry_on",wait_port:""};
+  s=s||{name:"",script:"",state:"available",position:"after",wait:"carry_on",wait_port:""};
   return '<div class="svc-form" id="scrForm">'+
     '<div class="mfield"><label for="scrName">Name</label><input id="scrName" type="text" value="'+escapeHtml(s.name)+'"></div>'+
     '<label for="scrText">'+escapeHtml(UI_TEXT.script_text)+'</label><textarea id="scrText" spellcheck="false" placeholder="cd some/folder&#10;python server.py">'+escapeHtml(s.script)+'</textarea>'+
@@ -4601,10 +4907,9 @@ function scrFormHtml(labId,s){
       (UI_TEXT.script_positions||[]).map(function(o){return '<option value="'+o[0]+'"'+(o[0]===s.position?" selected":"")+'>'+escapeHtml(o[1])+'</option>';}).join("")+'</select></div>'+
     '<div class="mfield"><label for="scrWait">'+escapeHtml(UI_TEXT.script_wait)+'</label><select id="scrWait" onchange="el(\'scrPortRow\').hidden=(this.value!==\'port\')">'+waitOptionsHtml(s.wait)+'</select></div>'+
     '<div class="mfield" id="scrPortRow"'+(s.wait==="port"?"":" hidden")+'><label for="scrPort">'+escapeHtml(UI_TEXT.script_port)+'</label><input id="scrPort" type="text" value="'+escapeHtml(s.wait_port||"")+'"></div>'+
-    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrDefault"'+(s.include_by_default?" checked":"")+'> '+escapeHtml(UI_TEXT.script_include)+'</label><br>'+
-    '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="scrHidden"'+(s.hidden?" checked":"")+'> '+escapeHtml(UI_TEXT.script_hidden)+'</label>'+
+    staffFieldHtml("scrState",s.state||"available")+
     '<div class="svc-msg" id="scrFormMsg" hidden></div>'+
-    '<p style="margin:6px 0 0"><a href="#" id="scrFormVars" onclick="openToolHelp(\'variables\');return false;">'+escapeHtml(toolsText().variables_link||"Variables for scripts")+'</a></p>'+
+    '<p style="margin:6px 0 0"><a href="#" id="scrFormVars" onclick="openToolHelp(\'variables\');return false;">'+escapeHtml((UI_TEXT.advanced||{}).reads_link||"What a script can read")+'</a></p>'+
     '<div class="cta"><button class="btn" onclick="scrCancel()">Cancel</button>'+
     '<button class="btn accent" id="scrSaveBtn" onclick="scrSave()"><b>Save</b></button></div></div>';
 }
@@ -4615,10 +4920,10 @@ function scrSave(){
   if(!SCR_EDIT)return;
   var fail=function(m){var e=el("scrFormMsg");if(e){e.textContent=m;e.hidden=false;}};
   if(!NATIVE||!API||!API.add_lab_script){fail("Saving scripts works in the app, not the static preview.");return;}
-  var name=val("scrName"),text=el("scrText").value,def=!!el("scrDefault").checked,hid=!!el("scrHidden").checked,
+  var name=val("scrName"),text=el("scrText").value,state=val("scrState")||"available",
       pos=val("scrPos"),wait=val("scrWait"),port=val("scrPort");
-  var call=SCR_EDIT.id?API.update_lab_script(SCR_EDIT.lab,SCR_EDIT.id,name,text,def,hid,pos,wait,port)
-                      :API.add_lab_script(SCR_EDIT.lab,name,text,def,hid,pos,wait,port);
+  var call=SCR_EDIT.id?API.update_lab_script(SCR_EDIT.lab,SCR_EDIT.id,name,text,null,null,pos,wait,port,state)
+                      :API.add_lab_script(SCR_EDIT.lab,name,text,false,false,pos,wait,port,state);
   call.then(function(r){
     if(r&&r.ok){SCR_EDIT=null;svcApply(r,true);var st=el("lsScrStatus");if(st)st.textContent=r.message||"";}
     else fail((r&&r.message)||"Could not save the script.");
@@ -4640,34 +4945,41 @@ DELETE_BACK.scr=function(){openLabSettings("scripts");};
    tick is the "hidden" setting, turned round: ticked = shown in configs. It saves at once. ---- */
 var ENV_EDIT=null;   /* {lab, name ("" = new)} while the form is open */
 function lsEnvVarsHtml(){
-  var t=UI_TEXT.env_vars||{},labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});
-  if(!labs.length)return '<p class="svc-none">No labs yet.</p>';
-  return '<p class="ls-env-intro">'+escapeHtml(t.intro||"")+' <button type="button" class="info-i tool-help-btn" id="lsEnvHelp" aria-label="'+escapeHtml(t.help_link||"")+'" title="'+escapeHtml(t.help_link||"")+'" onclick="openToolHelp(\'env\')">i</button></p>'+labs.map(function(p){
-    var rows=(p.env_vars||[]).map(function(v){
-      if(ENV_EDIT&&ENV_EDIT.lab===p.id&&ENV_EDIT.name===v.name)return envFormHtml(v);
-      return '<div class="svc-set-row" data-env-lab="'+escapeHtml(p.id)+'" data-env-name="'+escapeHtml(v.name)+'">'+
-        '<label class="chk" title="'+escapeHtml(t.show||"")+'"><input type="checkbox"'+(v.hidden?'':' checked')+' onchange="lsEnvTick('+jsQuote(p.id)+','+jsQuote(v.name)+',this.checked)"> <b class="ls-env-name">'+escapeHtml(v.name)+'</b></label>'+
-        envTipHtml(v)+
-        '<span class="ls-env-val">'+escapeHtml(v.value||"")+'</span>'+
-        '<button class="btn tiny" onclick="envEdit('+jsQuote(p.id)+','+jsQuote(v.name)+')">Edit</button>'+
-        (v.builtin?'':deleteBtn("env",p.id+"|"+v.name,v.name,{tiny:true}))+'</div>';
-    }).join("");
-    var adding=(ENV_EDIT&&ENV_EDIT.lab===p.id&&!ENV_EDIT.name);
-    return '<div class="svc-lab"><div class="svc-lab-name">'+escapeHtml(p.name)+'</div>'+rows+
-      (adding?envFormHtml(null):'<button class="btn tiny" style="margin-top:6px" data-env-add="'+escapeHtml(p.id)+'" onclick="envEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(t.add||"Add variable")+'</button>')+
-      '<div class="ls-env-own"><label class="chk" data-tip="'+escapeHtml(UI_TEXT.lab_env_add_own_tip||"")+'"><input type="checkbox" data-env-own="'+escapeHtml(p.id)+'"'+(p.env_add_own?" checked":"")+' onchange="lsEnvOwnTick('+jsQuote(p.id)+',this.checked)"> '+escapeHtml(UI_TEXT.lab_env_add_own||"")+'</label></div></div>';
+  var e=UI_TEXT.env_vars||{},t=UI_TEXT.advanced||{},p=lsAdvLab();if(!p)return "";
+  var builtin='<span class="adv-builtin">'+escapeHtml(t.builtin_tag||"built in")+'</span>';
+  /* The two built-in values first: where seats and the lab session number are switched. */
+  var tools=(p.tools||[]).map(function(v){
+    return '<div class="svc-set-row" data-tool-lab="'+escapeHtml(p.id)+'" data-tool-id="'+escapeHtml(v.id)+'"><div class="svc-main"><b>'+escapeHtml(v.name)+'</b>'+builtin+infoBadge(v.tip)+
+      '<span class="svc-line"><span class="ls-env-name">'+escapeHtml(v.vars)+'</span> · '+escapeHtml(v.line)+'</span></div>'+
+      staffSelectHtml("",v.state||"available","lsStateChange('tool',"+jsQuote(p.id)+","+jsQuote(v.id)+",this.value)",v.name)+'</div>';
   }).join("");
+  var rows=(p.env_vars||[]).map(function(v){
+    if(ENV_EDIT&&ENV_EDIT.lab===p.id&&ENV_EDIT.name===v.name)return envFormHtml(v);
+    var line=[v.folder?"Folder":"",v.value?(v.fixed?"Always ":"Starts as ")+(/pass|pwd|secret|token|credential|key/i.test(v.name)?"••••":v.value):"",v.fixed?(t.fixed_tag||"set by the lab"):"Typed by staff, saved with the config"].filter(Boolean).join(" · ");
+    return '<div class="svc-set-row" data-env-lab="'+escapeHtml(p.id)+'" data-env-name="'+escapeHtml(v.name)+'">'+
+      '<div class="svc-main"><b>'+escapeHtml(v.label||v.name)+'</b>'+(v.builtin?builtin:'')+envTipHtml(v)+
+      '<span class="svc-line"><span class="ls-env-name">'+escapeHtml(v.name)+'</span> · <span class="ls-env-val">'+escapeHtml(line)+'</span></span></div>'+
+      staffSelectHtml("",v.state||"off","lsStateChange('env',"+jsQuote(p.id)+","+jsQuote(v.name)+",this.value)",v.label||v.name)+
+      '<button class="btn tiny" onclick="envEdit('+jsQuote(p.id)+','+jsQuote(v.name)+')">Edit</button>'+
+      (v.builtin?'':deleteBtn("env",p.id+"|"+v.name,v.name,{tiny:true}))+'</div>';
+  }).join("");
+  var adding=(ENV_EDIT&&ENV_EDIT.lab===p.id&&!ENV_EDIT.name);
+  return lsGroupHead(t.group_values,'<button type="button" class="info-i tool-help-btn" id="lsEnvHelp" aria-label="'+escapeHtml(e.help_link||"")+'" data-tip="'+escapeHtml(e.help_link||"")+'" onclick="openToolHelp(\'env\')">i</button>'+
+      (adding?'':'<button class="btn tiny" data-env-add="'+escapeHtml(p.id)+'" onclick="envEdit('+jsQuote(p.id)+',\'\')">'+escapeHtml(t.add_value||"Add value")+'</button>'))+
+    tools+rows+(adding?envFormHtml(null):'');
 }
 function envFormHtml(v){
-  var t=UI_TEXT.env_vars||{};
+  var t=UI_TEXT.env_vars||{},a=UI_TEXT.advanced||{};
   return '<div class="svc-form" id="envForm">'+
     (v?'<div class="mfield"><label>'+escapeHtml(t.name||"Name")+'</label><b class="ls-env-name">'+escapeHtml(v.name)+'</b></div>':
       '<div class="mfield"><label for="envFormName">'+escapeHtml(t.name||"Name")+'</label><input id="envFormName" type="text" spellcheck="false" autocomplete="off" placeholder="'+escapeHtml(t.name_hint||"")+'"></div>')+
+    ((v&&v.builtin)?'':'<div class="mfield"><label for="envFormLabel">'+escapeHtml(a.label_label||"Name staff see")+'</label><input id="envFormLabel" type="text" maxlength="60" value="'+escapeHtml(v?(v.label||""):"")+'"></div>')+
     '<div class="mfield"><label for="envFormValue">'+escapeHtml(t.default||"")+'</label><input id="envFormValue" type="text" spellcheck="false" autocomplete="off" value="'+escapeHtml(v?(v.value||""):"")+'"></div>'+
     '<p class="ls-env-intro" style="margin:0 0 4px 102px">'+escapeHtml(t.default_hint||"")+'</p>'+
+    '<label class="chk" style="margin:4px 0 0 102px" data-tip="'+escapeHtml(a.fixed_tip||"")+'"><input type="checkbox" id="envFormEditable"'+((v&&v.fixed)?'':' checked')+'> '+escapeHtml(a.fixed_label||"Staff can change the value")+'</label><br>'+
     ((v&&v.builtin)?'':'<div class="mfield"><label for="envFormDesc">'+escapeHtml(t.description||"")+'</label><input id="envFormDesc" type="text" maxlength="'+(t.description_max||200)+'" value="'+escapeHtml(v?(v.description||""):"")+'"></div>'+
       '<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="envFormFolder"'+(v&&v.folder?' checked':'')+'> '+escapeHtml(t.folder||"")+'</label><br>')+
-    (v?'':'<label class="chk" style="margin:4px 0 0 102px"><input type="checkbox" id="envFormShow" checked> '+escapeHtml(t.show||"")+'</label>')+
+    staffFieldHtml("envFormState",v?(v.state||"off"):"available")+
     '<div class="svc-msg" id="envFormMsg" hidden></div>'+
     '<div class="cta"><button class="btn" onclick="envCancel()">Cancel</button>'+
     '<button class="btn accent" id="envSaveBtn" onclick="envSave()"><b>Save</b></button></div></div>';
@@ -4679,8 +4991,8 @@ function envApply(r){
   ENV_EDIT=null;svcApply(r,true);var st=el("lsEnvStatus");if(st)st.textContent=r.message||"";
 }
 function lsEnvOwnTick(labId,on){
-  if(!NATIVE||!API||!API.set_lab_env_add_own)return;
-  API.set_lab_env_add_own(labId,on).then(function(r){
+  if(!NATIVE||!API||!API.set_lab_add_own)return;
+  API.set_lab_add_own(labId,"value",on).then(function(r){
     if(r&&r.ok)envApply(r);
     else{var st=el("lsEnvStatus");if(st)st.textContent=(r&&r.message)||"Could not save.";lsRenderEnvVars();}
   });
@@ -4696,9 +5008,10 @@ function envSave(){
   if(!ENV_EDIT)return;
   var fail=function(m){var e=el("envFormMsg");if(e){e.textContent=m;e.hidden=false;}};
   if(!NATIVE||!API||!API.add_lab_env_var){fail("Saving variables works in the app, not the static preview.");return;}
-  var value=el("envFormValue").value,d=el("envFormDesc"),f=el("envFormFolder");
-  var call=ENV_EDIT.name?API.update_lab_env_var(ENV_EDIT.lab,ENV_EDIT.name,value,null,d?d.value:null,f?f.checked:null)
-                        :API.add_lab_env_var(ENV_EDIT.lab,val("envFormName"),value,!el("envFormShow").checked,d.value,f.checked);
+  var value=el("envFormValue").value,d=el("envFormDesc"),f=el("envFormFolder"),l=el("envFormLabel");
+  var state=val("envFormState")||"available",fixed=!el("envFormEditable").checked;
+  var call=ENV_EDIT.name?API.update_lab_env_var(ENV_EDIT.lab,ENV_EDIT.name,value,null,d?d.value:null,f?f.checked:null,state,l?l.value:null,fixed)
+                        :API.add_lab_env_var(ENV_EDIT.lab,val("envFormName"),value,true,d.value,f.checked,state,l.value,fixed);
   call.then(function(r){if(r&&r.ok)envApply(r);else fail((r&&r.message)||"Could not save the variable.");});
 }
 DELETE_ACTIONS.env=function(key){
@@ -5346,6 +5659,10 @@ document.addEventListener("keydown",function(e){
     if(el("ghLoginModal")&&!el("ghLoginModal").hidden){closeGhLogin();return;}
     if(!el("logModal").hidden){closeLogModal();return;}
     if(!el("infoModal").hidden){closeModal();return;}
+    if(el("advScrim")&&!el("advScrim").hidden){
+      /* Never loses typed text: the sheet closes, an open form stays as it is. */
+      closeAdvanced();
+      return;}
     /* wizModal: intentionally NOT closable by Escape (no close X / backdrop). */
     return;
   }
@@ -5582,7 +5899,7 @@ function showGetReadyModal(s){
       '<li>the admin login&nbsp;&nbsp;(<code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code>)</li>'+
       '<li>the access level&nbsp;&nbsp;(<code>AUTH_LEVEL</code>) and <code>DEBUG</code> / production</li>'+
     '</ul>'+
-    '<p style="margin:0">A timestamped <code>.bak</code> copy of your settings.py is saved first. Every override is '+
+    '<p style="margin:0">A timestamped <code>.bak</code> copy of your settings.py is saved first, in a <code>lablauncher_backups</code> folder in your project (git ignores that folder). Every override is '+
     'guarded by the launcher&rsquo;s environment variables, so with no lab environment set your project is '+
     'byte-for-byte unchanged. <code>SECRET_KEY</code> and unrelated settings are left alone. It is fully '+
     'revertible: delete from the banner line to the end of settings.py.';
@@ -6000,7 +6317,7 @@ function saveDefaultDb(id){
    except a section that is not set up yet, which starts open. The summaries come
    from core (Api.settings_summaries); the mirrors below serve the static preview
    and the instant before the answer arrives. */
-var LS_CARDS=["computer","labs","databases","pg","github","services","scripts","env_vars"];
+var LS_CARDS=["computer","labs","databases","pg","github","advanced"];
 function lsCard(key,title,tipKey,bodyHtml){
   return '<div class="ls-card ls-coll" id="lsCard_'+key+'">'+
     '<div class="ls-card-head"><h4>'+escapeHtml(title)+tipBadge(tipKey)+'</h4>'+
@@ -6029,12 +6346,22 @@ function lsSummaryMirror(){
     labs:(shown.length?shown.join(", "):"None shown")+(hidden?(" ("+hidden+" hidden)"):""),
     databases:dbs,
     pg_admin:u?(u+"@"+((PG_ADMIN.admin_host||"").trim()||"localhost")+(pt==="5432"?"":(":"+pt))):"Not set",
-    services:servicesSummaryMirror(),scripts:scriptsSummaryMirror(),env_vars:envVarsSummaryMirror()};
+    services:servicesSummaryMirror(),scripts:scriptsSummaryMirror(),env_vars:envVarsSummaryMirror(),
+    advanced:advancedSummaryMirror()};
 }
 /* Mirror of core.services_summary (static preview + the instant before core answers). */
 function servicesSummaryMirror(){
   var names=[];(LAB_PRESETS||[]).forEach(function(p){if(p.deleted)return;(p.services||[]).forEach(function(s){if(names.indexOf(s.name)<0)names.push(s.name);});});
   return names.length?names.join(", "):"None";
+}
+/* Mirror of core.advanced_summary (what one lab offers staff, counted). */
+function advancedSummaryMirror(){
+  var labs=(LAB_PRESETS||[]).filter(function(p){return !p.deleted;});if(!labs.length)return "No lab yet";
+  var lab=labs.filter(function(p){return p.id===labMarker;})[0]||labs[0];
+  var on=function(list){return (list||[]).filter(function(x){return (x.state||"available")!=="off";}).length;};
+  var n=function(k,w){return k+" "+w+(k===1?"":"s");};
+  var text=n(on(lab.scripts),"script")+", "+n(on(lab.services),"website")+", "+n(on(lab.tools)+on(lab.env_vars),"value")+" on offer";
+  return labs.length>1?(lab.name+": "+text):text;
 }
 /* Mirror of core.env_vars_summary. */
 function envVarsSummaryMirror(){
@@ -6047,7 +6374,7 @@ function scriptsSummaryMirror(){
   return names.length?names.join(", "):"None";
 }
 function lsApplySummaries(r){
-  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["services","services"],["scripts","scripts"],["env_vars","env_vars"]].forEach(function(p){
+  [["computer","this_computer"],["labs","labs"],["databases","databases"],["pg","pg_admin"],["advanced","advanced"]].forEach(function(p){
     var e=el("lsSum_"+p[0]);if(e&&r[p[1]]!==undefined){e.textContent=r[p[1]];e.title=r[p[1]];}});
 }
 function lsRefreshSummaries(){
@@ -6055,6 +6382,8 @@ function lsRefreshSummaries(){
   if(NATIVE&&API&&API.settings_summaries)API.settings_summaries().then(function(r){if(r&&r.ok)lsApplySummaries(r);});
 }
 function openLabSettings(openCard){
+  /* The three older cards are one now: an old name opens it. */
+  if(openCard==="services"||openCard==="scripts"||openCard==="env_vars")openCard="advanced";
   SVC_EDIT=null;
   var marker=labMarker;
   var pgComplete=!!((PG_ADMIN.admin_username||"").trim());
@@ -6121,20 +6450,12 @@ function openLabSettings(openCard){
       /* Branch switch (2026-11-09): a lab setting, off by default. */
       '<label class="chk" style="display:flex;align-items:center;margin:14px 0 2px"><input type="checkbox" id="lsBranchSwitch"'+(BRANCH_SWITCH?" checked":"")+' onchange="saveBranchSwitch()"> <b>'+escapeHtml(UI_TEXT.branch_switch_label||"Allow experimenters to switch branches")+'</b>'+tipBadge("branch_switch")+'</label>'+
       '<div class="ls-status" id="lsBranchSwitchStatus"></div>')+
-    /* Additional services (2026-10-30): per lab, web pages that open in a new
-       browser tab once the server is ready. Add / Edit / Delete, each with
-       "Include by default" (a config that never chose follows it). */
-    lsCard("services",UI_TEXT.services_card,"services",
-      '<div id="lsSvcList">'+lsServicesHtml()+'</div>'+
-      '<div class="ls-status" id="lsSvcStatus"></div>')+
-    /* Launch scripts (2026-11-04): per lab, typed text that runs in its own window. */
-    lsCard("scripts",UI_TEXT.scripts_card,"scripts",
-      '<div id="lsScrList">'+lsScriptsHtml()+'</div>'+
-      '<div class="ls-status" id="lsScrStatus"></div>')+
-    /* Environment variables (2026-11-05): per lab, tick to show one in Advanced. */
-    lsCard("env_vars",(UI_TEXT.env_vars||{}).card||"Environment variables","env_vars",
-      '<div id="lsEnvList">'+lsEnvVarsHtml()+'</div>'+
-      '<div class="ls-status" id="lsEnvStatus"></div>')+
+    /* Advanced: scripts, websites and values (2026-11-12). ONE card for everything a lab
+       offers staff in Advanced, one lab at a time, each item with its For staff choice. It
+       replaces Additional services, Launch scripts and Environment variables, and it is
+       where the two built-in values (the former tools) are switched. */
+    lsCard("advanced",(UI_TEXT.advanced||{}).card_title||"Advanced","advanced",
+      '<div id="lsAdvBody">'+lsAdvancedHtml()+'</div>')+
     /* SETTINGS-PAGE footer bar (Julian's final design), at the very bottom.
        Closing the panel is done by the X in the sticky header now, so the footer
        has NO Close button (avoids two closes). LEFT are the only two controls,
@@ -7073,7 +7394,8 @@ function blToolLinesHtml(){
   return h+(s.lines||[]).filter(function(l){return !seats||l!==seats.line;}).map(function(l){return '<p>'+escapeHtml(l)+'</p>';}).join("");
 }
 function blToolsOpen(){
-  if(!NATIVE||!API||!API.launch_tools_state||!currentLaunchTools.length)return;
+  /* Core decides which built-in values are on (a lab can have one on); it answers "any". */
+  if(!NATIVE||!API||!API.launch_tools_state)return;
   var keep=window._blSessionKeep||"";window._blSessionKeep="";
   var sv=seatValues();
   window._blTools={values:{lab_session:keep,seat_number:sv.seat_number,seats_picked:sv.seats_picked},state:null};
